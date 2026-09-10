@@ -1,0 +1,253 @@
+Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚqif (!("finalizeConstruction" in ViewPU.prototype)) {
+    Reflect.set(ViewPU.prototype, "finalizeConstruction", () => { });
+}
+import { Home } from './Home';
+import { Dashboard } from './Dashboard';
+import { AICompanion } from './AICompanion';
+import { Mine } from './Mine';
+import { Colors } from '../common/Theme';
+class Index extends ViewPU {
+    constructor(parent, params, __localStorage, elmtId = -1, paramsLambda = undefined, extraInfo) {
+        super(parent, __localStorage, elmtId, extraInfo);
+        if (typeof paramsLambda === "function") {
+            this.paramsGenerator_ = paramsLambda;
+        }
+        this.__currentTab = new ObservedPropertySimplePU(0, this, "currentTab");
+        this.controller = new TabsController();
+        this.setInitiallyProvidedValue(params);
+        this.finalizeConstruction();
+    }
+    setInitiallyProvidedValue(params) {
+        if (params.currentTab !== undefined) {
+            this.currentTab = params.currentTab;
+        }
+        if (params.controller !== undefined) {
+            this.controller = params.controller;
+        }
+    }
+    updateStateVars(params) {
+    }
+    purgeVariableDependenciesOnElmtId(rmElmtId) {
+        this.__currentTab.purgeDependencyOnElmtId(rmElmtId);
+    }
+    aboutToBeDeleted() {
+        this.__currentTab.aboutToBeDeleted();
+        SubscriberManager.Get().delete(this.id__());
+        this.aboutToBeDeletedInternal();
+    }
+    get currentTab() {
+        return this.__currentTab.get();
+    }
+    set currentTab(newValue) {
+        this.__currentTab.set(newValue);
+    }
+    tabBar(title, index, icon, parent = null) {
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            Column.create();
+            Column.width('100%');
+            Column.height('100%');
+            Column.justifyContent(FlexAlign.Center);
+        }, Column);
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            Text.create(icon);
+            Text.fontSize(20);
+        }, Text);
+        Text.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            Text.create(title);
+            Text.fontSize(11);
+            Text.margin({ top: 2 });
+            Text.fontColor(this.currentTab === index ? Colors.PRIMARY : Colors.TEXT_SECONDARY);
+        }, Text);
+        Text.pop();
+        Column.pop();
+    }
+    initialRender() {
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            Tabs.create({ barPosition: BarPosition.End, controller: this.controller });
+            Tabs.scrollable(false);
+            Tabs.barHeight(60);
+            Tabs.backgroundColor(Colors.BG);
+            Tabs.onChange((index) => {
+                this.currentTab = index;
+            });
+        }, Tabs);
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            TabContent.create(() => {
+                {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        if (isInitialRender) {
+                            let componentCall = new Home(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Index.ets", line: 31, col: 9 });
+                            ViewPU.create(componentCall);
+                            let paramsLambda = () => {
+                                return {};
+                            };
+                            componentCall.paramsGenerator_ = paramsLambda;
+                        }
+                        else {
+                            this.updateStateVarsOfChildByElmtId(elmtId, {});
+                        }
+                    }, { name: "Home" });
+                }
+            });
+            TabContent.tabBar({ builder: () => {
+                    this.tabBar.call(this, 'é¦–é¡µ', 0, 'ğŸ ');
+                } });
+        }, TabContent);
+        TabContent.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            TabContent.create(() => {
+                {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        if (isInitialRender) {
+                            let componentCall = new Dashboard(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Index.ets", line: 35, col: 9 });
+                            ViewPU.create(componentCall);
+                            let paramsLambda = () => {
+                                return {};
+                            };
+                            componentCall.paramsGenerator_ = paramsLambda;
+                        }
+                        else {
+                            this.updateStateVarsOfChildByElmtId(elmtId, {});
+                        }
+                    }, { name: "Dashboard" });
+                }
+            });
+            TabContent.tabBar({ builder: () => {
+                    this.tabBar.call(this, 'å·¥ä½œå°', 1, 'ğŸ“Š');
+                } });
+        }, TabContent);
+        TabContent.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            TabContent.create(() => {
+                {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        if (isInitialRender) {
+                            let componentCall = new AICompanion(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Index.ets", line: 39, col: 9 });
+                            ViewPU.create(componentCall);
+                            let paramsLambda = () => {
+                                return {};
+                            };
+                            componentCall.paramsGenerator_ = paramsLambda;
+                        }
+                        else {
+                            this.updateStateVarsOfChildByElmtId(elmtId, {});
+                        }
+                    }, { name: "AICompanion" });
+                }
+            });
+            TabContent.tabBar({ builder: () => {
+                    this.tabBar.call(this, 'AI å­¦ä¼´', 2, 'ğŸ’¡');
+                } });
+        }, TabContent);
+        TabContent.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            TabContent.create(() => {
+                {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        if (isInitialRender) {
+                            let componentCall = new Mine(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Index.ets", line: 43, col: 9 });
+                            ViewPU.create(componentCall);
+                            let paramsLambda = () => {
+                                return {};
+                            };
+                            componentCall.paramsGenerator_ = paramsLambda;
+                        }
+                        else {
+                            this.updateStateVarsOfChildByElmtId(elmtId, {});
+                        }
+                    }, { name: "Mine" });
+                }
+            });
+            TabContent.tabBar({ builder: () => {
+                    this.tabBar.call(this, 'æˆ‘çš„', 3, 'ğŸ‘¤');
+                } });
+        }, TabContent);
+        TabContent.pop();
+        Tabs.pop();
+    }
+    rerender() {
+        this.updateDirtyElements();
+    }
+    static getEntryName() {
+        return "Index";
+    }
+}
+registerNamedRoute(() => new Index(undefined, {}), "", { bundleName: "com.iknow.study", moduleName: "entry", pagePath: "pages/Index", pageFullPath: "entry/src/main/ets/pages/Index", integratedHsp: "false", moduleType: "followWithHap" });
+//# sourceMappingURL=Index.js.mapÂ•ÙDD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\pages\Home.etsÙID:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\pages\Dashboard.etsÙKD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\pages\AICompanion.etsÙDD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\pages\Mine.etsÙFD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\common\Theme.etsÙED:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\pages\Index.etsÔrBšªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ(D:\iKnow\iKnow-master\iKnow-master\entryÙ"D:\iKnow\iKnow-master\iKnow-master¥entry¥1.0.0Ô  Ù(D:\iKnow\iKnow-master\iKnow-master\entryÃÃÚimport { Home } from './Home'
+import { Dashboard } from './Dashboard'
+import { AICompanion } from './AICompanion'
+import { Mine } from './Mine'
+import { Colors } from '../common/Theme'
+
+/** æ ¹å®¹å™¨ï¼š4 ä¸ªåº•éƒ¨ Tab */
+@Entry
+@Component
+struct Index {
+  @State currentTab: number = 0
+  private controller: TabsController = new TabsController()
+
+  @Builder
+  tabBar(title: string, index: number, icon: string) {
+    Column() {
+      Text(icon).fontSize(20)
+      Text(title)
+        .fontSize(11)
+        .margin({ top: 2 })
+        .fontColor(this.currentTab === index ? Colors.PRIMARY : Colors.TEXT_SECONDARY)
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+  }
+
+  build() {
+    Tabs({ barPosition: BarPosition.End, controller: this.controller }) {
+      TabContent() {
+        Home()
+      }.tabBar(this.tabBar('é¦–é¡µ', 0, 'ğŸ '))
+
+      TabContent() {
+        Dashboard()
+      }.tabBar(this.tabBar('å·¥ä½œå°', 1, 'ğŸ“Š'))
+
+      TabContent() {
+        AICompanion()
+      }.tabBar(this.tabBar('AI å­¦ä¼´', 2, 'ğŸ’¡'))
+
+      TabContent() {
+        Mine()
+      }.tabBar(this.tabBar('æˆ‘çš„', 3, 'ğŸ‘¤'))
+    }
+    .scrollable(false)
+    .barHeight(60)
+    .backgroundColor(Colors.BG)
+    .onChange((index: number) => {
+      this.currentTab = index
+    })
+  }
+}
+ÀÔrC•¦./Mine«./Dashboard¦./Home­./AICompanion¯../common/ThemeÔrD—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÂÙDD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\pages\Mine.etsAÃªoh-resolveÂDAÂÙID:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\pages\Dashboard.etsAÃªoh-resolveÂDAÂÙDD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\pages\Home.etsAÃªoh-resolveÂDAÂÙKD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\pages\AICompanion.etsAÃªoh-resolveÂDAÂÙFD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\common\Theme.etsAÃªoh-resolveÂ“ÔrE–§version¤fileªsourceRoot§sources¥names¨mappings¨Index.js ‘©Index.etsÜ ¨˜”    ”  ”	  	”  ”  ”  ”  ”  ˜”   ” ”	 	” ” ” ”' '”( '˜”   ” ”	 	” ” ” ”+ +”, +˜”   ” ”	 	” ” ” ” ” ˜”   ” ”	 	” ” ” ”( (”) (’” 	” 	‘”  ’”9 
+”: 
+”” '” +”, 9”. ;‘” (’” 
+	” 
+’” 
+	” 
+˜” ”
+ ” 	” ” ” %” '” 3’” ” 
+–” ” 
+” ” 
+” ” –” ” 
+” ” ” ”  ˜” ” 
+” ”! ”" ”+ ”, ”2 $”” ” 
+” ” –” ” 
+” ” ” ” ’” ” 
+”” ” 
+” ” –” ” 
+” 	” ” ” š” ” 
+” 	” ” ” ” ” ”  ”" Ü ” ” 
+” 	” ” ” ”  ”* "”/ '”4 ,”5 -”6 .”7 /”= 5”> 6”ÌE =”ÌF >”ÌG ?”ÌH Ì@”ÌN ÌF”ÌO ÌG”Ì] ÌU’” ” 
+’” ” 
+‘” ‘” Ü ” ” ” 	” ”% ”' ”2 #”3 $”6 '”8 )”ÌB 3”ÌD 5”ÌH 9”ÌI :”ÌS ÌD”ÌU ÌF–” ” ” -” -” -”! -–” ” ” .” .” .” .˜” ” ” /”  /”! /”' /”( /”* /™” ” ” 0” 0” 0” 0”  0”" 0”$ 0 —” 1” 1
+” 1” 1”" 1”' 1”( 1’” 2” 2’”4 ”8 ’” ” š” ” ” ” ”+ ”/ ”1 !”2 "”4 $”8 (’”4 "”= "’” #” #š” #” #” #” #”+ #”0 # ”2 #"”3 ##”5 #%”9 #)’”4 &”? &’” '” 'š” '” '” '” '”+ '”2 '"”4 '$”5 '%”7 ''”; '+’”4 *”8 *’” +” +š” +” +” +” +”+ +”/ +”1 +!”2 +"”4 +$”8 +(’” ” ‘” 3ÔrF–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜ ±‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
+ ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ÔrG’§missing¦pluginÃ¦genAbcÂÔ  ÔrH”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache•ÔrI•¤type¥start£endªspecifiers¦source±ImportDeclarationÌ€Ì‘ÔrJ•¤type¥start£end¨imported¥local¯ImportSpecifierÌ‰ÌÔrK”¤type¥start£end¤nameªIdentifierÌ‰Ì¤HomeKªIdentifierÌ‰Ì¤HomeÔrL•¤type¥start£end¥value£raw§LiteralÌ•Ì¦./Home¨'./Home'I±ImportDeclarationÌ ÌÈ‘J¯ImportSpecifierÌ©Ì²KªIdentifierÌ©Ì²©DashboardKªIdentifierÌ©Ì²©DashboardL§LiteralÌºÌÇ«./Dashboard­'./Dashboard'I±ImportDeclarationÌÊÌö‘J¯ImportSpecifierÌÓÌŞKªIdentifierÌÓÌŞ«AICompanionKªIdentifierÌÓÌŞ«AICompanionL§LiteralÌæÌõ­./AICompanion¯'./AICompanion'I±ImportDeclarationÌøÍ‘J¯ImportSpecifierÍÍKªIdentifierÍÍ¤MineKªIdentifierÍÍ¤MineL§LiteralÍÍ¦./Mine¨'./Mine'I±ImportDeclarationÍÍA‘J¯ImportSpecifierÍ!Í'KªIdentifierÍ!Í'¦ColorsKªIdentifierÍ!Í'¦ColorsL§LiteralÍ/Í@¯../common/Theme±'../common/Theme'

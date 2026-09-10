@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "iKnow 专注感知智能学伴"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "iKnow 专注感知智能学伴"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "iKnow"
+    }
+  ]
+}

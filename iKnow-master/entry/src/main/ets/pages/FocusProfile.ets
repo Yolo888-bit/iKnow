@@ -1,6 +1,7 @@
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { AppStore } from '../store/AppStore'
 import { AIService } from '../services/AIService'
+import { Metrics } from '../services/Metrics'
 import { FocusProfile as Profile } from '../models/FocusProfile'
 import { RadarChart } from '../components/RadarChart'
 import { BarChart } from '../components/BarChart'
@@ -51,6 +52,7 @@ export struct FocusProfile {
           .fontColor(Colors.TEXT_PRIMARY)
           .width('100%')
 
+        if (Metrics.canShowProfile(this.profile.sampleCount)) {
         // 五维雷达图
         Column() {
           RadarChart({ values: this.dimValues, labels: this.dimLabels, chartSize: 280 })
@@ -111,6 +113,23 @@ export struct FocusProfile {
             .margin({ top: 10 })
         }
         .profileCard()
+
+        } else {
+          // 硬规则 §5/§6：样本不足，禁止显示默认五维雷达图，仅给空态
+          Column() {
+            Text('🌱 还在了解你')
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Text('完成 3 次专注后，我会根据真实数据为你生成五维画像与成长趋势。')
+              .fontSize(14)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(22)
+              .margin({ top: 12 })
+              .width('100%')
+          }
+          .profileCard()
+        }
 
         Blank().height(20)
       }

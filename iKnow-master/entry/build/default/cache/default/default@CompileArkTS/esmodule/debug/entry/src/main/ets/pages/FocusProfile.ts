@@ -11,6 +11,7 @@ interface FocusProfile_Params {
 import { Colors, Radius, Spacing } from "@normalized:N&&&entry/src/main/ets/common/Theme&";
 import { AppStore } from "@normalized:N&&&entry/src/main/ets/store/AppStore&";
 import { AIService } from "@normalized:N&&&entry/src/main/ets/services/AIService&";
+import { Metrics } from "@normalized:N&&&entry/src/main/ets/services/Metrics&";
 import { FocusProfile as Profile } from "@normalized:N&&&entry/src/main/ets/models/FocusProfile&";
 import { RadarChart } from "@normalized:N&&&entry/src/main/ets/components/RadarChart&";
 import { BarChart } from "@normalized:N&&&entry/src/main/ets/components/BarChart&";
@@ -135,147 +136,182 @@ export class FocusProfile extends ViewPU {
         }, Text);
         Text.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            // 五维雷达图
-            Column.create();
-            __Column__profileCard();
-        }, Column);
-        {
-            this.observeComponentCreation2((elmtId, isInitialRender) => {
-                if (isInitialRender) {
-                    let componentCall = new RadarChart(this, { values: this.dimValues, labels: this.dimLabels, chartSize: 280 }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/FocusProfile.ets", line: 56, col: 11 });
-                    ViewPU.create(componentCall);
-                    let paramsLambda = () => {
-                        return {
-                            values: this.dimValues,
-                            labels: this.dimLabels,
-                            chartSize: 280
-                        };
-                    };
-                    componentCall.paramsGenerator_ = paramsLambda;
-                }
-                else {
-                    this.updateStateVarsOfChildByElmtId(elmtId, {
-                        values: this.dimValues, labels: this.dimLabels, chartSize: 280
-                    });
-                }
-            }, { name: "RadarChart" });
-        }
-        // 五维雷达图
-        Column.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            // 个人专注画像
-            Column.create();
-            __Column__profileCard();
-        }, Column);
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('个人专注画像');
-            Text.fontSize(16);
-            Text.fontWeight(FontWeight.Medium);
-            Text.fontColor(Colors.TEXT_PRIMARY);
-            Text.width('100%');
-            Text.margin({ bottom: 14 });
-        }, Text);
-        Text.pop();
-        this.profileRow.bind(this)('黄金专注时段', this.profile.bestFocusTime);
-        this.profileRow.bind(this)('最容易分心的任务', this.hardest);
-        this.profileRow.bind(this)('当前专注阈值', `${this.profile.focusThreshold} min`);
-        // 个人专注画像
-        Column.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            // 专注成长趋势
-            Column.create();
-            __Column__profileCard();
-        }, Column);
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('专注成长趋势');
-            Text.fontSize(16);
-            Text.fontWeight(FontWeight.Medium);
-            Text.fontColor(Colors.TEXT_PRIMARY);
-            Text.width('100%');
-        }, Text);
-        Text.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create(`近 30 天平均专注时长  ${this.trendStart()} min → ${this.trendEnd()} min`);
-            Text.fontSize(15);
-            Text.fontColor(Colors.TEXT_PRIMARY);
-            Text.margin({ top: 12 });
-            Text.width('100%');
-        }, Text);
-        Text.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            __Common__.create();
-            __Common__.margin({ top: 12 });
-            __Common__.width('100%');
-        }, __Common__);
-        {
-            this.observeComponentCreation2((elmtId, isInitialRender) => {
-                if (isInitialRender) {
-                    let componentCall = new BarChart(this, { values: this.trend, labels: [] }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/FocusProfile.ets", line: 89, col: 11 });
-                    ViewPU.create(componentCall);
-                    let paramsLambda = () => {
-                        return {
-                            values: this.trend,
-                            labels: []
-                        };
-                    };
-                    componentCall.paramsGenerator_ = paramsLambda;
-                }
-                else {
-                    this.updateStateVarsOfChildByElmtId(elmtId, {
-                        values: this.trend, labels: []
-                    });
-                }
-            }, { name: "BarChart" });
-        }
-        __Common__.pop();
-        // 专注成长趋势
-        Column.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            // AI 长期分析
-            Column.create();
-            __Column__profileCard();
-        }, Column);
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Row.create();
-            Row.width('100%');
-        }, Row);
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('AI 长期分析');
-            Text.fontSize(16);
-            Text.fontWeight(FontWeight.Medium);
-            Text.fontColor(Colors.TEXT_PRIMARY);
-        }, Text);
-        Text.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Blank.create();
-        }, Blank);
-        Blank.pop();
-        {
-            this.observeComponentCreation2((elmtId, isInitialRender) => {
-                if (isInitialRender) {
-                    let componentCall = new AITag(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/FocusProfile.ets", line: 103, col: 13 });
-                    ViewPU.create(componentCall);
-                    let paramsLambda = () => {
-                        return {};
-                    };
-                    componentCall.paramsGenerator_ = paramsLambda;
-                }
-                else {
-                    this.updateStateVarsOfChildByElmtId(elmtId, {});
-                }
-            }, { name: "AITag" });
-        }
-        Row.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create(AIService.getInstance().longTermAnalysis(ObservedObject.GetRawObject(this.profile), this.hardest));
-            Text.fontSize(15);
-            Text.fontColor(Colors.TEXT_PRIMARY);
-            Text.lineHeight(24);
-            Text.margin({ top: 10 });
-        }, Text);
-        Text.pop();
-        // AI 长期分析
-        Column.pop();
+            If.create();
+            if (Metrics.canShowProfile(this.profile.sampleCount)) {
+                this.ifElseBranchUpdateFunction(0, () => {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        // 五维雷达图
+                        Column.create();
+                        __Column__profileCard();
+                    }, Column);
+                    {
+                        this.observeComponentCreation2((elmtId, isInitialRender) => {
+                            if (isInitialRender) {
+                                let componentCall = new RadarChart(this, { values: this.dimValues, labels: this.dimLabels, chartSize: 280 }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/FocusProfile.ets", line: 58, col: 11 });
+                                ViewPU.create(componentCall);
+                                let paramsLambda = () => {
+                                    return {
+                                        values: this.dimValues,
+                                        labels: this.dimLabels,
+                                        chartSize: 280
+                                    };
+                                };
+                                componentCall.paramsGenerator_ = paramsLambda;
+                            }
+                            else {
+                                this.updateStateVarsOfChildByElmtId(elmtId, {
+                                    values: this.dimValues, labels: this.dimLabels, chartSize: 280
+                                });
+                            }
+                        }, { name: "RadarChart" });
+                    }
+                    // 五维雷达图
+                    Column.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        // 个人专注画像
+                        Column.create();
+                        __Column__profileCard();
+                    }, Column);
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create('个人专注画像');
+                        Text.fontSize(16);
+                        Text.fontWeight(FontWeight.Medium);
+                        Text.fontColor(Colors.TEXT_PRIMARY);
+                        Text.width('100%');
+                        Text.margin({ bottom: 14 });
+                    }, Text);
+                    Text.pop();
+                    this.profileRow.bind(this)('黄金专注时段', this.profile.bestFocusTime);
+                    this.profileRow.bind(this)('最容易分心的任务', this.hardest);
+                    this.profileRow.bind(this)('当前专注阈值', `${this.profile.focusThreshold} min`);
+                    // 个人专注画像
+                    Column.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        // 专注成长趋势
+                        Column.create();
+                        __Column__profileCard();
+                    }, Column);
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create('专注成长趋势');
+                        Text.fontSize(16);
+                        Text.fontWeight(FontWeight.Medium);
+                        Text.fontColor(Colors.TEXT_PRIMARY);
+                        Text.width('100%');
+                    }, Text);
+                    Text.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create(`近 30 天平均专注时长  ${this.trendStart()} min → ${this.trendEnd()} min`);
+                        Text.fontSize(15);
+                        Text.fontColor(Colors.TEXT_PRIMARY);
+                        Text.margin({ top: 12 });
+                        Text.width('100%');
+                    }, Text);
+                    Text.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        __Common__.create();
+                        __Common__.margin({ top: 12 });
+                        __Common__.width('100%');
+                    }, __Common__);
+                    {
+                        this.observeComponentCreation2((elmtId, isInitialRender) => {
+                            if (isInitialRender) {
+                                let componentCall = new BarChart(this, { values: this.trend, labels: [] }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/FocusProfile.ets", line: 91, col: 11 });
+                                ViewPU.create(componentCall);
+                                let paramsLambda = () => {
+                                    return {
+                                        values: this.trend,
+                                        labels: []
+                                    };
+                                };
+                                componentCall.paramsGenerator_ = paramsLambda;
+                            }
+                            else {
+                                this.updateStateVarsOfChildByElmtId(elmtId, {
+                                    values: this.trend, labels: []
+                                });
+                            }
+                        }, { name: "BarChart" });
+                    }
+                    __Common__.pop();
+                    // 专注成长趋势
+                    Column.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        // AI 长期分析
+                        Column.create();
+                        __Column__profileCard();
+                    }, Column);
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Row.create();
+                        Row.width('100%');
+                    }, Row);
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create('AI 长期分析');
+                        Text.fontSize(16);
+                        Text.fontWeight(FontWeight.Medium);
+                        Text.fontColor(Colors.TEXT_PRIMARY);
+                    }, Text);
+                    Text.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Blank.create();
+                    }, Blank);
+                    Blank.pop();
+                    {
+                        this.observeComponentCreation2((elmtId, isInitialRender) => {
+                            if (isInitialRender) {
+                                let componentCall = new AITag(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/FocusProfile.ets", line: 105, col: 13 });
+                                ViewPU.create(componentCall);
+                                let paramsLambda = () => {
+                                    return {};
+                                };
+                                componentCall.paramsGenerator_ = paramsLambda;
+                            }
+                            else {
+                                this.updateStateVarsOfChildByElmtId(elmtId, {});
+                            }
+                        }, { name: "AITag" });
+                    }
+                    Row.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create(AIService.getInstance().longTermAnalysis(ObservedObject.GetRawObject(this.profile), this.hardest));
+                        Text.fontSize(15);
+                        Text.fontColor(Colors.TEXT_PRIMARY);
+                        Text.lineHeight(24);
+                        Text.margin({ top: 10 });
+                    }, Text);
+                    Text.pop();
+                    // AI 长期分析
+                    Column.pop();
+                });
+            }
+            else {
+                this.ifElseBranchUpdateFunction(1, () => {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        // 硬规则 §5/§6：样本不足，禁止显示默认五维雷达图，仅给空态
+                        Column.create();
+                        __Column__profileCard();
+                    }, Column);
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create('🌱 还在了解你');
+                        Text.fontSize(18);
+                        Text.fontWeight(FontWeight.Bold);
+                        Text.fontColor(Colors.TEXT_PRIMARY);
+                    }, Text);
+                    Text.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create('完成 3 次专注后，我会根据真实数据为你生成五维画像与成长趋势。');
+                        Text.fontSize(14);
+                        Text.fontColor(Colors.TEXT_SECONDARY);
+                        Text.lineHeight(22);
+                        Text.margin({ top: 12 });
+                        Text.width('100%');
+                    }, Text);
+                    Text.pop();
+                    // 硬规则 §5/§6：样本不足，禁止显示默认五维雷达图，仅给空态
+                    Column.pop();
+                });
+            }
+        }, If);
+        If.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
             Blank.create();
             Blank.height(20);

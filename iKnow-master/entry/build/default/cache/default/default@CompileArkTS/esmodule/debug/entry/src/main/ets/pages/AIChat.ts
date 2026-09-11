@@ -18,6 +18,7 @@ import { MessageRole } from "@normalized:N&&&entry/src/main/ets/models/Enums&";
 import { IdUtils } from "@normalized:N&&&entry/src/main/ets/utils/IdUtils&";
 import { TimeUtils } from "@normalized:N&&&entry/src/main/ets/utils/TimeUtils&";
 import { AITag } from "@normalized:N&&&entry/src/main/ets/components/AITag&";
+import { AIFirstDisclaimer } from "@normalized:N&&&entry/src/main/ets/components/AIFirstDisclaimer&";
 export class AIChat extends ViewPU {
     constructor(parent, params, __localStorage, elmtId = -1, paramsLambda = undefined, extraInfo) {
         super(parent, __localStorage, elmtId, extraInfo);
@@ -218,7 +219,7 @@ export class AIChat extends ViewPU {
         {
             this.observeComponentCreation2((elmtId, isInitialRender) => {
                 if (isInitialRender) {
-                    let componentCall = new AITag(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/AIChat.ets", line: 118, col: 9 });
+                    let componentCall = new AITag(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/AIChat.ets", line: 119, col: 9 });
                     ViewPU.create(componentCall);
                     let paramsLambda = () => {
                         return {};
@@ -319,6 +320,21 @@ export class AIChat extends ViewPU {
         }, Button);
         Button.pop();
         Row.pop();
+        {
+            this.observeComponentCreation2((elmtId, isInitialRender) => {
+                if (isInitialRender) {
+                    let componentCall = new AIFirstDisclaimer(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/AIChat.ets", line: 182, col: 5 });
+                    ViewPU.create(componentCall);
+                    let paramsLambda = () => {
+                        return {};
+                    };
+                    componentCall.paramsGenerator_ = paramsLambda;
+                }
+                else {
+                    this.updateStateVarsOfChildByElmtId(elmtId, {});
+                }
+            }, { name: "AIFirstDisclaimer" });
+        }
         Column.pop();
     }
     rerender() {

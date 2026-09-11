@@ -1,0 +1,1074 @@
+Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚ8import { FocusState } from '../models/Enums';
+import { TimeUtils } from '../utils/TimeUtils';
+export class Metrics {
+    // ===================== Â§5 åŸºç¡€å£å¾„ =====================
+    /** Â§5 å¢™é’Ÿ = ä¼šè¯ running æœŸé—´å…¨éƒ¨æµé€æ—¶é—´ï¼ˆç§’ï¼‰ */
+    static wallClock(s) {
+        return s.totalDuration;
+    }
+    /** Â§5 ä¼‘æ¯ = ä¼‘æ¯æ—¶é•¿ï¼ˆç§’ï¼‰ */
+    static restSec(s) {
+        return s.breakDuration;
+    }
+    /** Â§5 æš‚åœ = æš‚åœæ—¶é•¿ï¼ˆç§’ï¼‰ */
+    static pauseSec(s) {
+        return s.pausedDuration;
+    }
+    /** Â§5 æ€»å­¦ä¹  = å¢™é’Ÿ âˆ’ ä¼‘æ¯ âˆ’ æš‚åœï¼ˆç§’ï¼‰ */
+    static totalStudySec(s) {
+        return Math.max(0, s.totalDuration - s.breakDuration - s.pausedDuration);
+    }
+    /** Â§5 å‡€ä¸“æ³¨ = GREEN ç´¯è®¡ï¼ˆç§’ï¼‰ */
+    static netFocusSec(s) {
+        return s.focusDuration;
+    }
+    /** Â§5 åˆ†å¿ƒ = YELLOW + RED ç´¯è®¡ï¼ˆç§’ï¼‰ */
+    static distractionSec(s) {
+        return s.distractionDuration;
+    }
+    /** Â§5 ç­”ç–‘ = QAï¼ˆè®¡å…¥æ€»ï¼Œä¸è®¡å‡€ï¼‰ï¼ˆç§’ï¼‰ */
+    static qaSec(s) {
+        return s.qaDuration;
+    }
+    /** Â§5 å‡€ä¸“æ³¨ç‡ = å‡€ä¸“æ³¨ / æ€»å­¦ä¹ ï¼ˆ0-1ï¼‰ */
+    static netFocusRate(s) {
+        const t = Metrics.totalStudySec(s);
+        return t > 0 ? s.focusDuration / t : 0;
+    }
+    /** Â§5 å‡€ä¸“æ³¨ç‡ï¼ˆç™¾åˆ†æ¯”æ•´æ•°ï¼‰ */
+    static focusRatePercent(s) {
+        return Math.round(Metrics.netFocusRate(s) * 100);
+    }
+    /** Â§5 åˆ†å¿ƒç‡ = åˆ†å¿ƒ / æ€»å­¦ä¹ ï¼ˆ0-1ï¼‰ */
+    static distractionRate(s) {
+        const t = Metrics.totalStudySec(s);
+        return t > 0 ? s.distractionDuration / t : 0;
+    }
+    /**
+     * Â§5 å®Œæˆç‡ï¼šä¼˜å…ˆæŒ‰ estimatedDuration åŠ æƒï¼Œæ— æƒé‡ä¿¡æ¯æ—¶æŒ‰ä»»åŠ¡æ•°ã€‚
+     * @param estMap ä»»åŠ¡ id â†’ é¢„è®¡æ—¶é•¿ï¼ˆåˆ†é’Ÿï¼‰ï¼Œå¯é€‰ï¼›ç¼ºå¤±æ—¶é€€åŒ–ä¸ºä»»åŠ¡æ•°å£å¾„
+     */
+    static completionRate(s, estMap) {
+        if (s.taskIds.length === 0) {
+            return 100;
+        }
+        const done = s.completedTaskIds;
+        if (estMap !== undefined && estMap.size > 0) {
+            let total = 0;
+            let comp = 0;
+            for (const id of s.taskIds) {
+                const e = estMap.get(id);
+                total += e ?? 0;
+                if (done.indexOf(id) >= 0) {
+                    comp += e ?? 0;
+                }
+            }
+            return total > 0 ? Math.round((comp / total) * 100) : 0;
+        }
+        return Math.round((done.length / s.taskIds.length) * 100);
+    }
+    // ===================== Â§5 è·¨ä¼šè¯æŒ‡æ ‡ =====================
+    /**
+     * Â§5 é»„é‡‘æ—¶æ®µï¼šæœ€è¿‘ 14 å¤©ï¼ŒæŒ‰ 2 å°æ—¶æ»‘åŠ¨çª—å£ç»Ÿè®¡æ€»å­¦ä¹ æ—¶é•¿ï¼Œè¿”å›å³°å€¼çª—å£çš„æ—¶é’ŸåŒºé—´ã€‚
+     * æ— æ•°æ®è¿”å›ç©ºä¸²ã€‚
+     */
+    static goldenWindow(sessions) {
+        const now = Date.now();
+        const dayMs = 24 * 3600 * 1000;
+        const buckets = new Array(12).fill(0); // 12 ä¸ª 2h çª—å£
+        let found = false;
+        for (const s of sessions) {
+            if (now - s.startTime > 14 * dayMs || s.startTime > now) {
+                continue;
+            }
+            const d = new Date(s.startTime);
+            const idx = Math.floor((d.getHours() * 60 + d.getMinutes()) / 120);
+            if (idx >= 0 && idx < 12) {
+                buckets[idx] += Metrics.totalStudySec(s);
+                found = true;
+            }
+        }
+        if (!found) {
+            return '';
+        }
+        let peak = 0;
+        for (let i = 0; i < 12; i++) {
+            if (buckets[i] > buckets[peak]) {
+                peak = i;
+            }
+        }
+        if (buckets[peak] <= 0) {
+            return '';
+        }
+        const startMin = peak * 120;
+        const endMin = startMin + 120;
+        return `${Metrics.clock(startMin)} - ${Metrics.clock(endMin)}`;
+    }
+    /**
+     * Â§5 æ˜“åˆ†å¿ƒä»»åŠ¡ï¼šè¿‘ä¼¼ä¸º"åˆ†å¿ƒç‡æœ€é«˜çš„ä¼šè¯"ï¼ˆMVP å ä½ï¼‰ã€‚
+     * åç»­æ¥å…¥ä»»åŠ¡çº§åˆ†å¿ƒæ¬¡æ•°å½’å› åï¼Œæ”¹ä¸º åˆ†å¿ƒæ¬¡æ•° / ä»»åŠ¡æ—¶é•¿(åˆ†é’Ÿ)ã€‚
+     */
+    static easyDistractionTask(sessions) {
+        let best = null;
+        let bestRate = -1;
+        for (const s of sessions) {
+            const r = Metrics.distractionRate(s);
+            if (r > bestRate) {
+                bestRate = r;
+                best = s;
+            }
+        }
+        if (best === null) {
+            return { subject: '', rate: 0 };
+        }
+        return { subject: best.title, rate: bestRate };
+    }
+    /**
+     * Â§5 ä¸“æ³¨é˜ˆå€¼ï¼šæœ€è¿‘ N(>=3) æ¬¡ä¼šè¯ä¸­ï¼Œæ¯æ¬¡"æœ€é•¿è¿ç»­ GREEN æ®µï¼ˆåˆ†é’Ÿï¼‰"çš„ä¸­ä½æ•°ã€‚
+     * æ ·æœ¬ä¸è¶³è¿”å› 0ã€‚
+     */
+    static focusThreshold(sessions) {
+        const runs = [];
+        for (const s of sessions) {
+            let best = 0;
+            let cur = 0;
+            for (const p of s.timeline) {
+                if (p.state === FocusState.FOCUSED) {
+                    cur += 1;
+                }
+                else {
+                    best = Math.max(best, cur);
+                    cur = 0;
+                }
+            }
+            best = Math.max(best, cur);
+            runs.push(best * 0.5); // é‡‡æ ·ç²’åº¦çº¦ 30s â†’ æŠ˜ç®—åˆ†é’Ÿ
+        }
+        const last = runs.slice(-Metrics.MIN_SAMPLES);
+        if (last.length < Metrics.MIN_SAMPLES) {
+            return 0;
+        }
+        return Math.round(Metrics.median(last));
+    }
+    // ===================== Â§6 äº”ç»´ç”»åƒ =====================
+    /**
+     * Â§6 äº”ç»´ï¼ˆçº¯è®¡ç®—ï¼Œä¸å«æ ·æœ¬é—¨ç¦ï¼‰ã€‚
+     * è°ƒç”¨æ–¹é¡»å…ˆç”¨ canShowProfile(sampleCount) åˆ¤æ–­æ˜¯å¦è¾¾åˆ° N>=3ï¼Œæœªè¾¾è¯·å‹¿æ¸²æŸ“æ•°å€¼ã€‚
+     *  - efficiency     = 0.6*å‡€ä¸“æ³¨ç‡å‡å€¼ + 0.4*å®Œæˆç‡å‡å€¼
+     *  - concentration  = å‡€ä¸“æ³¨ç‡å‡å€¼
+     *  - stability      = å‡€ä¸“æ³¨ç‡åºåˆ— Ïƒï¼šÏƒ>0.3 â†’ 0ï¼›å¦åˆ™ 100*(1-Ïƒ/0.4)
+     *  - execution      = å®Œæˆç‡å‡å€¼
+     *  - antiDistraction= 100*(1-åˆ†å¿ƒç‡å‡å€¼)
+     */
+    static fiveDim(sessions) {
+        const finished = sessions.filter((s) => Metrics.totalStudySec(s) > 0);
+        if (finished.length === 0) {
+            return { efficiency: 0, concentration: 0, stability: 0, execution: 0, antiDistraction: 0 };
+        }
+        const rates = finished.map((s) => Metrics.netFocusRate(s) * 100);
+        const comps = finished.map((s) => Metrics.completionRate(s));
+        const distrs = finished.map((s) => Metrics.distractionRate(s));
+        const avgRate = Metrics.mean(rates);
+        const avgComp = Metrics.mean(comps);
+        const avgDistr = Metrics.mean(distrs);
+        const sigma = Metrics.stddev(rates) / 100;
+        const efficiency = Math.round(0.6 * avgRate + 0.4 * avgComp);
+        const concentration = Math.round(avgRate);
+        const stability = sigma > 0.3 ? 0 : Math.round(100 * (1 - Metrics.clamp(sigma / 0.4, 0, 1)));
+        const execution = Math.round(avgComp);
+        const antiDistraction = Math.round(100 * (1 - Metrics.clamp(avgDistr, 0, 1)));
+        return { efficiency, concentration, stability, execution, antiDistraction };
+    }
+    /** Â§6 æ˜¯å¦è¾¾åˆ°å±•ç¤ºé—¨æ§›ï¼ˆN>=3ï¼‰ */
+    static canShowProfile(sampleCount) {
+        return sampleCount >= Metrics.MIN_SAMPLES;
+    }
+    // ===================== é•¿æœŸå¤ç›˜èšåˆï¼ˆÂ§5 æ´¾ç”Ÿï¼Œç»Ÿä¸€èµ° Metricsï¼‰=====================
+    /** æœ€è¿‘ 30 å¤©å­¦ä¹ è¡¨ç°æ±‡æ€»ï¼šæ€»å­¦ä¹ å°æ—¶ã€å®Œæˆä»»åŠ¡æ•°ã€å¹³å‡ä¸“æ³¨ç‡ã€æ¯æ—¥å‡€ä¸“æ³¨åˆ†é’Ÿè¶‹åŠ¿ */
+    static last30DaysSummary(sessions, tasks, now) {
+        const dayMs = 24 * 3600 * 1000;
+        const cutoff = now - 30 * dayMs;
+        let totalNetSec = 0;
+        let totalStudySec = 0;
+        const completedIds = [];
+        const trend = [];
+        for (let i = 29; i >= 0; i--) {
+            const dayStart = TimeUtils.dayStart(now) - i * dayMs;
+            const dayEnd = dayStart + dayMs;
+            let net = 0;
+            for (const s of sessions) {
+                if (s.startTime >= dayStart && s.startTime < dayEnd) {
+                    net += s.focusDuration;
+                }
+            }
+            trend.push(Math.round(net / 60));
+        }
+        for (const s of sessions) {
+            if (s.startTime >= cutoff) {
+                totalNetSec += s.focusDuration;
+                totalStudySec += Metrics.totalStudySec(s);
+                for (const id of s.completedTaskIds) {
+                    if (completedIds.indexOf(id) < 0) {
+                        completedIds.push(id);
+                    }
+                }
+            }
+        }
+        const focusRate = totalStudySec > 0 ? Math.round(totalNetSec / totalStudySec * 100) : 0;
+        return { totalHours: Math.round(totalNetSec / 3600), completedTasks: completedIds.length, focusRate: focusRate, trend: trend };
+    }
+    /** ç»ƒä¹ å†…å®¹æ€»ç»“ï¼šæŒ‰å­¦ç§‘ç»Ÿè®¡å·²å®Œæˆä»»åŠ¡æ¬¡æ•°ï¼Œè¿”å›å‰ 5 é¡¹ */
+    static practiceSummary(sessions, tasks) {
+        const taskMap = new Map();
+        for (const t of tasks) {
+            taskMap.set(t.id, t);
+        }
+        const groups = new Map();
+        for (const s of sessions) {
+            for (const id of s.completedTaskIds) {
+                const t = taskMap.get(id);
+                if (t !== undefined) {
+                    let g = groups.get(t.subject);
+                    if (g === undefined) {
+                        g = { subject: t.subject, content: t.title, count: 0 };
+                        groups.set(t.subject, g);
+                    }
+                    g.count++;
+                }
+            }
+        }
+        const result = [];
+        groups.forEach((value, key) => {
+            result.push(value);
+        });
+        result.sort((a, b) => b.count - a.count);
+        return result.slice(0, 5);
+    }
+    /** å­¦ä¹ ä¹ æƒ¯æ´å¯Ÿï¼šé»„é‡‘æ—¶æ®µã€ä½è°·æ—¶æ®µä¸å¯æ“ä½œå»ºè®® */
+    static habitInsights(sessions) {
+        const bestWindow = Metrics.goldenWindow(sessions);
+        let bestRate = 0;
+        if (bestWindow.length > 0) {
+            let sum = 0;
+            let count = 0;
+            for (const s of sessions) {
+                if (Metrics.totalStudySec(s) > 0) {
+                    sum += Metrics.netFocusRate(s) * 100;
+                    count++;
+                }
+            }
+            bestRate = count > 0 ? Math.round(sum / count) : 0;
+        }
+        return {
+            bestWindow: bestWindow.length > 0 ? bestWindow : '08:00 - 10:00',
+            bestRate: bestRate,
+            lowWindow: 'æ™šé—´ 21 ç‚¹å',
+            lowNote: 'å®¹æ˜“åˆ†å¿ƒ',
+            advice: 'éš¾é¢˜ä¼˜å…ˆå®‰æ’ä¸Šåˆæ”»å…‹ï¼Œæ™šé—´ä»¥å¤ä¹ å’Œè½»é‡æ•´ç†ä¸ºä¸»ã€‚'
+        };
+    }
+    // ===================== å¤ç›˜è¾…åŠ©ï¼ˆÂ§5 æ´¾ç”Ÿï¼Œç»Ÿä¸€èµ° Metricsï¼‰=====================
+    /** å•æ¬¡ä¼šè¯æœ€ä½³ä¸“æ³¨æ—¶æ®µï¼šæœ€é•¿"é«˜ä¸“æ³¨(>=70)è¿ç»­æ®µ"å¯¹åº”çš„æ—¶é’ŸåŒºé—´ */
+    static bestFocusPeriod(s) {
+        const tl = s.timeline;
+        if (tl.length === 0) {
+            return '';
+        }
+        let bestStart = 0;
+        let bestLen = 0;
+        let curStart = 0;
+        let curLen = 0;
+        for (let i = 0; i < tl.length; i++) {
+            const p = tl[i];
+            if (p.level >= 70) {
+                if (curLen === 0) {
+                    curStart = p.minute;
+                }
+                curLen++;
+                if (curLen > bestLen) {
+                    bestLen = curLen;
+                    bestStart = curStart;
+                }
+            }
+            else {
+                curLen = 0;
+            }
+        }
+        if (bestLen === 0) {
+            return '';
+        }
+        const startClock = Metrics.clock(bestStart);
+        const endClock = Metrics.clock(bestStart + bestLen);
+        return `${startClock} - ${endClock}`;
+    }
+    /** ç–²åŠ³ç‚¹ï¼šé¦–æ¬¡å‡ºç°åˆ†å¿ƒ/ä½ä¸“æ³¨ç­‰çº§çš„åˆ†é’Ÿ */
+    static fatigueMinute(s) {
+        for (const p of s.timeline) {
+            if (p.state === FocusState.DISTRACTED || p.level < 45) {
+                return p.minute;
+            }
+        }
+        return 0;
+    }
+    /** åˆ†å¿ƒè§¦å‘æºï¼ˆå»é‡ï¼Œæœ€å¤š 3 æ¡ï¼‰ */
+    static distractionTriggers(s) {
+        const seen = [];
+        for (const e of s.events) {
+            if (e.state === FocusState.SLIGHTLY_DISTRACTED || e.state === FocusState.DISTRACTED) {
+                const label = e.source === 'CAMERA' ? 'è§†çº¿ç¦»å¼€å±å¹•' : 'çŠ¶æ€æ³¢åŠ¨';
+                if (seen.indexOf(label) < 0 && seen.length < 3) {
+                    seen.push(label);
+                }
+            }
+        }
+        if (seen.length === 0 && s.distractionDuration > 0) {
+            seen.push('è§†çº¿ç¦»å¼€å±å¹•');
+        }
+        return seen;
+    }
+    // ===================== å†…éƒ¨å·¥å…· =====================
+    static clamp(v, lo, hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+    static mean(arr) {
+        if (arr.length === 0) {
+            return 0;
+        }
+        let sum = 0;
+        for (const v of arr) {
+            sum += v;
+        }
+        return sum / arr.length;
+    }
+    static stddev(arr) {
+        if (arr.length === 0) {
+            return 0;
+        }
+        const m = Metrics.mean(arr);
+        let acc = 0;
+        for (const v of arr) {
+            acc += (v - m) * (v - m);
+        }
+        return Math.sqrt(acc / arr.length);
+    }
+    static median(arr) {
+        if (arr.length === 0) {
+            return 0;
+        }
+        const a = arr.slice().sort((x, y) => x - y);
+        const mid = Math.floor(a.length / 2);
+        return a.length % 2 === 0 ? (a[mid - 1] + a[mid]) / 2 : a[mid];
+    }
+    static clock(totalMin) {
+        const h = Math.floor(totalMin / 60) % 24;
+        const m = totalMin % 60;
+        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+    }
+    /** ç”±ä»»åŠ¡åˆ—è¡¨æ„å»º id â†’ é¢„è®¡æ—¶é•¿(åˆ†é’Ÿ) æ˜ å°„ï¼Œä¾› completionRate åŠ æƒä½¿ç”¨ */
+    static buildEstMap(tasks) {
+        const m = new Map();
+        for (const t of tasks) {
+            m.set(t.id, t.estimatedDuration);
+        }
+        return m;
+    }
+}
+/** Â§6 / Â§5 ç»Ÿè®¡æœ€å°æ ·æœ¬æ•° N>=3ï¼ˆå°‘äºæ­¤æ•°ç”»åƒé¡µæ˜¾ç¤º"è¿˜åœ¨äº†è§£ä½ "ï¼Œç¦æ­¢æ˜¾ç¤ºé›·è¾¾æ•°å€¼ï¼‰ */
+Metrics.MIN_SAMPLES = 3;
+//# sourceMappingURL=Metrics.js.mapÂ’Ù9D:\iKnow\iKnow-master\entry\src\main\ets\models\Enums.etsÙ<D:\iKnow\iKnow-master\entry\src\main\ets\utils\TimeUtils.etsÙ=D:\iKnow\iKnow-master\entry\src\main\ets\services\Metrics.etsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂ»D:\iKnow\iKnow-master\entryµD:\iKnow\iKnow-master¥entry¥1.0.0Ô  “ÔrC’²hostDependencyName®hostModuleName³../services/Metrics¥entryCª../Metrics¥entryC©./Metrics¥entry»D:\iKnow\iKnow-master\entryÃÃÚ9import { FocusState } from '../models/Enums'
+import { FocusSession } from '../models/FocusSession'
+import { Task } from '../models/Task'
+import { TimeUtils } from '../utils/TimeUtils'
+
+export interface Last30DaysSummary {
+  totalHours: number
+  completedTasks: number
+  focusRate: number
+  trend: number[]
+}
+
+export interface PracticeSummaryItem {
+  subject: string
+  content: string
+  count: number
+}
+
+export interface HabitInsight {
+  bestWindow: string
+  bestRate: number
+  lowWindow: string
+  lowNote: string
+  advice: string
+}
+
+/**
+ * æŒ‡æ ‡å­—å…¸ â€”â€” å…¨å±€å”¯ä¸€æŒ‡æ ‡è®¡ç®—äº‹å®æºï¼ˆPRD Â§5 / Â§6ï¼‰
+ *
+ * è®¾è®¡åŸåˆ™ï¼ˆç¡¬è§„åˆ™ Â§3ï¼‰ï¼š
+ *  - å…¨éƒ¨ä¸ºçº¯å‡½æ•° `(FocusSession | FocusSession[]) => number/object`ï¼Œä¸æŒçŠ¶æ€ã€ä¸è¯»å†™å­˜å‚¨ã€‚
+ *  - ä»»ä½•é¡µé¢ / Service ä¸å¾—è‡ªè¡Œè§£é‡ŠæŒ‡æ ‡å£å¾„ï¼›éœ€è¦æŒ‡æ ‡æ—¶ä¸€å¾‹è°ƒç”¨æœ¬ç±»ã€‚
+ *  - æ¯ä¸ªå‡½æ•°é¡¶éƒ¨ JSDoc æ ‡æ³¨å¯¹åº” PRD è¡Œå·ï¼Œä¾¿äºå®¡è®¡ã€‚
+ *  - é™¤é›¶ä¸€å¾‹è¿”å› 0ï¼Œé¿å… NaN æ±¡æŸ“ UIã€‚
+ *  - ArkTS åˆè§„ï¼šé™æ€æ–¹æ³•å†…ä¸€å¾‹ç”¨ Metrics.xxx è€Œé this.xxxã€‚
+ */
+export interface DistractionSubject {
+  subject: string
+  rate: number
+}
+
+export interface FiveDim {
+  efficiency: number
+  concentration: number
+  stability: number
+  execution: number
+  antiDistraction: number
+}
+
+export class Metrics {
+  /** Â§6 / Â§5 ç»Ÿè®¡æœ€å°æ ·æœ¬æ•° N>=3ï¼ˆå°‘äºæ­¤æ•°ç”»åƒé¡µæ˜¾ç¤º"è¿˜åœ¨äº†è§£ä½ "ï¼Œç¦æ­¢æ˜¾ç¤ºé›·è¾¾æ•°å€¼ï¼‰ */
+  static readonly MIN_SAMPLES = 3
+
+  // ===================== Â§5 åŸºç¡€å£å¾„ =====================
+
+  /** Â§5 å¢™é’Ÿ = ä¼šè¯ running æœŸé—´å…¨éƒ¨æµé€æ—¶é—´ï¼ˆç§’ï¼‰ */
+  static wallClock(s: FocusSession): number {
+    return s.totalDuration
+  }
+
+  /** Â§5 ä¼‘æ¯ = ä¼‘æ¯æ—¶é•¿ï¼ˆç§’ï¼‰ */
+  static restSec(s: FocusSession): number {
+    return s.breakDuration
+  }
+
+  /** Â§5 æš‚åœ = æš‚åœæ—¶é•¿ï¼ˆç§’ï¼‰ */
+  static pauseSec(s: FocusSession): number {
+    return s.pausedDuration
+  }
+
+  /** Â§5 æ€»å­¦ä¹  = å¢™é’Ÿ âˆ’ ä¼‘æ¯ âˆ’ æš‚åœï¼ˆç§’ï¼‰ */
+  static totalStudySec(s: FocusSession): number {
+    return Math.max(0, s.totalDuration - s.breakDuration - s.pausedDuration)
+  }
+
+  /** Â§5 å‡€ä¸“æ³¨ = GREEN ç´¯è®¡ï¼ˆç§’ï¼‰ */
+  static netFocusSec(s: FocusSession): number {
+    return s.focusDuration
+  }
+
+  /** Â§5 åˆ†å¿ƒ = YELLOW + RED ç´¯è®¡ï¼ˆç§’ï¼‰ */
+  static distractionSec(s: FocusSession): number {
+    return s.distractionDuration
+  }
+
+  /** Â§5 ç­”ç–‘ = QAï¼ˆè®¡å…¥æ€»ï¼Œä¸è®¡å‡€ï¼‰ï¼ˆç§’ï¼‰ */
+  static qaSec(s: FocusSession): number {
+    return s.qaDuration
+  }
+
+  /** Â§5 å‡€ä¸“æ³¨ç‡ = å‡€ä¸“æ³¨ / æ€»å­¦ä¹ ï¼ˆ0-1ï¼‰ */
+  static netFocusRate(s: FocusSession): number {
+    const t = Metrics.totalStudySec(s)
+    return t > 0 ? s.focusDuration / t : 0
+  }
+
+  /** Â§5 å‡€ä¸“æ³¨ç‡ï¼ˆç™¾åˆ†æ¯”æ•´æ•°ï¼‰ */
+  static focusRatePercent(s: FocusSession): number {
+    return Math.round(Metrics.netFocusRate(s) * 100)
+  }
+
+  /** Â§5 åˆ†å¿ƒç‡ = åˆ†å¿ƒ / æ€»å­¦ä¹ ï¼ˆ0-1ï¼‰ */
+  static distractionRate(s: FocusSession): number {
+    const t = Metrics.totalStudySec(s)
+    return t > 0 ? s.distractionDuration / t : 0
+  }
+
+  /**
+   * Â§5 å®Œæˆç‡ï¼šä¼˜å…ˆæŒ‰ estimatedDuration åŠ æƒï¼Œæ— æƒé‡ä¿¡æ¯æ—¶æŒ‰ä»»åŠ¡æ•°ã€‚
+   * @param estMap ä»»åŠ¡ id â†’ é¢„è®¡æ—¶é•¿ï¼ˆåˆ†é’Ÿï¼‰ï¼Œå¯é€‰ï¼›ç¼ºå¤±æ—¶é€€åŒ–ä¸ºä»»åŠ¡æ•°å£å¾„
+   */
+  static completionRate(s: FocusSession, estMap?: Map<string, number>): number {
+    if (s.taskIds.length === 0) {
+      return 100
+    }
+    const done = s.completedTaskIds
+    if (estMap !== undefined && estMap.size > 0) {
+      let total = 0
+      let comp = 0
+      for (const id of s.taskIds) {
+        const e = estMap.get(id)
+        total += e ?? 0
+        if (done.indexOf(id) >= 0) {
+          comp += e ?? 0
+        }
+      }
+      return total > 0 ? Math.round((comp / total) * 100) : 0
+    }
+    return Math.round((done.length / s.taskIds.length) * 100)
+  }
+
+  // ===================== Â§5 è·¨ä¼šè¯æŒ‡æ ‡ =====================
+
+  /**
+   * Â§5 é»„é‡‘æ—¶æ®µï¼šæœ€è¿‘ 14 å¤©ï¼ŒæŒ‰ 2 å°æ—¶æ»‘åŠ¨çª—å£ç»Ÿè®¡æ€»å­¦ä¹ æ—¶é•¿ï¼Œè¿”å›å³°å€¼çª—å£çš„æ—¶é’ŸåŒºé—´ã€‚
+   * æ— æ•°æ®è¿”å›ç©ºä¸²ã€‚
+   */
+  static goldenWindow(sessions: FocusSession[]): string {
+    const now = Date.now()
+    const dayMs = 24 * 3600 * 1000
+    const buckets = new Array<number>(12).fill(0) // 12 ä¸ª 2h çª—å£
+    let found = false
+    for (const s of sessions) {
+      if (now - s.startTime > 14 * dayMs || s.startTime > now) {
+        continue
+      }
+      const d = new Date(s.startTime)
+      const idx = Math.floor((d.getHours() * 60 + d.getMinutes()) / 120)
+      if (idx >= 0 && idx < 12) {
+        buckets[idx] += Metrics.totalStudySec(s)
+        found = true
+      }
+    }
+    if (!found) {
+      return ''
+    }
+    let peak = 0
+    for (let i = 0; i < 12; i++) {
+      if (buckets[i] > buckets[peak]) {
+        peak = i
+      }
+    }
+    if (buckets[peak] <= 0) {
+      return ''
+    }
+    const startMin = peak * 120
+    const endMin = startMin + 120
+    return `${Metrics.clock(startMin)} - ${Metrics.clock(endMin)}`
+  }
+
+  /**
+   * Â§5 æ˜“åˆ†å¿ƒä»»åŠ¡ï¼šè¿‘ä¼¼ä¸º"åˆ†å¿ƒç‡æœ€é«˜çš„ä¼šè¯"ï¼ˆMVP å ä½ï¼‰ã€‚
+   * åç»­æ¥å…¥ä»»åŠ¡çº§åˆ†å¿ƒæ¬¡æ•°å½’å› åï¼Œæ”¹ä¸º åˆ†å¿ƒæ¬¡æ•° / ä»»åŠ¡æ—¶é•¿(åˆ†é’Ÿ)ã€‚
+   */
+  static easyDistractionTask(sessions: FocusSession[]): DistractionSubject {
+    let best: FocusSession | null = null
+    let bestRate = -1
+    for (const s of sessions) {
+      const r = Metrics.distractionRate(s)
+      if (r > bestRate) {
+        bestRate = r
+        best = s
+      }
+    }
+    if (best === null) {
+      return { subject: '', rate: 0 }
+    }
+    return { subject: best.title, rate: bestRate }
+  }
+
+  /**
+   * Â§5 ä¸“æ³¨é˜ˆå€¼ï¼šæœ€è¿‘ N(>=3) æ¬¡ä¼šè¯ä¸­ï¼Œæ¯æ¬¡"æœ€é•¿è¿ç»­ GREEN æ®µï¼ˆåˆ†é’Ÿï¼‰"çš„ä¸­ä½æ•°ã€‚
+   * æ ·æœ¬ä¸è¶³è¿”å› 0ã€‚
+   */
+  static focusThreshold(sessions: FocusSession[]): number {
+    const runs: number[] = []
+    for (const s of sessions) {
+      let best = 0
+      let cur = 0
+      for (const p of s.timeline) {
+        if (p.state === FocusState.FOCUSED) {
+          cur += 1
+        } else {
+          best = Math.max(best, cur)
+          cur = 0
+        }
+      }
+      best = Math.max(best, cur)
+      runs.push(best * 0.5) // é‡‡æ ·ç²’åº¦çº¦ 30s â†’ æŠ˜ç®—åˆ†é’Ÿ
+    }
+    const last = runs.slice(-Metrics.MIN_SAMPLES)
+    if (last.length < Metrics.MIN_SAMPLES) {
+      return 0
+    }
+    return Math.round(Metrics.median(last))
+  }
+
+  // ===================== Â§6 äº”ç»´ç”»åƒ =====================
+
+  /**
+   * Â§6 äº”ç»´ï¼ˆçº¯è®¡ç®—ï¼Œä¸å«æ ·æœ¬é—¨ç¦ï¼‰ã€‚
+   * è°ƒç”¨æ–¹é¡»å…ˆç”¨ canShowProfile(sampleCount) åˆ¤æ–­æ˜¯å¦è¾¾åˆ° N>=3ï¼Œæœªè¾¾è¯·å‹¿æ¸²æŸ“æ•°å€¼ã€‚
+   *  - efficiency     = 0.6*å‡€ä¸“æ³¨ç‡å‡å€¼ + 0.4*å®Œæˆç‡å‡å€¼
+   *  - concentration  = å‡€ä¸“æ³¨ç‡å‡å€¼
+   *  - stability      = å‡€ä¸“æ³¨ç‡åºåˆ— Ïƒï¼šÏƒ>0.3 â†’ 0ï¼›å¦åˆ™ 100*(1-Ïƒ/0.4)
+   *  - execution      = å®Œæˆç‡å‡å€¼
+   *  - antiDistraction= 100*(1-åˆ†å¿ƒç‡å‡å€¼)
+   */
+  static fiveDim(sessions: FocusSession[]): FiveDim {
+    const finished = sessions.filter((s: FocusSession): boolean => Metrics.totalStudySec(s) > 0)
+    if (finished.length === 0) {
+      return { efficiency: 0, concentration: 0, stability: 0, execution: 0, antiDistraction: 0 }
+    }
+    const rates: number[] = finished.map((s: FocusSession): number => Metrics.netFocusRate(s) * 100)
+    const comps: number[] = finished.map((s: FocusSession): number => Metrics.completionRate(s))
+    const distrs: number[] = finished.map((s: FocusSession): number => Metrics.distractionRate(s))
+    const avgRate = Metrics.mean(rates)
+    const avgComp = Metrics.mean(comps)
+    const avgDistr = Metrics.mean(distrs)
+    const sigma = Metrics.stddev(rates) / 100
+
+    const efficiency = Math.round(0.6 * avgRate + 0.4 * avgComp)
+    const concentration = Math.round(avgRate)
+    const stability = sigma > 0.3 ? 0 : Math.round(100 * (1 - Metrics.clamp(sigma / 0.4, 0, 1)))
+    const execution = Math.round(avgComp)
+    const antiDistraction = Math.round(100 * (1 - Metrics.clamp(avgDistr, 0, 1)))
+    return { efficiency, concentration, stability, execution, antiDistraction }
+  }
+
+  /** Â§6 æ˜¯å¦è¾¾åˆ°å±•ç¤ºé—¨æ§›ï¼ˆN>=3ï¼‰ */
+  static canShowProfile(sampleCount: number): boolean {
+    return sampleCount >= Metrics.MIN_SAMPLES
+  }
+
+  // ===================== é•¿æœŸå¤ç›˜èšåˆï¼ˆÂ§5 æ´¾ç”Ÿï¼Œç»Ÿä¸€èµ° Metricsï¼‰=====================
+
+  /** æœ€è¿‘ 30 å¤©å­¦ä¹ è¡¨ç°æ±‡æ€»ï¼šæ€»å­¦ä¹ å°æ—¶ã€å®Œæˆä»»åŠ¡æ•°ã€å¹³å‡ä¸“æ³¨ç‡ã€æ¯æ—¥å‡€ä¸“æ³¨åˆ†é’Ÿè¶‹åŠ¿ */
+  static last30DaysSummary(sessions: FocusSession[], tasks: Task[], now: number): Last30DaysSummary {
+    const dayMs = 24 * 3600 * 1000
+    const cutoff = now - 30 * dayMs
+    let totalNetSec = 0
+    let totalStudySec = 0
+    const completedIds: string[] = []
+    const trend: number[] = []
+
+    for (let i = 29; i >= 0; i--) {
+      const dayStart = TimeUtils.dayStart(now) - i * dayMs
+      const dayEnd = dayStart + dayMs
+      let net = 0
+      for (const s of sessions) {
+        if (s.startTime >= dayStart && s.startTime < dayEnd) {
+          net += s.focusDuration
+        }
+      }
+      trend.push(Math.round(net / 60))
+    }
+
+    for (const s of sessions) {
+      if (s.startTime >= cutoff) {
+        totalNetSec += s.focusDuration
+        totalStudySec += Metrics.totalStudySec(s)
+        for (const id of s.completedTaskIds) {
+          if (completedIds.indexOf(id) < 0) {
+            completedIds.push(id)
+          }
+        }
+      }
+    }
+
+    const focusRate = totalStudySec > 0 ? Math.round(totalNetSec / totalStudySec * 100) : 0
+    return { totalHours: Math.round(totalNetSec / 3600), completedTasks: completedIds.length, focusRate: focusRate, trend: trend }
+  }
+
+  /** ç»ƒä¹ å†…å®¹æ€»ç»“ï¼šæŒ‰å­¦ç§‘ç»Ÿè®¡å·²å®Œæˆä»»åŠ¡æ¬¡æ•°ï¼Œè¿”å›å‰ 5 é¡¹ */
+  static practiceSummary(sessions: FocusSession[], tasks: Task[]): PracticeSummaryItem[] {
+    const taskMap = new Map<string, Task>()
+    for (const t of tasks) {
+      taskMap.set(t.id, t)
+    }
+    const groups = new Map<string, PracticeSummaryItem>()
+    for (const s of sessions) {
+      for (const id of s.completedTaskIds) {
+        const t = taskMap.get(id)
+        if (t !== undefined) {
+          let g = groups.get(t.subject)
+          if (g === undefined) {
+            g = { subject: t.subject, content: t.title, count: 0 }
+            groups.set(t.subject, g)
+          }
+          g.count++
+        }
+      }
+    }
+    const result: PracticeSummaryItem[] = []
+    groups.forEach((value: PracticeSummaryItem, key: string) => {
+      result.push(value)
+    })
+    result.sort((a: PracticeSummaryItem, b: PracticeSummaryItem): number => b.count - a.count)
+    return result.slice(0, 5)
+  }
+
+  /** å­¦ä¹ ä¹ æƒ¯æ´å¯Ÿï¼šé»„é‡‘æ—¶æ®µã€ä½è°·æ—¶æ®µä¸å¯æ“ä½œå»ºè®® */
+  static habitInsights(sessions: FocusSession[]): HabitInsight {
+    const bestWindow = Metrics.goldenWindow(sessions)
+    let bestRate = 0
+    if (bestWindow.length > 0) {
+      let sum = 0
+      let count = 0
+      for (const s of sessions) {
+        if (Metrics.totalStudySec(s) > 0) {
+          sum += Metrics.netFocusRate(s) * 100
+          count++
+        }
+      }
+      bestRate = count > 0 ? Math.round(sum / count) : 0
+    }
+    return {
+      bestWindow: bestWindow.length > 0 ? bestWindow : '08:00 - 10:00',
+      bestRate: bestRate,
+      lowWindow: 'æ™šé—´ 21 ç‚¹å',
+      lowNote: 'å®¹æ˜“åˆ†å¿ƒ',
+      advice: 'éš¾é¢˜ä¼˜å…ˆå®‰æ’ä¸Šåˆæ”»å…‹ï¼Œæ™šé—´ä»¥å¤ä¹ å’Œè½»é‡æ•´ç†ä¸ºä¸»ã€‚'
+    }
+  }
+
+  // ===================== å¤ç›˜è¾…åŠ©ï¼ˆÂ§5 æ´¾ç”Ÿï¼Œç»Ÿä¸€èµ° Metricsï¼‰=====================
+
+  /** å•æ¬¡ä¼šè¯æœ€ä½³ä¸“æ³¨æ—¶æ®µï¼šæœ€é•¿"é«˜ä¸“æ³¨(>=70)è¿ç»­æ®µ"å¯¹åº”çš„æ—¶é’ŸåŒºé—´ */
+  static bestFocusPeriod(s: FocusSession): string {
+    const tl = s.timeline
+    if (tl.length === 0) {
+      return ''
+    }
+    let bestStart = 0
+    let bestLen = 0
+    let curStart = 0
+    let curLen = 0
+    for (let i = 0; i < tl.length; i++) {
+      const p = tl[i]
+      if (p.level >= 70) {
+        if (curLen === 0) {
+          curStart = p.minute
+        }
+        curLen++
+        if (curLen > bestLen) {
+          bestLen = curLen
+          bestStart = curStart
+        }
+      } else {
+        curLen = 0
+      }
+    }
+    if (bestLen === 0) {
+      return ''
+    }
+    const startClock = Metrics.clock(bestStart)
+    const endClock = Metrics.clock(bestStart + bestLen)
+    return `${startClock} - ${endClock}`
+  }
+
+  /** ç–²åŠ³ç‚¹ï¼šé¦–æ¬¡å‡ºç°åˆ†å¿ƒ/ä½ä¸“æ³¨ç­‰çº§çš„åˆ†é’Ÿ */
+  static fatigueMinute(s: FocusSession): number {
+    for (const p of s.timeline) {
+      if (p.state === FocusState.DISTRACTED || p.level < 45) {
+        return p.minute
+      }
+    }
+    return 0
+  }
+
+  /** åˆ†å¿ƒè§¦å‘æºï¼ˆå»é‡ï¼Œæœ€å¤š 3 æ¡ï¼‰ */
+  static distractionTriggers(s: FocusSession): string[] {
+    const seen: string[] = []
+    for (const e of s.events) {
+      if (e.state === FocusState.SLIGHTLY_DISTRACTED || e.state === FocusState.DISTRACTED) {
+        const label = e.source === 'CAMERA' ? 'è§†çº¿ç¦»å¼€å±å¹•' : 'çŠ¶æ€æ³¢åŠ¨'
+        if (seen.indexOf(label) < 0 && seen.length < 3) {
+          seen.push(label)
+        }
+      }
+    }
+    if (seen.length === 0 && s.distractionDuration > 0) {
+      seen.push('è§†çº¿ç¦»å¼€å±å¹•')
+    }
+    return seen
+  }
+
+  // ===================== å†…éƒ¨å·¥å…· =====================
+
+  private static clamp(v: number, lo: number, hi: number): number {
+    return Math.max(lo, Math.min(hi, v))
+  }
+
+  private static mean(arr: number[]): number {
+    if (arr.length === 0) {
+      return 0
+    }
+    let sum = 0
+    for (const v of arr) {
+      sum += v
+    }
+    return sum / arr.length
+  }
+
+  private static stddev(arr: number[]): number {
+    if (arr.length === 0) {
+      return 0
+    }
+    const m = Metrics.mean(arr)
+    let acc = 0
+    for (const v of arr) {
+      acc += (v - m) * (v - m)
+    }
+    return Math.sqrt(acc / arr.length)
+  }
+
+  private static median(arr: number[]): number {
+    if (arr.length === 0) {
+      return 0
+    }
+    const a = arr.slice().sort((x: number, y: number): number => x - y)
+    const mid = Math.floor(a.length / 2)
+    return a.length % 2 === 0 ? (a[mid - 1] + a[mid]) / 2 : a[mid]
+  }
+
+  private static clock(totalMin: number): string {
+    const h = Math.floor(totalMin / 60) % 24
+    const m = totalMin % 60
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`
+  }
+
+  /** ç”±ä»»åŠ¡åˆ—è¡¨æ„å»º id â†’ é¢„è®¡æ—¶é•¿(åˆ†é’Ÿ) æ˜ å°„ï¼Œä¾› completionRate åŠ æƒä½¿ç”¨ */
+  static buildEstMap(tasks: Task[]): Map<string, number> {
+    const m = new Map<string, number>()
+    for (const t of tasks) {
+      m.set(t.id, t.estimatedDuration)
+    }
+    return m
+  }
+}
+ÀÔrD’²../utils/TimeUtils¯../models/EnumsÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÂÙ<D:\iKnow\iKnow-master\entry\src\main\ets\utils\TimeUtils.etsAÃªoh-resolveÂEAÂÙ9D:\iKnow\iKnow-master\entry\src\main\ets\models\Enums.etsAÃªoh-resolveÂ“ÔrF–§version¤fileªsourceRoot§sources¥names¨mappingsªMetrics.js ‘«Metrics.etsÜy˜”    ”  ”	  	”  ”  ”  ”,  ,”-  ,˜”   ” ”	 	” ” ” ”. .”/ .””  1 ” 1” 1” 1’” 5”: 58’” 7”) 7'–” 8”
+ 8” 8	” 8” 8” 8"–” 9” 9” 9” 9” 9” 9’” :” :’” <” <–” =”
+ =” =	” =” =” = –” >” >” >” >” >” >’” ?” ?’” ÌA” ÌA–” ÌB”
+ ÌB” ÌB	” ÌB” ÌB” ÌB!–” ÌC” ÌC” ÌC” ÌC” ÌC”  ÌC’” ÌD” ÌD’” ÌF”# ÌF!–” ÌG”
+ ÌG” ÌG	” ÌG” ÌG” ÌG&Ü ” ÌH” ÌH” ÌH” ÌH” ÌH” ÌH” ÌH” ÌH” ÌH” ÌH”* ÌH&”- ÌH)”. ÌH*”/ ÌH+”< ÌH8”? ÌH;”Ì@ ÌH<”ÌA ÌH=”ÌO ÌHÌK”ÌP ÌHÌL”ÌQ ÌHÌL’” ÌI” ÌI’” ÌK” ÌK–” ÌL”
+ ÌL” ÌL	” ÌL” ÌL” ÌL$–” ÌM” ÌM” ÌM” ÌM” ÌM” ÌM’” ÌN” ÌN’” ÌP”% ÌP#–” ÌQ”
+ ÌQ” ÌQ	” ÌQ” ÌQ” ÌQ'–” ÌR” ÌR” ÌR” ÌR”$ ÌR ”% ÌR ’” ÌS” ÌS’” ÌU”! ÌU–” ÌV”
+ ÌV” ÌV	” ÌV” ÌV” ÌV–” ÌW” ÌW” ÌW” ÌW” ÌW” ÌW’” ÌX” ÌX’” ÌZ”# ÌZ!–” Ì[”
+ Ì[” Ì[	” Ì[” Ì[” Ì[%›” Ì\” Ì\
+” Ì\” Ì\” Ì\” Ì\”' Ì\#”( Ì\$”) Ì\%”* Ì\&”+ Ì\&Ü ” Ì]” Ì]” Ì]” Ì]” Ì]” Ì]” Ì]” Ì]” Ì]” Ì]”& Ì]"”) Ì]%”* Ì]&”+ Ì]'”, Ì](”- Ì])”. Ì]*”/ Ì]*’” Ì^” Ì^’” Ì`” Ì`–” Ìa”
+ Ìa” Ìa	” Ìa” Ìa” Ìa)Ü ” Ìb” Ìb” Ìb” Ìb” Ìb” Ìb”! Ìb”" Ìb”. Ìb*”/ Ìb+”0 Ìb,”1 Ìb-”4 Ìb0”7 Ìb3”8 Ìb4”9 Ìb4’” Ìc” Ìc’” Ìe”! Ìe–” Ìf”
+ Ìf” Ìf	” Ìf” Ìf” Ìf(›” Ìg” Ìg
+” Ìg” Ìg” Ìg” Ìg”' Ìg#”( Ìg$”) Ìg%”* Ìg&”+ Ìg&Ü ” Ìh” Ìh” Ìh” Ìh” Ìh” Ìh” Ìh” Ìh” Ìh” Ìh”, Ìh(”/ Ìh+”0 Ìh,”1 Ìh-”2 Ìh.”3 Ìh/”4 Ìh0”5 Ìh0’” Ìi” Ìi‘” Ìk‘” Ìn˜” Ìo”
+ Ìo” Ìo	” Ìo” Ìo” Ìo'” Ìo)”# ÌoÌEš” Ìp” Ìp” Ìp	” Ìp
+” Ìp” Ìp” Ìp”! Ìp”" Ìp”$ Ìp ”” Ìq” Ìq” Ìq” Ìq‘”	 Ìr˜” Ìs” Ìs
+” Ìs” Ìs” Ìs” Ìs”' Ìs#”( Ìs#œ” Ìt” Ìt” Ìt” Ìt”  Ìt”$ Ìt ”* Ìt&”+ Ìt'”/ Ìt+”2 Ìt.”3 Ìt/”5 Ìt1–” Ìu” Ìu
+” Ìu” Ìu” Ìu” Ìu–” Ìv” Ìv
+” Ìv” Ìv” Ìv” Ìv™” Ìw” Ìw” Ìw” Ìw” Ìw” Ìw” Ìw”& Ìw ”( Ìw"›” Ìx” Ìx” Ìx” Ìx”  Ìx”! Ìx”$ Ìx”% Ìx”' Ìx”( Ìx ”) Ìx —” Ìy” Ìy” Ìy” Ìy” Ìy” Ìy”  Ìy›” Ìz” Ìz” Ìz” Ìz”  Ìz”! Ìz”# Ìz”$ Ìz”( Ìz ”) Ìz!”+ Ìz#—” Ì{
+” Ì{” Ì{” Ì{”! Ì{”" Ì{”# Ì{‘” Ì|	‘” Ì}Ü ” Ì~” Ì~” Ì~” Ì~” Ì~” Ì~” Ì~” Ì~”# Ì~”$ Ì~”) Ì~#”* Ì~$”+ Ì~%”/ Ì~)”2 Ì~,”7 Ì~1”8 Ì~2”; Ì~5”> Ì~8”? Ì~9”Ì@ Ì~:”ÌA Ì~;”ÌB Ì~<”ÌC Ì~=”ÌD Ì~=‘”	 ÌÜ ” Ì€” Ì€” Ì€” Ì€” Ì€” Ì€” Ì€” Ì€”  Ì€”& Ì€"”) Ì€%”* Ì€&”+ Ì€'”2 Ì€.”3 Ì€/”9 Ì€5”: Ì€6”= Ì€9”Ì@ Ì€<”ÌA Ì€=”ÌB Ì€=’” Ì” Ì’” Ìƒ”; Ìƒ9‘” Ì…‘” Ìˆ–” Ì‰”
+ Ì‰” Ì‰	” Ì‰” Ì‰”  Ì‰.™” ÌŠ” ÌŠ
+” ÌŠ” ÌŠ” ÌŠ” ÌŠ” ÌŠ” ÌŠ” ÌŠš” Ì‹” Ì‹
+” Ì‹” Ì‹” Ì‹” Ì‹” Ì‹”" Ì‹”& Ì‹"”' Ì‹"Ü ” ÌŒ” ÌŒ
+” ÌŒ” ÌŒ” ÌŒ”! ÌŒ”" ÌŒ&”$ ÌŒ(”% ÌŒ)”& ÌŒ*”* ÌŒ.”+ ÌŒ/”, ÌŒ0”- ÌŒ1”. ÌŒ1”/ ÌŒ2”< ÌŒ?–” Ì” Ì” Ì” Ì” Ì” Ì—” Ì” Ì	” Ì” Ì” Ì”  Ì”" ÌÜ ” Ì” Ì
+” Ì” Ì” Ì” Ì”! Ì”$ Ì”& Ì ”) Ì#”. Ì(”2 Ì,”3 Ì-”4 Ì.”= Ì7”Ì@ Ì:”ÌC Ì=”ÌE Ì?’” Ì” Ì‘” Ì‘œ” Ì’” Ì’” Ì’” Ì’” Ì’” Ì’” Ì’”  Ì’”! Ì’”* Ì’$”+ Ì’%”, Ì’%Ü ” Ì“” Ì“” Ì“” Ì“” Ì“” Ì“”" Ì“”# Ì“”$ Ì“”% Ì“”& Ì“ ”. Ì“(”0 Ì“*”3 Ì“-”5 Ì“/”8 Ì“2”9 Ì“3”: Ì“4”ÌD Ì“>”ÌF Ì“Ì@”ÌG Ì“ÌA”ÌJ Ì“ÌD”ÌM Ì“ÌG”ÌN Ì“ÌH”ÌO Ì“ÌHš” Ì”” Ì”
+” Ì”” Ì”” Ì”” Ì”” Ì””" Ì””$ Ì””& Ì” ” Ì•” Ì•” Ì•” Ì•” Ì•”  Ì•”' Ì•”( Ì• ”5 Ì•-”6 Ì•.”7 Ì•/”8 Ì•0”9 Ì•0•” Ì–” Ì–” Ì–” Ì–” Ì–‘” Ì—‘”	 Ì˜•” Ì™” Ì™” Ì™	” Ì™” Ì™”” Ìš” Ìš” Ìš” Ìš‘”	 Ì›–” Ìœ” Ìœ” Ìœ” Ìœ” Ìœ” Ìœ” Ì” Ì	” Ì” Ì” Ì” Ì” Ì” Ì” Ì” Ì”  Ì”! Ì”# Ì”% Ì!œ” Ì” Ì
+” Ì” Ì” Ì” Ì” Ì”$ Ì”% Ì”) Ì#”* Ì$”, Ì&•” ÌŸ” ÌŸ” ÌŸ” ÌŸ” ÌŸ‘” Ì ‘”	 Ì¡™” Ì¢” Ì¢” Ì¢” Ì¢” Ì¢” Ì¢” Ì¢” Ì¢”  Ì¢”” Ì£” Ì£” Ì£” Ì£‘”	 Ì¤˜” Ì¥” Ì¥
+” Ì¥” Ì¥” Ì¥”  Ì¥”# Ì¥”$ Ì¥˜” Ì¦” Ì¦
+” Ì¦” Ì¦” Ì¦”" Ì¦”% Ì¦!”& Ì¦!Ü ” Ì§” Ì§” Ì§” Ì§” Ì§” Ì§”  Ì§”( Ì§$”) Ì§%”/ Ì§+”6 Ì§2”7 Ì§3”< Ì§8”= Ì§9”ÌC Ì§?”ÌD Ì§Ì@”ÌF Ì§ÌB”ÌG Ì§ÌB’” Ì¨” Ì¨‘” Ìª‘” Ì­–” Ì®”
+ Ì®” Ì®	” Ì®” Ì®”' Ì®5–” Ì¯” Ì¯” Ì¯” Ì¯$” Ì¯(” Ì¯(—” Ì°” Ì°” Ì°” Ì°” Ì°” Ì°” Ì°—” Ì±” Ì±	” Ì±” Ì±” Ì±”  Ì±”" Ì±›” Ì²” Ì²” Ì²” Ì²” Ì²” Ì²”- Ì²'”. Ì²(”/ Ì²)”0 Ì²*”1 Ì²*–” Ì³” Ì³
+” Ì³” Ì³” Ì³” Ì³•” Ì´” Ì´” Ì´” Ì´” Ì´•” Ìµ” Ìµ” Ìµ” Ìµ” Ìµ‘” Ì¶‘”	 Ì·–” Ì¸” Ì¸” Ì¸” Ì¸” Ì¸” Ì¸œ” Ì¹” Ì¹” Ì¹” Ì¹” Ì¹”  Ì¹”" Ì¹”& Ì¹ ”( Ì¹"”) Ì¹#”+ Ì¹%”, Ì¹%‘”	 Ìº” Ì»” Ì»” Ì»” Ì»” Ì»” Ì»” Ì»”$ Ì» ”& Ì»"”* Ì»&”, Ì»(”4 Ì»0”6 Ì»2”7 Ì»2’” Ì¼” Ì¼‘” Ì¾‘” ÌÁ–” ÌÂ”
+ ÌÂ” ÌÂ	” ÌÂ” ÌÂ”" ÌÂ0–” ÌÃ” ÌÃ
+” ÌÃ” ÌÃ” ÌÃ” ÌÃ—” ÌÄ” ÌÄ	” ÌÄ” ÌÄ” ÌÄ”  ÌÄ”" ÌÄ–” ÌÅ” ÌÅ
+” ÌÅ” ÌÅ” ÌÅ” ÌÅ–” ÌÆ” ÌÆ
+” ÌÆ” ÌÆ” ÌÆ” ÌÆ™” ÌÇ” ÌÇ” ÌÇ” ÌÇ” ÌÇ” ÌÇ” ÌÇ”& ÌÇ ”( ÌÇ"š” ÌÈ” ÌÈ” ÌÈ” ÌÈ” ÌÈ”  ÌÈ”* ÌÈ"”+ ÌÈ#”2 ÌÈ*”4 ÌÈ,•” ÌÉ
+” ÌÉ” ÌÉ” ÌÉ” ÌÉ‘” ÌÊ	‘” ÌÊœ” ÌË
+” ÌË” ÌË” ÌË”  ÌË”# ÌË”$ ÌË”( ÌË”* ÌË ”- ÌË#”. ÌË$”/ ÌË$•” ÌÌ
+” ÌÌ” ÌÌ” ÌÌ” ÌÌ‘” ÌÍ	‘” ÌÎœ” ÌÏ” ÌÏ
+” ÌÏ” ÌÏ” ÌÏ” ÌÏ” ÌÏ”  ÌÏ”" ÌÏ”% ÌÏ”& ÌÏ ”' ÌÏ œ” ÌĞ” ÌĞ
+” ÌĞ” ÌĞ” ÌĞ” ÌĞ” ÌĞ”  ÌĞ”! ÌĞ”" ÌĞ”# ÌĞ”6 ÌĞ/‘”	 ÌÑ” ÌÒ” ÌÒ
+” ÌÒ” ÌÒ” ÌÒ” ÌÒ” ÌÒ”  ÌÒ”! ÌÒ”( ÌÒ$”) ÌÒ%”4 ÌÒ0”5 ÌÒ1”6 ÌÒ1š” ÌÓ” ÌÓ” ÌÓ” ÌÓ” ÌÓ” ÌÓ”! ÌÓ”" ÌÓ”- ÌÓ)”/ ÌÓ+”” ÌÔ” ÌÔ” ÌÔ” ÌÔ‘”	 ÌÕ” ÌÖ” ÌÖ” ÌÖ” ÌÖ” ÌÖ” ÌÖ”! ÌÖ”" ÌÖ”( ÌÖ$”) ÌÖ%”- ÌÖ)”. ÌÖ*”/ ÌÖ+”0 ÌÖ+’” Ì×” Ì×’” ÌÙ”: ÌÙ8‘” ÌÛ‘” Ìã–” Ìä”
+ Ìä” Ìä	” Ìä” Ìä” Ìä)Ü ” Ìå” Ìå
+” Ìå” Ìå”! Ìå”" Ìå”( Ìå$”) Ìå%”* Ìå&”+ Ìå5”- ÌåÌ@”/ ÌåÌB”0 ÌåÌC”7 ÌåÌJ”8 ÌåÌK”ÌE ÌåÌX”ÌF ÌåÌY”ÌG ÌåÌZ”ÌH ÌåÌ[”ÌK ÌåÌ^”ÌL ÌåÌ_”ÌM ÌåÌ`”ÌN ÌåÌ`˜” Ìæ” Ìæ” Ìæ” Ìæ” Ìæ”  Ìæ”! Ìæ”# ÌæÜ ” Ìç” Ìç” Ìç” Ìç”! Ìç”" Ìç”$ Ìç”1 Ìç+”3 Ìç-”4 Ìç.”6 Ìç0”? Ìç9”ÌA Ìç;”ÌB Ìç<”ÌD Ìç>”ÌM ÌçÌG”ÌO ÌçÌI”ÌP ÌçÌJ”ÌR ÌçÌL”Ìa ÌçÌ[”Ìc ÌçÌ]”Ìd ÌçÌ^”Ìf ÌçÌ`”Ìg ÌçÌ`‘”	 ÌèÜ ” Ìé” Ìé
+” Ìé” Ìé” Ìé$” Ìé%”" Ìé(”# Ìé)”$ Ìé*”% Ìé9”' ÌéÌC”) ÌéÌE”* ÌéÌF”1 ÌéÌM”2 ÌéÌN”> ÌéÌZ”? ÌéÌ[”Ì@ ÌéÌ\”ÌA ÌéÌ]”ÌD ÌéÌ`”ÌG ÌéÌc”ÌH ÌéÌd”ÌI ÌéÌdÜ ” Ìê” Ìê
+” Ìê” Ìê” Ìê$” Ìê%”" Ìê(”# Ìê)”$ Ìê*”% Ìê9”' ÌêÌC”) ÌêÌE”* ÌêÌF”1 ÌêÌM”2 ÌêÌN”Ì@ ÌêÌ\”ÌA ÌêÌ]”ÌB ÌêÌ^”ÌC ÌêÌ_”ÌD ÌêÌ`”ÌE ÌêÌ`Ü ” Ìë” Ìë
+” Ìë” Ìë” Ìë%”  Ìë&”# Ìë)”$ Ìë*”% Ìë+”& Ìë:”( ÌëÌD”* ÌëÌF”+ ÌëÌG”2 ÌëÌN”3 ÌëÌO”ÌB ÌëÌ^”ÌC ÌëÌ_”ÌD ÌëÌ`”ÌE ÌëÌa”ÌF ÌëÌb”ÌG ÌëÌb›” Ìì” Ìì
+” Ìì” Ìì” Ìì”  Ìì”$ Ìì ”% Ìì!”* Ìì&”+ Ìì'”, Ìì'›” Ìí” Ìí
+” Ìí” Ìí” Ìí”  Ìí”$ Ìí ”% Ìí!”* Ìí&”+ Ìí'”, Ìí'›” Ìî” Ìî
+” Ìî” Ìî”  Ìî”! Ìî”% Ìî!”& Ìî"”, Ìî(”- Ìî)”. Ìî)” Ìï” Ìï
+” Ìï” Ìï” Ìï” Ìï”$ Ìï ”% Ìï!”* Ìï&”+ Ìï'”. Ìï*”1 Ìï-”2 Ìï-Ü ” Ìñ” Ìñ
+” Ìñ” Ìñ” Ìñ”  Ìñ”% Ìñ!”& Ìñ"”) Ìñ%”, Ìñ(”3 Ìñ/”6 Ìñ2”9 Ìñ5”< Ìñ8”ÌC Ìñ?”ÌD ÌñÌ@”ÌE ÌñÌ@›” Ìò” Ìò
+” Ìò” Ìò”" Ìò”# Ìò”( Ìò$”) Ìò%”0 Ìò,”1 Ìò-”2 Ìò-Ü &” Ìó” Ìó
+” Ìó” Ìó” Ìó”" Ìó”% Ìó!”& Ìó"”' Ìó#”( Ìó$”) Ìó%”* Ìó&”+ Ìó'”, Ìó(”0 Ìó,”1 Ìó-”6 Ìó2”7 Ìó3”: Ìó6”= Ìó9”> Ìó:”? Ìó;”ÌB Ìó>”ÌI ÌóÌE”ÌJ ÌóÌF”ÌO ÌóÌK”ÌP ÌóÌL”ÌU ÌóÌQ”ÌX ÌóÌT”Ì[ ÌóÌW”Ì] ÌóÌY”Ì^ ÌóÌZ”Ì` ÌóÌ\”Ìa ÌóÌ]”Ìb ÌóÌ^”Ìc ÌóÌ_”Ìd ÌóÌ`”Ìe ÌóÌ`›” Ìô” Ìô
+” Ìô” Ìô” Ìô” Ìô”$ Ìô ”% Ìô!”, Ìô(”- Ìô)”. Ìô)Ü ” Ìõ” Ìõ
+” Ìõ”  Ìõ”$ Ìõ ”% Ìõ!”* Ìõ&”+ Ìõ'”. Ìõ*”1 Ìõ-”2 Ìõ.”3 Ìõ/”6 Ìõ2”= Ìõ9”> Ìõ:”ÌC Ìõ?”ÌD ÌõÌ@”ÌL ÌõÌH”ÌN ÌõÌJ”ÌO ÌõÌK”ÌQ ÌõÌM”ÌR ÌõÌN”ÌS ÌõÌO”ÌT ÌõÌP”ÌU ÌõÌQ”ÌV ÌõÌQ” Ìö” Ìö” Ìö” Ìö” Ìö”* Ìö&”, Ìö(”5 Ìö1”7 Ìö3”Ì@ Ìö<”ÌB Ìö>”ÌQ ÌöÌM”ÌS ÌöÌO”ÌT ÌöÌO’” Ì÷” Ì÷’” Ìù” Ìù–” Ìú”
+ Ìú” Ìú	” Ìú” Ìú”% Ìú+˜” Ìû” Ìû” Ìû” Ìû”% Ìû!”& Ìû"”1 Ìû-”2 Ìû-’” Ìü” Ìü’” Ìş”ÌK ÌşÌI’” Í ”4 Í 2š” Í”
+ Í” Í	” Í” Í”% Í3”' Í5”, ÍÌB”. ÍÌD”1 ÍÌOš” Í” Í
+” Í” Í” Í” Í” Í”" Í”& Í"”' Í"š” Í” Í
+” Í” Í” Í” Í” Í”" Í”' Í#”( Í#–” Í” Í” Í” Í” Í” Í–” Í” Í” Í” Í” Í” Í–” Í” Í
+” Í” Í#” Í%”  Í%–” Í” Í
+” Í” Í” Í” Í” Í	” Í		” Í	” Í	” Í	” Í	” Í	” Í	” Í	” Í	”! Í	”" Í	”$ Í	 ”& Í	"Ÿ” Í
+” Í
+” Í
+” Í
+”& Í
+ ”' Í
+!”/ Í
+)”0 Í
+*”3 Í
+-”4 Í
+.”7 Í
+1”8 Í
+2”; Í
+5”Ì@ Í
+:”ÌA Í
+:˜” Í” Í” Í” Í”# Í”& Í ”+ Í%”, Í%–” Í” Í
+” Í” Í” Í” Í—” Í” Í” Í” Í” Í”$ Í”& Í ” Í” Í” Í” Í” Í”# Í”+ Í#”/ Í'”0 Í(”1 Í)”: Í2”= Í5”ÌC Í;”ÌE Í=—” Í
+” Í” Í” Í” Í”* Í ”+ Í ‘” Í	‘” ÍŸ” Í” Í” Í” Í” Í” Í” Í”! Í”" Í”% Í”( Í"”* Í$”+ Í%”, Í&”- Í&‘”	 Í—” Í” Í	” Í” Í” Í”  Í”" Í˜” Í” Í
+” Í” Í” Í” Í”% Í”' Í!—” Í” Í” Í”  Í”! Í”. Í&”/ Í&š” Í” Í”! Í”( Í ”) Í!”6 Í.”7 Í/”8 Í0”9 Í1”: Í1™” Í” Í” Í” Í”! Í”" Í”# Í”3 Í+”5 Í-›” Í
+” Í”$ Í”% Í”, Í"”- Í#”/ Í%”0 Í&”3 Í)”4 Í*”6 Í,˜” Í”$ Í”% Í”) Í”* Í”, Í ”- Í!”. Í!‘” Í‘” Í	‘” Í‘”	 ÍÜ ” Í!” Í!
+” Í!” Í!”' Í!#”* Í!&”+ Í!'”, Í!(”- Í!)”. Í!*”2 Í!.”3 Í!/”8 Í!4”9 Í!5”ÌD Í!Ì@”ÌG Í!ÌC”ÌT Í!ÌP”ÌW Í!ÌS”ÌZ Í!ÌV”Ì[ Í!ÌW”Ì\ Í!ÌX”Ì] Í!ÌY”Ì^ Í!ÌZ”Ì_ Í!Ì[”Ì` Í!Ì[Ü ” Í"” Í"” Í"” Í"” Í"”! Í"”" Í"”' Í"#”( Í"$”3 Í"/”6 Í"2”: Í"6”; Í"7”= Í"9”ÌK Í"ÌG”ÌM Í"ÌI”ÌY Í"ÌU”ÌZ Í"ÌV”Ì` Í"Ì\”Ìb Í"Ì^”Ìk Í"Ìg”Ìm Í"Ìi”Ìv Í"Ìr”Ìx Í"Ìt”Ì} Í"Ìy”Ì Í"Ì{”Ì„ Í"Ì€”Ì† Í"Ì‚”Ì‡ Í"Ì‚’” Í#” Í#’” Í%”& Í%$˜” Í&”
+ Í&” Í&	” Í&” Í&”# Í&1”% Í&3”* Í&Ì@˜” Í'” Í'
+” Í'” Í'” Í'” Í'”! Í'+”" Í'+—” Í(” Í(	” Í(” Í(” Í(” Í(” Í(œ” Í)” Í)” Í)” Í)” Í)” Í)” Í)” Í)” Í)” Í)”  Í)”! Í)‘”	 Í*˜” Í+” Í+
+” Í+” Í+” Í+” Í+”  Í+9”! Í+9—” Í,” Í,	” Í,” Í,” Í,”  Í,”" Í,™” Í-” Í-” Í-” Í-” Í-” Í-” Í-”/ Í-)”1 Í-+›” Í.” Í.” Í.” Í.”! Í.”" Í.”% Í.”& Í.”( Í. ”) Í.!”* Í.!–” Í/” Í/” Í/” Í/”# Í/”% Í/” Í0
+” Í0” Í0” Í0”" Í0”# Í0”& Í0”' Í0”( Í0”) Í0”0 Í0&”1 Í0'”2 Í0'–” Í1
+” Í1” Í1” Í1”' Í1”) Í1Ü ” Í2” Í2” Í2” Í2”% Í2”' Í2”( Í2”) Í2”0 Í2$”2 Í2&”9 Í2-”; Í2/”< Í20”= Í21”ÌB Í26”ÌD Í28”ÌI Í2=”ÌK Í2?”ÌL Í2Ì@”ÌN Í2ÌB”ÌO Í2ÌBœ” Í3” Í3” Í3”" Í3”# Í3”$ Í3”% Í3”, Í3 ”. Í3"”/ Í3#”0 Í3$”1 Í3$‘” Í4–” Í5
+” Í5” Í5” Í5” Í5” Í5‘” Í6	‘” Í7‘”	 Í8–” Í9” Í9
+” Í9” Í9*” Í9,” Í9,›” Í:” Í:
+” Í:” Í:” Í:” Í:” Í:.” Í:0”" Í:;”$ Í:=”& Í:?˜” Í;” Í;” Í;” Í;” Í;” Í;” Í;” Í;”” Í<”	 Í<”
+ Í<” Í<Ü ” Í=” Í=
+” Í=” Í=” Í=” Í=” Í='” Í=)” Í=?” Í=ÌI” Í=ÌK” Í=ÌL” Í=ÌM”  Í=ÌN”% Í=ÌS”( Í=ÌV”) Í=ÌW”* Í=ÌX”/ Í=Ì]”0 Í=Ì^”1 Í=Ì^›” Í>” Í>” Í>” Í>” Í>” Í>” Í>” Í>”  Í>”! Í>”" Í>’” Í?” Í?’” ÍA”! ÍA–” ÍB”
+ ÍB” ÍB	” ÍB” ÍB”! ÍB/›” ÍC” ÍC
+” ÍC” ÍC”" ÍC”# ÍC”/ ÍC+”0 ÍC,”8 ÍC4”9 ÍC5”: ÍC5–” ÍD” ÍD” ÍD” ÍD” ÍD” ÍD˜” ÍE” ÍE” ÍE” ÍE” ÍE”  ÍE”! ÍE”# ÍE–” ÍF” ÍF
+” ÍF” ÍF” ÍF” ÍF–” ÍG” ÍG
+” ÍG” ÍG” ÍG” ÍG—” ÍH” ÍH” ÍH” ÍH” ÍH”$ ÍH”& ÍH ›” ÍI” ÍI” ÍI” ÍI”) ÍI!”* ÍI"”+ ÍI#”, ÍI$”/ ÍI'”0 ÍI(”2 ÍI*œ” ÍJ
+” ÍJ” ÍJ”" ÍJ”# ÍJ”/ ÍJ%”0 ÍJ&”1 ÍJ'”2 ÍJ(”5 ÍJ+”8 ÍJ.”9 ÍJ.”” ÍK
+” ÍK” ÍK” ÍK‘” ÍL	‘” ÍMÜ ” ÍN” ÍN” ÍN” ÍN” ÍN”  ÍN”! ÍN”" ÍN”# ÍN”' ÍN!”( ÍN"”- ÍN'”. ÍN(”1 ÍN+”4 ÍN.”9 ÍN3”: ÍN4”; ÍN5”< ÍN6”= ÍN7”> ÍN8”? ÍN8‘”	 ÍO’” ÍP” ÍPÜ ” ÍQ” ÍQ” ÍQ”" ÍQ”# ÍQ”) ÍQ#”, ÍQ&”- ÍQ'”. ÍQ(”/ ÍQ)”0 ÍQ*”: ÍQ4”; ÍQ5”< ÍQ6”= ÍQ7”ÌL ÍQÌF”” ÍR” ÍR” ÍR” ÍR”” ÍS” ÍS” ÍS”! ÍS”” ÍT” ÍT” ÍT” ÍT”” ÍU” ÍU” ÍU”. ÍU(’”	 ÍV”
+ ÍV’” ÍW” ÍW’” ÍY”ÌI ÍYÌG’” Í[”- Í[+–” Í\”
+ Í\” Í\	” Í\” Í\” Í\(˜” Í]” Í]
+” Í]” Í]” Í]” Í]” Í]” Í]˜” Í^” Í^” Í^
+” Í^” Í^” Í^” Í^” Í^”” Í_” Í_” Í_” Í_‘”	 Í`–” Ía” Ía” Ía” Ía” Ía” Ía–” Íb” Íb” Íb” Íb” Íb” Íb–” Íc” Íc” Íc” Íc” Íc” Íc–” Íd” Íd” Íd” Íd” Íd” ÍdÜ ” Íe” Íe	” Íe” Íe” Íe” Íe” Íe” Íe” Íe” Íe” Íe”% Íe!”' Íe#”( Íe$”* Íe&”, Íe(™” Íf” Íf” Íf” Íf” Íf” Íf” Íf” Íf” Íf˜” Íg” Íg
+” Íg” Íg” Íg” Íg” Íg” Íg–” Íh” Íh” Íh” Íh”  Íh”" Íh—” Íi
+” Íi” Íi”  Íi”! Íi”' Íi”( Íi‘” Íj	”” Ík” Ík” Ík” Ík–” Íl” Íl” Íl” Íl”$ Íl”& Íl•” Ím
+” Ím” Ím”$ Ím”% Ím•” Ín
+” Ín”  Ín”( Ín”) Ín‘” Ío	‘” Íp‘” Íp•” Íq” Íq” Íq” Íq” Íq‘” Ír‘”	 Ís–” Ít” Ít” Ít” Ít” Ít” Ít”” Íu” Íu” Íu” Íu‘”	 Ív›” Íw” Íw
+” Íw” Íw”" Íw”# Íw”( Íw$”) Íw%”2 Íw.”3 Íw/”4 Íw/” Íx” Íx
+” Íx” Íx”  Íx”! Íx”& Íx"”' Íx#”0 Íx,”3 Íx/”: Íx6”; Íx7”< Íx7˜” Íy” Íy” Íy” Íy”" Íy”* Íy&”, Íy(”- Íy(’” Íz” Íz’” Í|” Í|–” Í}”
+ Í}” Í}	” Í}” Í}” Í}&™” Í~” Í~	” Í~” Í~” Í~” Í~” Í~”" Í~”$ Í~ Ü ” Í” Í
+” Í” Í” Í” Í”& Í ”' Í!”1 Í+”5 Í/”6 Í0”7 Í1”< Í6”? Í9”ÌA Í;”ÌC Í=–” Í€” Í€” Í€” Í€” Í€”  Í€‘” Í‘”	 Í‚”” Íƒ” Íƒ” Íƒ” Íƒ’” Í„” Í„’” Í†” Í†–” Í‡”
+ Í‡” Í‡	” Í‡” Í‡”  Í‡,–” Íˆ” Íˆ
+” Íˆ” Íˆ” Íˆ” Íˆ™” Í‰” Í‰	” Í‰” Í‰” Í‰” Í‰” Í‰”  Í‰”" Í‰Ü ” ÍŠ” ÍŠ
+” ÍŠ” ÍŠ” ÍŠ” ÍŠ”& ÍŠ ”' ÍŠ!”: ÍŠ4”> ÍŠ8”? ÍŠ9”Ì@ ÍŠ:”ÌE ÍŠ?”ÌJ ÍŠÌD”ÌT ÍŠÌN”ÌU ÍŠÌO”Ì_ ÍŠÌY”Ìa ÍŠÌ[Ü ” Í‹” Í‹” Í‹” Í‹” Í‹”  Í‹”& Í‹”+ Í‹#”3 Í‹+”4 Í‹,”5 Í‹-”6 Í‹.”> Í‹6”? Í‹7”Ì@ Í‹8”ÌA Í‹9”ÌG Í‹?”ÌH Í‹?Ü ” ÍŒ” ÍŒ” ÍŒ” ÍŒ”  ÍŒ”! ÍŒ”& ÍŒ”' ÍŒ”* ÍŒ"”+ ÍŒ#”/ ÍŒ'”3 ÍŒ+”4 ÍŒ,”: ÍŒ2”= ÍŒ5”> ÍŒ6”Ì@ ÍŒ8˜” Í
+” Í” Í” Í” Í”# Í”$ Í”% Í‘” Í	‘” Í‘”	 Í” Í‘” Í‘” Í‘” Í‘” Í‘” Í‘” Í‘”! Í‘”" Í‘”# Í‘”6 Í‘2”9 Í‘5”: Í‘6”< Í‘8˜” Í’” Í’
+” Í’” Í’” Í’” Í’” Í’”  Í’‘”	 Í“”” Í”” Í”” Í”” Í”’” Í•” Í•’” Í—”7 Í—5š” Í™
+”
+ Í™” Í™” Í™” Í™” Í™ ” Í™"” Í™,” Í™.” Í™8Ü ” Íš” Íš” Íš” Íš” Íš” Íš” Íš” Íš”  Íš”! Íš”$ Íš ”% Íš!”' Íš#”) Íš%”* Íš&”+ Íš'”, Íš(”- Íš(’” Í›” Í›–” Í
+”
+ Í” Í” Í” Í” Í#˜” Í” Í” Í” Í” Í” Í” Í” Í”” ÍŸ” ÍŸ” ÍŸ” ÍŸ‘”	 Í –” Í¡” Í¡” Í¡” Í¡” Í¡” Í¡—” Í¢” Í¢	” Í¢” Í¢” Í¢” Í¢” Í¢•” Í£” Í£	” Í£” Í£” Í£‘”	 Í¤˜” Í¥” Í¥” Í¥” Í¥” Í¥” Í¥” Í¥”  Í¥’” Í¦” Í¦–” Í¨
+”
+ Í¨” Í¨” Í¨” Í¨” Í¨%˜” Í©” Í©” Í©” Í©” Í©” Í©” Í©” Í©”” Íª” Íª” Íª” Íª‘”	 Í«›” Í¬” Í¬
+” Í¬” Í¬” Í¬” Í¬” Í¬” Í¬”" Í¬”# Í¬”$ Í¬–” Í­” Í­” Í­” Í­” Í­” Í­—” Í®” Í®	” Í®” Í®” Í®” Í®” Í®Ÿ” Í¯” Í¯	” Í¯” Í¯” Í¯” Í¯” Í¯” Í¯” Í¯” Í¯” Í¯”" Í¯”# Í¯”$ Í¯”% Í¯‘”	 Í°” Í±” Í±” Í±” Í±” Í±” Í±” Í±” Í±”" Í±”# Í±”) Í±%”* Í±&”+ Í±&’” Í²” Í²–” Í´
+”
+ Í´” Í´” Í´” Í´” Í´%˜” Íµ” Íµ” Íµ” Íµ” Íµ” Íµ” Íµ” Íµ”” Í¶” Í¶” Í¶” Í¶‘”	 Í·Ü ” Í¸” Í¸
+” Í¸” Í¸” Í¸” Í¸” Í¸” Í¸” Í¸”" Í¸”# Í¸”$ Í¸ ”% Í¸)”' Í¸+”( Í¸4”* Í¸>”, Í¸Ì@”- Í¸ÌA”. Í¸ÌB”1 Í¸ÌE”2 Í¸ÌF”3 Í¸ÌG”4 Í¸ÌGŸ” Í¹” Í¹
+” Í¹” Í¹” Í¹” Í¹” Í¹” Í¹”  Í¹”! Í¹”' Í¹#”* Í¹&”+ Í¹'”, Í¹(”- Í¹(Ü #” Íº” Íº” Íº” Íº” Íº” Íº” Íº”  Íº”! Íº”" Íº”# Íº”$ Íº ”% Íº!”& Íº"”' Íº#”* Íº&”- Íº)”. Íº*”/ Íº+”2 Íº.”3 Íº/”4 Íº0”7 Íº3”8 Íº4”9 Íº5”< Íº8”= Íº9”> Íº:”? Íº;”Ì@ Íº<”ÌA Íº=”ÌB Íº>”ÌE ÍºÌA”ÌF ÍºÌB”ÌG ÍºÌB’” Í»” Í»–” Í½
+”
+ Í½” Í½” Í½” Í½” Í½'Ÿ” Í¾” Í¾
+” Í¾” Í¾” Í¾” Í¾” Í¾” Í¾”% Í¾!”( Í¾$”* Í¾&”+ Í¾'”. Í¾*”0 Í¾,”1 Í¾,˜” Í¿” Í¿
+” Í¿” Í¿” Í¿” Í¿” Í¿”  Í¿Ü ” ÍÀ” ÍÀ” ÍÀ” ÍÀ” ÍÀ” ÍÀ” ÍÀ” ÍÀ”' ÍÀ#”( ÍÀ$”) ÍÀ%”+ ÍÀ'”. ÍÀ*”/ ÍÀ+”3 ÍÀ/”4 ÍÀ0”5 ÍÀ1”= ÍÀ9”? ÍÀ;”Ì@ ÍÀ<”ÌH ÍÀÌD”ÌI ÍÀÌE”ÌJ ÍÀÌF”ÌL ÍÀÌH”ÌO ÍÀÌK”ÌP ÍÀÌL”ÌR ÍÀÌN”ÌS ÍÀÌN’” ÍÁ” ÍÁ’” ÍÃ”9 ÍÃ7–” ÍÄ”
+ ÍÄ” ÍÄ	” ÍÄ” ÍÄ” ÍÄ"˜” ÍÅ” ÍÅ
+” ÍÅ” ÍÅ” ÍÅ” ÍÅ” ÍÅ'” ÍÅ'—” ÍÆ” ÍÆ	” ÍÆ” ÍÆ” ÍÆ” ÍÆ” ÍÆ” ÍÇ” ÍÇ” ÍÇ” ÍÇ” ÍÇ” ÍÇ” ÍÇ” ÍÇ” ÍÇ” ÍÇ” ÍÇ”+ ÍÇ%”, ÍÇ&”- ÍÇ&‘”	 ÍÈ”” ÍÉ” ÍÉ” ÍÉ” ÍÉ’” ÍÊ” ÍÊ’”  2”6 28•”  3” 3” 3 ” 3!” 3!ÔrG–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜz‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
+ ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ‘”  ÌÎ ‘”  ÌÏ ‘”  ÌĞ ‘”  ÌÑ ‘”  ÌÒ ‘”  ÌÓ ‘”  ÌÔ ‘”  ÌÕ ‘”  ÌÖ ‘”  Ì× ‘”  ÌØ ‘”  ÌÙ ‘”  ÌÚ ‘”  ÌÛ ‘”  ÌÜ ‘”  Ìİ ‘”  ÌŞ ‘”  Ìß ‘”  Ìà ‘”  Ìá ‘”  Ìâ ‘”  Ìã ‘”  Ìä ‘”  Ìå ‘”  Ìæ ‘”  Ìç ‘”  Ìè ‘”  Ìé ‘”  Ìê ‘”  Ìë ‘”  Ìì ‘”  Ìí ‘”  Ìî ‘”  Ìï ‘”  Ìğ ‘”  Ìñ ‘”  Ìò ‘”  Ìó ‘”  Ìô ‘”  Ìõ ‘”  Ìö ‘”  Ì÷ ‘”  Ìø ‘”  Ìù ‘”  Ìú ‘”  Ìû ‘”  Ìü ‘”  Ìı ‘”  Ìş ‘”  Ìÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í	 ‘”  Í
+ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í  ‘”  Í! ‘”  Í" ‘”  Í# ‘”  Í$ ‘”  Í% ‘”  Í& ‘”  Í' ‘”  Í( ‘”  Í) ‘”  Í* ‘”  Í+ ‘”  Í, ‘”  Í- ‘”  Í. ‘”  Í/ ‘”  Í0 ‘”  Í1 ‘”  Í2 ‘”  Í3 ‘”  Í4 ‘”  Í5 ‘”  Í6 ‘”  Í7 ‘”  Í8 ‘”  Í9 ‘”  Í: ‘”  Í; ‘”  Í< ‘”  Í= ‘”  Í> ‘”  Í? ‘”  Í@ ‘”  ÍA ‘”  ÍB ‘”  ÍC ‘”  ÍD ‘”  ÍE ‘”  ÍF ‘”  ÍG ‘”  ÍH ‘”  ÍI ‘”  ÍJ ‘”  ÍK ‘”  ÍL ‘”  ÍM ‘”  ÍN ‘”  ÍO ‘”  ÍP ‘”  ÍQ ‘”  ÍR ‘”  ÍS ‘”  ÍT ‘”  ÍU ‘”  ÍV ‘”  ÍW ‘”  ÍX ‘”  ÍY ‘”  ÍZ ‘”  Í[ ‘”  Í\ ‘”  Í] ‘”  Í^ ‘”  Í_ ‘”  Í` ‘”  Ía ‘”  Íb ‘”  Íc ‘”  Íd ‘”  Íe ‘”  Íf ‘”  Íg ‘”  Íh ‘”  Íi ‘”  Íj ‘”  Ík ‘”  Íl ‘”  Ím ‘”  Ín ‘”  Ío ‘”  Íp ‘”  Íq ‘”  Ír ‘”  Ís ‘”  Ít ‘”  Íu ‘”  Ív ‘”  Íw ‘”  Íx ‘”  Íy ÔrH’§missing¦pluginÃ¦genAbcÂÔ  ÔrI”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache‘ÔrJ–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÌ`Í2ÕÔrK–¤type¥start£end¢idªsuperClass¤body°ClassDeclarationÌgÍ2ÕÔrL”¤type¥start£end¤nameªIdentifierÌmÌt§MetricsÀÔrM”¤type¥start£end¤body©ClassBodyÌuÍ2ÕÜ ÔrN˜¤type¥start£end¦static¨computed£key¤kind¥value°MethodDefinitionÌãÍ ÃÂLªIdentifierÌêÌó©wallClock¦methodÔrO™¤type¥start£end¢idªexpression©generator¥async¦params¤body²FunctionExpressionÌóÍ ÀÂÂÂ‘LªIdentifierÌôÌõ¡sM®BlockStatementÌ÷Í ‘ÔrP”¤type¥start£end¨argument¯ReturnStatementÍÍÔrQ—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍ	ÍLªIdentifierÍ	Í
+¡sLªIdentifierÍÍ­totalDurationÂÂN°MethodDefinitionÍBÍ}ÃÂLªIdentifierÍIÍP§restSec¦methodO²FunctionExpressionÍPÍ}ÀÂÂÂ‘LªIdentifierÍQÍR¡sM®BlockStatementÍTÍ}‘P¯ReturnStatementÍ_ÍvQ°MemberExpressionÍfÍuLªIdentifierÍfÍg¡sLªIdentifierÍhÍu­breakDurationÂÂN°MethodDefinitionÍŸÍÜÃÂLªIdentifierÍ¦Í®¨pauseSec¦methodO²FunctionExpressionÍ®ÍÜÀÂÂÂ‘LªIdentifierÍ¯Í°¡sM®BlockStatementÍ²ÍÜ‘P¯ReturnStatementÍ½ÍÕQ°MemberExpressionÍÄÍÔLªIdentifierÍÄÍÅ¡sLªIdentifierÍÆÍÔ®pausedDurationÂÂN°MethodDefinitionÍÍzÃÂLªIdentifierÍÍ­totalStudySec¦methodO²FunctionExpressionÍÍzÀÂÂÂ‘LªIdentifierÍÍ¡sM®BlockStatementÍÍz‘P¯ReturnStatementÍ*ÍsÔrR–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍ1ÍrQ°MemberExpressionÍ1Í9LªIdentifierÍ1Í5¤MathLªIdentifierÍ6Í9£maxÂÂ’ÔrS•¤type¥start£end¥value£raw§LiteralÍ:Í; ¡0ÔrT–¤type¥start£end¤left¨operator¥right°BinaryExpressionÍ=ÍqT°BinaryExpressionÍ=Í^Q°MemberExpressionÍ=ÍLLªIdentifierÍ=Í>¡sLªIdentifierÍ?ÍL­totalDurationÂÂ¡-Q°MemberExpressionÍOÍ^LªIdentifierÍOÍP¡sLªIdentifierÍQÍ^­breakDurationÂÂ¡-Q°MemberExpressionÍaÍqLªIdentifierÍaÍb¡sLªIdentifierÍcÍq®pausedDurationÂÂÂN°MethodDefinitionÍ¡ÍàÃÂLªIdentifierÍ¨Í³«netFocusSec¦methodO²FunctionExpressionÍ³ÍàÀÂÂÂ‘LªIdentifierÍ´Íµ¡sM®BlockStatementÍ·Íà‘P¯ReturnStatementÍÂÍÙQ°MemberExpressionÍÉÍØLªIdentifierÍÉÍÊ¡sLªIdentifierÍËÍØ­focusDurationÂÂN°MethodDefinitionÍÍUÃÂLªIdentifierÍÍ"®distractionSec¦methodO²FunctionExpressionÍ"ÍUÀÂÂÂ‘LªIdentifierÍ#Í$¡sM®BlockStatementÍ&ÍU‘P¯ReturnStatementÍ1ÍNQ°MemberExpressionÍ8ÍMLªIdentifierÍ8Í9¡sLªIdentifierÍ:ÍM³distractionDurationÂÂN°MethodDefinitionÍ~Í´ÃÂLªIdentifierÍ…ÍŠ¥qaSec¦methodO²FunctionExpressionÍŠÍ´ÀÂÂÂ‘LªIdentifierÍ‹ÍŒ¡sM®BlockStatementÍÍ´‘P¯ReturnStatementÍ™Í­Q°MemberExpressionÍ Í¬LªIdentifierÍ Í¡¡sLªIdentifierÍ¢Í¬ªqaDurationÂÂN°MethodDefinitionÍßÍ\ÃÂLªIdentifierÍæÍò¬netFocusRate¦methodO²FunctionExpressionÍòÍ\ÀÂÂÂ‘LªIdentifierÍóÍô¡sM®BlockStatementÍöÍ\’ÔrU•¤type¥start£end¬declarations¤kind³VariableDeclarationÍÍ$‘ÔrV•¤type¥start£end¢id¤init²VariableDeclaratorÍÍ#LªIdentifierÍÍ¡tR®CallExpressionÍÍ#Q°MemberExpressionÍÍ LªIdentifierÍÍ§MetricsLªIdentifierÍÍ ­totalStudySecÂÂ‘LªIdentifierÍ!Í"¡sÂ¥constP¯ReturnStatementÍ.ÍUÔrW–¤type¥start£end¤testªconsequent©alternateµConditionalExpressionÍ5ÍTT°BinaryExpressionÍ5Í:LªIdentifierÍ5Í6¡t¡>S§LiteralÍ9Í: ¡0T°BinaryExpressionÍ=ÍPQ°MemberExpressionÍ=ÍLLªIdentifierÍ=Í>¡sLªIdentifierÍ?ÍL­focusDurationÂÂ¡/LªIdentifierÍOÍP¡tS§LiteralÍSÍT ¡0N°MethodDefinitionÍ}ÍÛÃÂLªIdentifierÍ„Í”°focusRatePercent¦methodO²FunctionExpressionÍ”ÍÛÀÂÂÂ‘LªIdentifierÍ•Í–¡sM®BlockStatementÍ˜ÍÛ‘P¯ReturnStatementÍ£ÍÔR®CallExpressionÍªÍÓQ°MemberExpressionÍªÍ´LªIdentifierÍªÍ®¤MathLªIdentifierÍ¯Í´¥roundÂÂ‘T°BinaryExpressionÍµÍÒR®CallExpressionÍµÍÌQ°MemberExpressionÍµÍÉLªIdentifierÍµÍ¼§MetricsLªIdentifierÍ½ÍÉ¬netFocusRateÂÂ‘LªIdentifierÍÊÍË¡sÂ¡*S§LiteralÍÏÍÒÌd£100ÂN°MethodDefinitionÍÍŠÃÂLªIdentifierÍÍ¯distractionRate¦methodO²FunctionExpressionÍÍŠÀÂÂÂ‘LªIdentifierÍÍ¡sM®BlockStatementÍÍŠ’U³VariableDeclarationÍ)ÍL‘V²VariableDeclaratorÍ/ÍKLªIdentifierÍ/Í0¡tR®CallExpressionÍ3ÍKQ°MemberExpressionÍ3ÍHLªIdentifierÍ3Í:§MetricsLªIdentifierÍ;ÍH­totalStudySecÂÂ‘LªIdentifierÍIÍJ¡sÂ¥constP¯ReturnStatementÍVÍƒWµConditionalExpressionÍ]Í‚T°BinaryExpressionÍ]ÍbLªIdentifierÍ]Í^¡t¡>S§LiteralÍaÍb ¡0T°BinaryExpressionÍeÍ~Q°MemberExpressionÍeÍzLªIdentifierÍeÍf¡sLªIdentifierÍgÍz³distractionDurationÂÂ¡/LªIdentifierÍ}Í~¡tS§LiteralÍÍ‚ ¡0N°MethodDefinitionÍÍ›ÃÂLªIdentifierÍÍ!®completionRate¦methodO²FunctionExpressionÍ!Í›ÀÂÂÂ’LªIdentifierÍ"Í#¡sLªIdentifierÍ%Í+¦estMapM®BlockStatementÍ-Í›”W«IfStatementÍ8ÍyT°BinaryExpressionÍ<ÍRQ°MemberExpressionÍ<ÍLQ°MemberExpressionÍ<ÍELªIdentifierÍ<Í=¡sLªIdentifierÍ>ÍE§taskIdsÂÂLªIdentifierÍFÍL¦lengthÂÂ£===S§LiteralÍQÍR ¡0M®BlockStatementÍTÍy‘P¯ReturnStatementÍcÍnS§LiteralÍjÍmÌd£100ÀU³VariableDeclarationÍƒÍ£‘V²VariableDeclaratorÍ‰Í¢LªIdentifierÍ‰Í¤doneQ°MemberExpressionÍÍ¢LªIdentifierÍÍ‘¡sLªIdentifierÍ’Í¢°completedTaskIdsÂÂ¥constW«IfStatementÍ­ÍPT±LogicalExpressionÍ±ÍØT°BinaryExpressionÍ±ÍÅLªIdentifierÍ±Í·¦estMap£!==LªIdentifierÍ¼ÍÅ©undefined¢&&T°BinaryExpressionÍÉÍØQ°MemberExpressionÍÉÍÔLªIdentifierÍÉÍÏ¦estMapLªIdentifierÍĞÍÔ¤sizeÂÂ¡>S§LiteralÍ×ÍØ ¡0M®BlockStatementÍÚÍP”U³VariableDeclarationÍéÍ÷‘V²VariableDeclaratorÍíÍöLªIdentifierÍíÍò¥totalS§LiteralÍõÍö ¡0£letU³VariableDeclarationÍÍ‘V²VariableDeclaratorÍ	ÍLªIdentifierÍ	Í¤compS§LiteralÍÍ ¡0£letÔrX—¤type¥start£end¥await¤left¥right¤body®ForOfStatementÍ ÍÿÂU³VariableDeclarationÍ%Í-‘V²VariableDeclaratorÍ+Í-LªIdentifierÍ+Í-¢idÀ¥constQ°MemberExpressionÍ1Í:LªIdentifierÍ1Í2¡sLªIdentifierÍ3Í:§taskIdsÂÂM®BlockStatementÍ<Íÿ“U³VariableDeclarationÍOÍh‘V²VariableDeclaratorÍUÍgLªIdentifierÍUÍV¡eR®CallExpressionÍYÍgQ°MemberExpressionÍYÍcLªIdentifierÍYÍ_¦estMapLªIdentifierÍ`Íc£getÂÂ‘LªIdentifierÍdÍf¢idÂ¥constÔrY”¤type¥start£endªexpression³ExpressionStatementÍzÍŠÔrZ–¤type¥start£end¨operator¤left¥right´AssignmentExpressionÍzÍ‰¢+=LªIdentifierÍzÍ¥totalT±LogicalExpressionÍƒÍ‰LªIdentifierÍƒÍ„¡e¢??S§LiteralÍˆÍ‰ ¡0W«IfStatementÍœÍğT°BinaryExpressionÍ ÍµR®CallExpressionÍ Í°Q°MemberExpressionÍ Í¬LªIdentifierÍ Í¤¤doneLªIdentifierÍ¥Í¬§indexOfÂÂ‘LªIdentifierÍ­Í¯¢idÂ¢>=S§LiteralÍ´Íµ ¡0M®BlockStatementÍ·Íğ‘Y³ExpressionStatementÍÎÍİZ´AssignmentExpressionÍÎÍÜ¢+=LªIdentifierÍÎÍÒ¤compT±LogicalExpressionÍÖÍÜLªIdentifierÍÖÍ×¡e¢??S§LiteralÍÛÍÜ ¡0ÀP¯ReturnStatementÍÍEWµConditionalExpressionÍÍDT°BinaryExpressionÍÍLªIdentifierÍÍ¥total¡>S§LiteralÍÍ ¡0R®CallExpressionÍ Í@Q°MemberExpressionÍ Í*LªIdentifierÍ Í$¤MathLªIdentifierÍ%Í*¥roundÂÂ‘T°BinaryExpressionÍ+Í?T°BinaryExpressionÍ,Í8LªIdentifierÍ,Í0¤comp¡/LªIdentifierÍ3Í8¥total¡*S§LiteralÍ<Í?Ìd£100ÂS§LiteralÍCÍD ¡0ÀP¯ReturnStatementÍZÍ”R®CallExpressionÍaÍ“Q°MemberExpressionÍaÍkLªIdentifierÍaÍe¤MathLªIdentifierÍfÍk¥roundÂÂ‘T°BinaryExpressionÍlÍ’T°BinaryExpressionÍmÍ‹Q°MemberExpressionÍmÍxLªIdentifierÍmÍq¤doneLªIdentifierÍrÍx¦lengthÂÂ¡/Q°MemberExpressionÍ{Í‹Q°MemberExpressionÍ{Í„LªIdentifierÍ{Í|¡sLªIdentifierÍ}Í„§taskIdsÂÂLªIdentifierÍ…Í‹¦lengthÂÂ¡*S§LiteralÍÍ’Ìd£100ÂN°MethodDefinitionÍ	8ÍoÃÂLªIdentifierÍ	?Í	K¬goldenWindow¦methodO²FunctionExpressionÍ	KÍoÀÂÂÂ‘LªIdentifierÍ	LÍ	T¨sessionsM®BlockStatementÍ	VÍoœU³VariableDeclarationÍ	aÍ	x‘V²VariableDeclaratorÍ	gÍ	wLªIdentifierÍ	gÍ	j£nowR®CallExpressionÍ	mÍ	wQ°MemberExpressionÍ	mÍ	uLªIdentifierÍ	mÍ	q¤DateLªIdentifierÍ	rÍ	u£nowÂÂÂ¥constU³VariableDeclarationÍ	‚Í	¡‘V²VariableDeclaratorÍ	ˆÍ	 LªIdentifierÍ	ˆÍ	¥dayMsT°BinaryExpressionÍ	Í	 T°BinaryExpressionÍ	Í	™S§LiteralÍ	Í	’¢24¡*S§LiteralÍ	•Í	™Í¤3600¡*S§LiteralÍ	œÍ	 Íè¤1000¥constU³VariableDeclarationÍ	«Í	Ñ‘V²VariableDeclaratorÍ	±Í	ĞLªIdentifierÍ	±Í	¸§bucketsR®CallExpressionÍ	»Í	ĞQ°MemberExpressionÍ	»Í	ÍÔr[•¤type¥start£end¦callee©arguments­NewExpressionÍ	»Í	ÈLªIdentifierÍ	¿Í	Ä¥Array‘S§LiteralÍ	ÅÍ	Ç¢12LªIdentifierÍ	ÉÍ	Í¤fillÂÂ‘S§LiteralÍ	ÎÍ	Ï ¡0Â¥constU³VariableDeclarationÍ	éÍ	û‘V²VariableDeclaratorÍ	íÍ	úLªIdentifierÍ	íÍ	ò¥foundS§LiteralÍ	õÍ	úÂ¥false£letX®ForOfStatementÍ
+Í®ÂU³VariableDeclarationÍ
+
+Í
+‘V²VariableDeclaratorÍ
+Í
+LªIdentifierÍ
+Í
+¡sÀ¥constLªIdentifierÍ
+Í
+¨sessionsM®BlockStatementÍ
+Í®”W«IfStatementÍ
+.Í
+’T±LogicalExpressionÍ
+2Í
+eT°BinaryExpressionÍ
+2Í
+PT°BinaryExpressionÍ
+2Í
+CLªIdentifierÍ
+2Í
+5£now¡-Q°MemberExpressionÍ
+8Í
+CLªIdentifierÍ
+8Í
+9¡sLªIdentifierÍ
+:Í
+C©startTimeÂÂ¡>T°BinaryExpressionÍ
+FÍ
+PS§LiteralÍ
+FÍ
+H¢14¡*LªIdentifierÍ
+KÍ
+P¥dayMs¢||T°BinaryExpressionÍ
+TÍ
+eQ°MemberExpressionÍ
+TÍ
+_LªIdentifierÍ
+TÍ
+U¡sLªIdentifierÍ
+VÍ
+_©startTimeÂÂ¡>LªIdentifierÍ
+bÍ
+e£nowM®BlockStatementÍ
+gÍ
+’‘Ôr\”¤type¥start£end¥label±ContinueStatementÍ
+zÍ
+ƒÀÀU³VariableDeclarationÍ
+ Í
+À‘V²VariableDeclaratorÍ
+¦Í
+¿LªIdentifierÍ
+¦Í
+§¡d[­NewExpressionÍ
+ªÍ
+¿LªIdentifierÍ
+®Í
+²¤Date‘Q°MemberExpressionÍ
+³Í
+¾LªIdentifierÍ
+³Í
+´¡sLªIdentifierÍ
+µÍ
+¾©startTimeÂÂ¥constU³VariableDeclarationÍ
+ÎÍ‘V²VariableDeclaratorÍ
+ÔÍLªIdentifierÍ
+ÔÍ
+×£idxR®CallExpressionÍ
+ÚÍQ°MemberExpressionÍ
+ÚÍ
+äLªIdentifierÍ
+ÚÍ
+Ş¤MathLªIdentifierÍ
+ßÍ
+ä¥floorÂÂ‘T°BinaryExpressionÍ
+åÍT°BinaryExpressionÍ
+æÍT°BinaryExpressionÍ
+æÍ
+÷R®CallExpressionÍ
+æÍ
+òQ°MemberExpressionÍ
+æÍ
+ğLªIdentifierÍ
+æÍ
+ç¡dLªIdentifierÍ
+èÍ
+ğ¨getHoursÂÂÂ¡*S§LiteralÍ
+õÍ
+÷<¢60¡+R®CallExpressionÍ
+úÍQ°MemberExpressionÍ
+úÍLªIdentifierÍ
+úÍ
+û¡dLªIdentifierÍ
+üÍªgetMinutesÂÂÂ¡/S§LiteralÍÍÌx£120Â¥constW«IfStatementÍÍ£T±LogicalExpressionÍ#Í7T°BinaryExpressionÍ#Í+LªIdentifierÍ#Í&£idx¢>=S§LiteralÍ*Í+ ¡0¢&&T°BinaryExpressionÍ/Í7LªIdentifierÍ/Í2£idx¡<S§LiteralÍ5Í7¢12M®BlockStatementÍ9Í£’Y³ExpressionStatementÍLÍuZ´AssignmentExpressionÍLÍt¢+=Q°MemberExpressionÍLÍXLªIdentifierÍLÍS§bucketsLªIdentifierÍTÍW£idxÃÂR®CallExpressionÍ\ÍtQ°MemberExpressionÍ\ÍqLªIdentifierÍ\Íc§MetricsLªIdentifierÍdÍq­totalStudySecÂÂ‘LªIdentifierÍrÍs¡sÂY³ExpressionStatementÍ‡Í”Z´AssignmentExpressionÍ‡Í“¡=LªIdentifierÍ‡ÍŒ¥foundS§LiteralÍÍ“Ã¤trueÀW«IfStatementÍ¸ÍèÔr]–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍ¼ÍÂ¡!ÃLªIdentifierÍ½ÍÂ¥foundM®BlockStatementÍÄÍè‘P¯ReturnStatementÍÓÍİS§LiteralÍÚÍÜ ¢''ÀU³VariableDeclarationÍòÍÿ‘V²VariableDeclaratorÍöÍşLªIdentifierÍöÍú¤peakS§LiteralÍıÍş ¡0£letÔr^—¤type¥start£end¤init¤test¦update¤body¬ForStatementÍ	Í‹U³VariableDeclarationÍÍ‘V²VariableDeclaratorÍÍLªIdentifierÍÍ¡iS§LiteralÍÍ ¡0£letT°BinaryExpressionÍÍLªIdentifierÍÍ¡i¡<S§LiteralÍÍ¢12]°UpdateExpressionÍ!Í$¢++ÂLªIdentifierÍ!Í"¡iM®BlockStatementÍ&Í‹‘W«IfStatementÍ5Í€T°BinaryExpressionÍ9ÍSQ°MemberExpressionÍ9ÍCLªIdentifierÍ9Í@§bucketsLªIdentifierÍAÍB¡iÃÂ¡>Q°MemberExpressionÍFÍSLªIdentifierÍFÍM§bucketsLªIdentifierÍNÍR¤peakÃÂM®BlockStatementÍUÍ€‘Y³ExpressionStatementÍhÍqZ´AssignmentExpressionÍhÍp¡=LªIdentifierÍhÍl¤peakLªIdentifierÍoÍp¡iÀW«IfStatementÍ•ÍÑT°BinaryExpressionÍ™Í«Q°MemberExpressionÍ™Í¦LªIdentifierÍ™Í §bucketsLªIdentifierÍ¡Í¥¤peakÃÂ¢<=S§LiteralÍªÍ« ¡0M®BlockStatementÍ­ÍÑ‘P¯ReturnStatementÍ¼ÍÆS§LiteralÍÃÍÅ ¢''ÀU³VariableDeclarationÍÛÍ÷‘V²VariableDeclaratorÍáÍöLªIdentifierÍáÍé¨startMinT°BinaryExpressionÍìÍöLªIdentifierÍìÍğ¤peak¡*S§LiteralÍóÍöÌx£120¥constU³VariableDeclarationÍÍ‘V²VariableDeclaratorÍÍLªIdentifierÍÍ¦endMinT°BinaryExpressionÍÍLªIdentifierÍÍ¨startMin¡+S§LiteralÍÍÌx£120¥constP¯ReturnStatementÍ)ÍhÔr_•¤type¥start£end«expressions¦quasis¯TemplateLiteralÍ0Íg’R®CallExpressionÍ3ÍJQ°MemberExpressionÍ3Í@LªIdentifierÍ3Í:§MetricsLªIdentifierÍ;Í@¥clockÂÂ‘LªIdentifierÍAÍI¨startMinÂR®CallExpressionÍPÍeQ°MemberExpressionÍPÍ]LªIdentifierÍPÍW§MetricsLªIdentifierÍXÍ]¥clockÂÂ‘LªIdentifierÍ^Íd¦endMinÂ“Ôr`•¤type¥start£end¥value¤tail¯TemplateElementÍ1Í1Ôra’£raw¦cooked  Â`¯TemplateElementÍKÍNa£ - £ - Â`¯TemplateElementÍfÍfa  ÃN°MethodDefinitionÍÚÍšÃÂLªIdentifierÍáÍô³easyDistractionTask¦methodO²FunctionExpressionÍôÍšÀÂÂÂ‘LªIdentifierÍõÍı¨sessionsM®BlockStatementÍÿÍš•U³VariableDeclarationÍ
+Í‘V²VariableDeclaratorÍÍLªIdentifierÍÍ¤bestS§LiteralÍÍÀ¤null£letU³VariableDeclarationÍ$Í6‘V²VariableDeclaratorÍ(Í5LªIdentifierÍ(Í0¨bestRate]¯UnaryExpressionÍ3Í5¡-ÃS§LiteralÍ4Í5¡1£letX®ForOfStatementÍ@ÍÂU³VariableDeclarationÍEÍL‘V²VariableDeclaratorÍKÍLLªIdentifierÍKÍL¡sÀ¥constLªIdentifierÍPÍX¨sessionsM®BlockStatementÍZÍ’U³VariableDeclarationÍiÍ‘V²VariableDeclaratorÍoÍLªIdentifierÍoÍp¡rR®CallExpressionÍsÍQ°MemberExpressionÍsÍŠLªIdentifierÍsÍz§MetricsLªIdentifierÍ{ÍŠ¯distractionRateÂÂ‘LªIdentifierÍ‹ÍŒ¡sÂ¥constW«IfStatementÍœÍøT°BinaryExpressionÍ Í¬LªIdentifierÍ Í¡¡r¡>LªIdentifierÍ¤Í¬¨bestRateM®BlockStatementÍ®Íø’Y³ExpressionStatementÍÁÍÎZ´AssignmentExpressionÍÁÍÍ¡=LªIdentifierÍÁÍÉ¨bestRateLªIdentifierÍÌÍÍ¡rY³ExpressionStatementÍàÍéZ´AssignmentExpressionÍàÍè¡=LªIdentifierÍàÍä¤bestLªIdentifierÍçÍè¡sÀW«IfStatementÍÍZT°BinaryExpressionÍÍLªIdentifierÍÍ¤best£===S§LiteralÍÍÀ¤nullM®BlockStatementÍ ÍZ‘P¯ReturnStatementÍ/ÍOÔrb”¤type¥start£endªproperties°ObjectExpressionÍ6ÍN’Ôrc™¤type¥start£end¦method©shorthand¨computed£key¥value¤kind¨PropertyÍ8ÍCÂÂÂLªIdentifierÍ8Í?§subjectS§LiteralÍAÍC ¢''¤initc¨PropertyÍEÍLÂÂÂLªIdentifierÍEÍI¤rateS§LiteralÍKÍL ¡0¤initÀP¯ReturnStatementÍdÍ“b°ObjectExpressionÍkÍ’’c¨PropertyÍmÍ€ÂÂÂLªIdentifierÍmÍt§subjectQ°MemberExpressionÍvÍ€LªIdentifierÍvÍz¤bestLªIdentifierÍ{Í€¥titleÂÂ¤initc¨PropertyÍ‚ÍÂÂÂLªIdentifierÍ‚Í†¤rateLªIdentifierÍˆÍ¨bestRate¤initN°MethodDefinitionÍıÍàÃÂLªIdentifierÍÍ®focusThreshold¦methodO²FunctionExpressionÍÍàÀÂÂÂ‘LªIdentifierÍÍ¨sessionsM®BlockStatementÍÍà•U³VariableDeclarationÍ(Í8‘V²VariableDeclaratorÍ.Í7LªIdentifierÍ.Í2¤runsÔrd”¤type¥start£end¨elements¯ArrayExpressionÍ5Í7¥constX®ForOfStatementÍBÍÂU³VariableDeclarationÍGÍN‘V²VariableDeclaratorÍMÍNLªIdentifierÍMÍN¡sÀ¥constLªIdentifierÍRÍZ¨sessionsM®BlockStatementÍ\Í•U³VariableDeclarationÍkÍx‘V²VariableDeclaratorÍoÍwLªIdentifierÍoÍs¤bestS§LiteralÍvÍw ¡0£letU³VariableDeclarationÍ†Í’‘V²VariableDeclaratorÍŠÍ‘LªIdentifierÍŠÍ£curS§LiteralÍÍ‘ ¡0£letX®ForOfStatementÍ Í¯ÂU³VariableDeclarationÍ¥Í¬‘V²VariableDeclaratorÍ«Í¬LªIdentifierÍ«Í¬¡pÀ¥constQ°MemberExpressionÍ°ÍºLªIdentifierÍ°Í±¡sLªIdentifierÍ²Íº¨timelineÂÂM®BlockStatementÍ¼Í¯‘W«IfStatementÍÏÍ T°BinaryExpressionÍÓÍñQ°MemberExpressionÍÓÍÚLªIdentifierÍÓÍÔ¡pLªIdentifierÍÕÍÚ¥stateÂÂ£===Q°MemberExpressionÍßÍñLªIdentifierÍßÍéªFocusStateLªIdentifierÍêÍñ§FOCUSEDÂÂM®BlockStatementÍóÍ&‘Y³ExpressionStatementÍ
+ÍZ´AssignmentExpressionÍ
+Í¢+=LªIdentifierÍ
+Í£curS§LiteralÍÍ¡1M®BlockStatementÍ=Í ’Y³ExpressionStatementÍTÍoZ´AssignmentExpressionÍTÍn¡=LªIdentifierÍTÍX¤bestR®CallExpressionÍ[ÍnQ°MemberExpressionÍ[ÍcLªIdentifierÍ[Í_¤MathLªIdentifierÍ`Íc£maxÂÂ’LªIdentifierÍdÍh¤bestLªIdentifierÍjÍm£curÂY³ExpressionStatementÍ…ÍZ´AssignmentExpressionÍ…ÍŒ¡=LªIdentifierÍ…Íˆ£curS§LiteralÍ‹ÍŒ ¡0Y³ExpressionStatementÍ½ÍØZ´AssignmentExpressionÍ½Í×¡=LªIdentifierÍ½ÍÁ¤bestR®CallExpressionÍÄÍ×Q°MemberExpressionÍÄÍÌLªIdentifierÍÄÍÈ¤MathLªIdentifierÍÉÍÌ£maxÂÂ’LªIdentifierÍÍÍÑ¤bestLªIdentifierÍÓÍÖ£curÂY³ExpressionStatementÍæÍüR®CallExpressionÍæÍûQ°MemberExpressionÍæÍïLªIdentifierÍæÍê¤runsLªIdentifierÍëÍï¤pushÂÂ‘T°BinaryExpressionÍğÍúLªIdentifierÍğÍô¤best¡*S§LiteralÍ÷ÍúË?à      £0.5ÂU³VariableDeclarationÍ%ÍS‘V²VariableDeclaratorÍ+ÍRLªIdentifierÍ+Í/¤lastR®CallExpressionÍ2ÍRQ°MemberExpressionÍ2Í<LªIdentifierÍ2Í6¤runsLªIdentifierÍ7Í<¥sliceÂÂ‘]¯UnaryExpressionÍ=ÍQ¡-ÃQ°MemberExpressionÍ>ÍQLªIdentifierÍ>ÍE§MetricsLªIdentifierÍFÍQ«MIN_SAMPLESÂÂÂ¥constW«IfStatementÍ]Í§T°BinaryExpressionÍaÍ‚Q°MemberExpressionÍaÍlLªIdentifierÍaÍe¤lastLªIdentifierÍfÍl¦lengthÂÂ¡<Q°MemberExpressionÍoÍ‚LªIdentifierÍoÍv§MetricsLªIdentifierÍwÍ‚«MIN_SAMPLESÂÂM®BlockStatementÍ„Í§‘P¯ReturnStatementÍ“ÍœS§LiteralÍšÍ› ¡0ÀP¯ReturnStatementÍ±ÍÙR®CallExpressionÍ¸ÍØQ°MemberExpressionÍ¸ÍÂLªIdentifierÍ¸Í¼¤MathLªIdentifierÍ½ÍÂ¥roundÂÂ‘R®CallExpressionÍÃÍ×Q°MemberExpressionÍÃÍÑLªIdentifierÍÃÍÊ§MetricsLªIdentifierÍËÍÑ¦medianÂÂ‘LªIdentifierÍÒÍÖ¤lastÂÂN°MethodDefinitionÍrÍØÃÂLªIdentifierÍyÍ€§fiveDim¦methodO²FunctionExpressionÍ€ÍØÀÂÂÂ‘LªIdentifierÍÍ‰¨sessionsM®BlockStatementÍ‹ÍØŸU³VariableDeclarationÍ–ÍÜ‘V²VariableDeclaratorÍœÍÛLªIdentifierÍœÍ¤¨finishedR®CallExpressionÍ§ÍÛQ°MemberExpressionÍ§Í¶LªIdentifierÍ§Í¯¨sessionsLªIdentifierÍ°Í¶¦filterÂÂ‘O·ArrowFunctionExpressionÍ·ÍÚÀÃÂÂ‘LªIdentifierÍ¸Í¹¡sT°BinaryExpressionÍ¾ÍÚR®CallExpressionÍ¾ÍÖQ°MemberExpressionÍ¾ÍÓLªIdentifierÍ¾ÍÅ§MetricsLªIdentifierÍÆÍÓ­totalStudySecÂÂ‘LªIdentifierÍÔÍÕ¡sÂ¡>S§LiteralÍÙÍÚ ¡0Â¥constW«IfStatementÍæÍvT°BinaryExpressionÍêÍÿQ°MemberExpressionÍêÍùLªIdentifierÍêÍò¨finishedLªIdentifierÍóÍù¦lengthÂÂ£===S§LiteralÍşÍÿ ¡0M®BlockStatementÍÍv‘P¯ReturnStatementÍÍkb°ObjectExpressionÍÍj•c¨PropertyÍÍ&ÂÂÂLªIdentifierÍÍ#ªefficiencyS§LiteralÍ%Í& ¡0¤initc¨PropertyÍ(Í8ÂÂÂLªIdentifierÍ(Í5­concentrationS§LiteralÍ7Í8 ¡0¤initc¨PropertyÍ:ÍFÂÂÂLªIdentifierÍ:ÍC©stabilityS§LiteralÍEÍF ¡0¤initc¨PropertyÍHÍTÂÂÂLªIdentifierÍHÍQ©executionS§LiteralÍSÍT ¡0¤initc¨PropertyÍVÍhÂÂÂLªIdentifierÍVÍe¯antiDistractionS§LiteralÍgÍh ¡0¤initÀU³VariableDeclarationÍ€ÍÁ‘V²VariableDeclaratorÍ†ÍÀLªIdentifierÍ†Í‹¥ratesR®CallExpressionÍÍÀQ°MemberExpressionÍÍšLªIdentifierÍÍ–¨finishedLªIdentifierÍ—Íš£mapÂÂ‘O·ArrowFunctionExpressionÍ›Í¿ÀÃÂÂ‘LªIdentifierÍœÍ¡sT°BinaryExpressionÍ¢Í¿R®CallExpressionÍ¢Í¹Q°MemberExpressionÍ¢Í¶LªIdentifierÍ¢Í©§MetricsLªIdentifierÍªÍ¶¬netFocusRateÂÂ‘LªIdentifierÍ·Í¸¡sÂ¡*S§LiteralÍ¼Í¿Ìd£100Â¥constU³VariableDeclarationÍËÍ‘V²VariableDeclaratorÍÑÍLªIdentifierÍÑÍÖ¥compsR®CallExpressionÍÙÍQ°MemberExpressionÍÙÍåLªIdentifierÍÙÍá¨finishedLªIdentifierÍâÍå£mapÂÂ‘O·ArrowFunctionExpressionÍæÍÀÃÂÂ‘LªIdentifierÍçÍè¡sR®CallExpressionÍíÍQ°MemberExpressionÍíÍLªIdentifierÍíÍô§MetricsLªIdentifierÍõÍ®completionRateÂÂ‘LªIdentifierÍÍ¡sÂÂ¥constU³VariableDeclarationÍÍQ‘V²VariableDeclaratorÍÍPLªIdentifierÍÍ¦distrsR®CallExpressionÍ!ÍPQ°MemberExpressionÍ!Í-LªIdentifierÍ!Í)¨finishedLªIdentifierÍ*Í-£mapÂÂ‘O·ArrowFunctionExpressionÍ.ÍOÀÃÂÂ‘LªIdentifierÍ/Í0¡sR®CallExpressionÍ5ÍOQ°MemberExpressionÍ5ÍLLªIdentifierÍ5Í<§MetricsLªIdentifierÍ=ÍL¯distractionRateÂÂ‘LªIdentifierÍMÍN¡sÂÂ¥constU³VariableDeclarationÍ[Í‘V²VariableDeclaratorÍaÍ~LªIdentifierÍaÍh§avgRateR®CallExpressionÍkÍ~Q°MemberExpressionÍkÍwLªIdentifierÍkÍr§MetricsLªIdentifierÍsÍw¤meanÂÂ‘LªIdentifierÍxÍ}¥ratesÂ¥constU³VariableDeclarationÍ‰Í­‘V²VariableDeclaratorÍÍ¬LªIdentifierÍÍ–§avgCompR®CallExpressionÍ™Í¬Q°MemberExpressionÍ™Í¥LªIdentifierÍ™Í §MetricsLªIdentifierÍ¡Í¥¤meanÂÂ‘LªIdentifierÍ¦Í«¥compsÂ¥constU³VariableDeclarationÍ·Íİ‘V²VariableDeclaratorÍ½ÍÜLªIdentifierÍ½ÍÅ¨avgDistrR®CallExpressionÍÈÍÜQ°MemberExpressionÍÈÍÔLªIdentifierÍÈÍÏ§MetricsLªIdentifierÍĞÍÔ¤meanÂÂ‘LªIdentifierÍÕÍÛ¦distrsÂ¥constU³VariableDeclarationÍçÍ‘V²VariableDeclaratorÍíÍLªIdentifierÍíÍò¥sigmaT°BinaryExpressionÍõÍR®CallExpressionÍõÍ
+Q°MemberExpressionÍõÍLªIdentifierÍõÍü§MetricsLªIdentifierÍıÍ¦stddevÂÂ‘LªIdentifierÍÍ	¥ratesÂ¡/S§LiteralÍÍÌd£100¥constU³VariableDeclarationÍÍX‘V²VariableDeclaratorÍ!ÍWLªIdentifierÍ!Í+ªefficiencyR®CallExpressionÍ.ÍWQ°MemberExpressionÍ.Í8LªIdentifierÍ.Í2¤MathLªIdentifierÍ3Í8¥roundÂÂ‘T°BinaryExpressionÍ9ÍVT°BinaryExpressionÍ9ÍFS§LiteralÍ9Í<Ë?ã333333£0.6¡*LªIdentifierÍ?ÍF§avgRate¡+T°BinaryExpressionÍIÍVS§LiteralÍIÍLË?Ù™™™™™š£0.4¡*LªIdentifierÍOÍV§avgCompÂ¥constU³VariableDeclarationÍbÍŒ‘V²VariableDeclaratorÍhÍ‹LªIdentifierÍhÍu­concentrationR®CallExpressionÍxÍ‹Q°MemberExpressionÍxÍ‚LªIdentifierÍxÍ|¤MathLªIdentifierÍ}Í‚¥roundÂÂ‘LªIdentifierÍƒÍŠ§avgRateÂ¥constU³VariableDeclarationÍ–Íó‘V²VariableDeclaratorÍœÍòLªIdentifierÍœÍ¥©stabilityWµConditionalExpressionÍ¨ÍòT°BinaryExpressionÍ¨Í³LªIdentifierÍ¨Í­¥sigma¡>S§LiteralÍ°Í³Ë?Ó333333£0.3S§LiteralÍ¶Í· ¡0R®CallExpressionÍºÍòQ°MemberExpressionÍºÍÄLªIdentifierÍºÍ¾¤MathLªIdentifierÍ¿ÍÄ¥roundÂÂ‘T°BinaryExpressionÍÅÍñS§LiteralÍÅÍÈÌd£100¡*T°BinaryExpressionÍÌÍğS§LiteralÍÌÍÍ¡1¡-R®CallExpressionÍĞÍğQ°MemberExpressionÍĞÍİLªIdentifierÍĞÍ×§MetricsLªIdentifierÍØÍİ¥clampÂÂ“T°BinaryExpressionÍŞÍéLªIdentifierÍŞÍã¥sigma¡/S§LiteralÍæÍéË?Ù™™™™™š£0.4S§LiteralÍëÍì ¡0S§LiteralÍîÍï¡1ÂÂ¥constU³VariableDeclarationÍıÍ#‘V²VariableDeclaratorÍÍ"LªIdentifierÍÍ©executionR®CallExpressionÍÍ"Q°MemberExpressionÍÍLªIdentifierÍÍ¤MathLªIdentifierÍÍ¥roundÂÂ‘LªIdentifierÍÍ!§avgCompÂ¥constU³VariableDeclarationÍ-Í{‘V²VariableDeclaratorÍ3ÍzLªIdentifierÍ3ÍB¯antiDistractionR®CallExpressionÍEÍzQ°MemberExpressionÍEÍOLªIdentifierÍEÍI¤MathLªIdentifierÍJÍO¥roundÂÂ‘T°BinaryExpressionÍPÍyS§LiteralÍPÍSÌd£100¡*T°BinaryExpressionÍWÍxS§LiteralÍWÍX¡1¡-R®CallExpressionÍ[ÍxQ°MemberExpressionÍ[ÍhLªIdentifierÍ[Íb§MetricsLªIdentifierÍcÍh¥clampÂÂ“LªIdentifierÍiÍq¨avgDistrS§LiteralÍsÍt ¡0S§LiteralÍvÍw¡1ÂÂ¥constP¯ReturnStatementÍ…ÍÑb°ObjectExpressionÍŒÍĞ•Ôre™¤type¥start£end¦method©shorthand¨computed£key¤kind¥value¨PropertyÍÍ˜ÂÃÂLªIdentifierÍÍ˜ªefficiency¤initLªIdentifierÍÍ˜ªefficiencye¨PropertyÍšÍ§ÂÃÂLªIdentifierÍšÍ§­concentration¤initLªIdentifierÍšÍ§­concentratione¨PropertyÍ©Í²ÂÃÂLªIdentifierÍ©Í²©stability¤initLªIdentifierÍ©Í²©stabilitye¨PropertyÍ´Í½ÂÃÂLªIdentifierÍ´Í½©execution¤initLªIdentifierÍ´Í½©executione¨PropertyÍ¿ÍÎÂÃÂLªIdentifierÍ¿ÍÎ¯antiDistraction¤initLªIdentifierÍ¿ÍÎ¯antiDistractionN°MethodDefinitionÍüÍ[ÃÂLªIdentifierÍÍ®canShowProfile¦methodO²FunctionExpressionÍÍ[ÀÂÂÂ‘LªIdentifierÍÍ«sampleCountM®BlockStatementÍÍ[‘P¯ReturnStatementÍ*ÍTT°BinaryExpressionÍ1ÍSLªIdentifierÍ1Í<«sampleCount¢>=Q°MemberExpressionÍ@ÍSLªIdentifierÍ@ÍG§MetricsLªIdentifierÍHÍS«MIN_SAMPLESÂÂN°MethodDefinitionÍäÍ#ÃÂLªIdentifierÍëÍü±last30DaysSummary¦methodO²FunctionExpressionÍüÍ#ÀÂÂÂ“LªIdentifierÍıÍ¨sessionsLªIdentifierÍÍ¥tasksLªIdentifierÍÍ£nowM®BlockStatementÍÍ#šU³VariableDeclarationÍÍ=‘V²VariableDeclaratorÍ$Í<LªIdentifierÍ$Í)¥dayMsT°BinaryExpressionÍ,Í<T°BinaryExpressionÍ,Í5S§LiteralÍ,Í.¢24¡*S§LiteralÍ1Í5Í¤3600¡*S§LiteralÍ8Í<Íè¤1000¥constU³VariableDeclarationÍGÍg‘V²VariableDeclaratorÍMÍfLªIdentifierÍMÍS¦cutoffT°BinaryExpressionÍVÍfLªIdentifierÍVÍY£now¡-T°BinaryExpressionÍ\ÍfS§LiteralÍ\Í^¢30¡*LªIdentifierÍaÍf¥dayMs¥constU³VariableDeclarationÍqÍ…‘V²VariableDeclaratorÍuÍ„LªIdentifierÍuÍ€«totalNetSecS§LiteralÍƒÍ„ ¡0£letU³VariableDeclarationÍÍ¥‘V²VariableDeclaratorÍ“Í¤LªIdentifierÍ“Í ­totalStudySecS§LiteralÍ£Í¤ ¡0£letU³VariableDeclarationÍ¯ÍÇ‘V²VariableDeclaratorÍµÍÆLªIdentifierÍµÍÁ¬completedIdsd¯ArrayExpressionÍÄÍÆ¥constU³VariableDeclarationÍÑÍâ‘V²VariableDeclaratorÍ×ÍáLªIdentifierÍ×ÍÜ¥trendd¯ArrayExpressionÍßÍá¥const^¬ForStatementÍìÍU³VariableDeclarationÍñÍû‘V²VariableDeclaratorÍõÍûLªIdentifierÍõÍö¡iS§LiteralÍùÍû¢29£letT°BinaryExpressionÍıÍLªIdentifierÍıÍş¡i¢>=S§LiteralÍÍ ¡0]°UpdateExpressionÍÍ¢--ÂLªIdentifierÍÍ¡iM®BlockStatementÍ
+Í•U³VariableDeclarationÍÍN‘V²VariableDeclaratorÍÍMLªIdentifierÍÍ'¨dayStartT°BinaryExpressionÍ*ÍMR®CallExpressionÍ*ÍAQ°MemberExpressionÍ*Í<LªIdentifierÍ*Í3©TimeUtilsLªIdentifierÍ4Í<¨dayStartÂÂ‘LªIdentifierÍ=Í@£nowÂ¡-T°BinaryExpressionÍDÍMLªIdentifierÍDÍE¡i¡*LªIdentifierÍHÍM¥dayMs¥constU³VariableDeclarationÍ\Í|‘V²VariableDeclaratorÍbÍ{LªIdentifierÍbÍh¦dayEndT°BinaryExpressionÍkÍ{LªIdentifierÍkÍs¨dayStart¡+LªIdentifierÍvÍ{¥dayMs¥constU³VariableDeclarationÍŠÍ–‘V²VariableDeclaratorÍÍ•LªIdentifierÍÍ‘£netS§LiteralÍ”Í• ¡0£letX®ForOfStatementÍ¤ÍVÂU³VariableDeclarationÍ©Í°‘V²VariableDeclaratorÍ¯Í°LªIdentifierÍ¯Í°¡sÀ¥constLªIdentifierÍ´Í¼¨sessionsM®BlockStatementÍ¾ÍV‘W«IfStatementÍÑÍGT±LogicalExpressionÍÕÍT°BinaryExpressionÍÕÍìQ°MemberExpressionÍÕÍàLªIdentifierÍÕÍÖ¡sLªIdentifierÍ×Íà©startTimeÂÂ¢>=LªIdentifierÍäÍì¨dayStart¢&&T°BinaryExpressionÍğÍQ°MemberExpressionÍğÍûLªIdentifierÍğÍñ¡sLªIdentifierÍòÍû©startTimeÂÂ¡<LªIdentifierÍşÍ¦dayEndM®BlockStatementÍÍG‘Y³ExpressionStatementÍÍ4Z´AssignmentExpressionÍÍ3¢+=LªIdentifierÍÍ £netQ°MemberExpressionÍ$Í3LªIdentifierÍ$Í%¡sLªIdentifierÍ&Í3­focusDurationÂÂÀY³ExpressionStatementÍdÍ…R®CallExpressionÍdÍ„Q°MemberExpressionÍdÍnLªIdentifierÍdÍi¥trendLªIdentifierÍjÍn¤pushÂÂ‘R®CallExpressionÍoÍƒQ°MemberExpressionÍoÍyLªIdentifierÍoÍs¤MathLªIdentifierÍtÍy¥roundÂÂ‘T°BinaryExpressionÍzÍ‚LªIdentifierÍzÍ}£net¡/S§LiteralÍ€Í‚<¢60ÂÂX®ForOfStatementÍšÍ1ÂU³VariableDeclarationÍŸÍ¦‘V²VariableDeclaratorÍ¥Í¦LªIdentifierÍ¥Í¦¡sÀ¥constLªIdentifierÍªÍ²¨sessionsM®BlockStatementÍ´Í1‘W«IfStatementÍÃÍ&T°BinaryExpressionÍÇÍÜQ°MemberExpressionÍÇÍÒLªIdentifierÍÇÍÈ¡sLªIdentifierÍÉÍÒ©startTimeÂÂ¢>=LªIdentifierÍÖÍÜ¦cutoffM®BlockStatementÍŞÍ&“Y³ExpressionStatementÍñÍZ´AssignmentExpressionÍñÍ¢+=LªIdentifierÍñÍü«totalNetSecQ°MemberExpressionÍ ÍLªIdentifierÍ Í¡sLªIdentifierÍÍ­focusDurationÂÂY³ExpressionStatementÍ"ÍLZ´AssignmentExpressionÍ"ÍK¢+=LªIdentifierÍ"Í/­totalStudySecR®CallExpressionÍ3ÍKQ°MemberExpressionÍ3ÍHLªIdentifierÍ3Í:§MetricsLªIdentifierÍ;ÍH­totalStudySecÂÂ‘LªIdentifierÍIÍJ¡sÂX®ForOfStatementÍ^ÍÂU³VariableDeclarationÍcÍk‘V²VariableDeclaratorÍiÍkLªIdentifierÍiÍk¢idÀ¥constQ°MemberExpressionÍoÍLªIdentifierÍoÍp¡sLªIdentifierÍqÍ°completedTaskIdsÂÂM®BlockStatementÍƒÍ‘W«IfStatementÍšÍT°BinaryExpressionÍÍºR®CallExpressionÍÍ¶Q°MemberExpressionÍÍ²LªIdentifierÍÍª¬completedIdsLªIdentifierÍ«Í²§indexOfÂÂ‘LªIdentifierÍ³Íµ¢idÂ¡<S§LiteralÍ¹Íº ¡0M®BlockStatementÍ¼Í‘Y³ExpressionStatementÍ×ÍíR®CallExpressionÍ×ÍìQ°MemberExpressionÍ×ÍèLªIdentifierÍ×Íã¬completedIdsLªIdentifierÍäÍè¤pushÂÂ‘LªIdentifierÍéÍë¢idÂÀÀU³VariableDeclarationÍ;Í“‘V²VariableDeclaratorÍAÍ’LªIdentifierÍAÍJ©focusRateWµConditionalExpressionÍMÍ’T°BinaryExpressionÍMÍ^LªIdentifierÍMÍZ­totalStudySec¡>S§LiteralÍ]Í^ ¡0R®CallExpressionÍaÍQ°MemberExpressionÍaÍkLªIdentifierÍaÍe¤MathLªIdentifierÍfÍk¥roundÂÂ‘T°BinaryExpressionÍlÍT°BinaryExpressionÍlÍ‡LªIdentifierÍlÍw«totalNetSec¡/LªIdentifierÍzÍ‡­totalStudySec¡*S§LiteralÍŠÍÌd£100ÂS§LiteralÍ‘Í’ ¡0¥constP¯ReturnStatementÍÍb°ObjectExpressionÍ¤Í”c¨PropertyÍ¦ÍĞÂÂÂLªIdentifierÍ¦Í°ªtotalHoursR®CallExpressionÍ²ÍĞQ°MemberExpressionÍ²Í¼LªIdentifierÍ²Í¶¤MathLªIdentifierÍ·Í¼¥roundÂÂ‘T°BinaryExpressionÍ½ÍÏLªIdentifierÍ½ÍÈ«totalNetSec¡/S§LiteralÍËÍÏÍ¤3600Â¤initc¨PropertyÍÒÍõÂÂÂLªIdentifierÍÒÍà®completedTasksQ°MemberExpressionÍâÍõLªIdentifierÍâÍî¬completedIdsLªIdentifierÍïÍõ¦lengthÂÂ¤initc¨PropertyÍ÷ÍÂÂÂLªIdentifierÍ÷Í ©focusRateLªIdentifierÍÍ©focusRate¤initc¨PropertyÍÍÂÂÂLªIdentifierÍÍ¥trendLªIdentifierÍÍ¥trend¤initN°MethodDefinitionÍQÍ"ØÃÂLªIdentifierÍXÍg¯practiceSummary¦methodO²FunctionExpressionÍgÍ"ØÀÂÂÂ’LªIdentifierÍhÍp¨sessionsLªIdentifierÍrÍw¥tasksM®BlockStatementÍyÍ"Ø˜U³VariableDeclarationÍ„Í‘V²VariableDeclaratorÍŠÍLªIdentifierÍŠÍ‘§taskMap[­NewExpressionÍ”ÍLªIdentifierÍ˜Í›£Map¥constX®ForOfStatementÍ¨ÍîÂU³VariableDeclarationÍ­Í´‘V²VariableDeclaratorÍ³Í´LªIdentifierÍ³Í´¡tÀ¥constLªIdentifierÍ¸Í½¥tasksM®BlockStatementÍ¿Íî‘Y³ExpressionStatementÍÎÍãR®CallExpressionÍÎÍâQ°MemberExpressionÍÎÍÙLªIdentifierÍÎÍÕ§taskMapLªIdentifierÍÖÍÙ£setÂÂ’Q°MemberExpressionÍÚÍŞLªIdentifierÍÚÍÛ¡tLªIdentifierÍÜÍŞ¢idÂÂLªIdentifierÍàÍá¡tÂU³VariableDeclarationÍøÍ ‘V²VariableDeclaratorÍşÍ LªIdentifierÍşÍ ¦groups[­NewExpressionÍ Í LªIdentifierÍ Í £Map¥constX®ForOfStatementÍ Í"ÂU³VariableDeclarationÍ  Í '‘V²VariableDeclaratorÍ &Í 'LªIdentifierÍ &Í '¡sÀ¥constLªIdentifierÍ +Í 3¨sessionsM®BlockStatementÍ 5Í"‘X®ForOfStatementÍ DÍ!ûÂU³VariableDeclarationÍ IÍ Q‘V²VariableDeclaratorÍ OÍ QLªIdentifierÍ OÍ Q¢idÀ¥constQ°MemberExpressionÍ UÍ gLªIdentifierÍ UÍ V¡sLªIdentifierÍ WÍ g°completedTaskIdsÂÂM®BlockStatementÍ iÍ!û’U³VariableDeclarationÍ |Í –‘V²VariableDeclaratorÍ ‚Í •LªIdentifierÍ ‚Í ƒ¡tR®CallExpressionÍ †Í •Q°MemberExpressionÍ †Í ‘LªIdentifierÍ †Í §taskMapLªIdentifierÍ Í ‘£getÂÂ‘LªIdentifierÍ ’Í ”¢idÂ¥constW«IfStatementÍ ¨Í!ìT°BinaryExpressionÍ ¬Í »LªIdentifierÍ ¬Í ­¡t£!==LªIdentifierÍ ²Í »©undefinedM®BlockStatementÍ ½Í!ì“U³VariableDeclarationÍ ÔÍ ò‘V²VariableDeclaratorÍ ØÍ ñLªIdentifierÍ ØÍ Ù¡gR®CallExpressionÍ ÜÍ ñQ°MemberExpressionÍ ÜÍ æLªIdentifierÍ ÜÍ â¦groupsLªIdentifierÍ ãÍ æ£getÂÂ‘Q°MemberExpressionÍ çÍ ğLªIdentifierÍ çÍ è¡tLªIdentifierÍ éÍ ğ§subjectÂÂÂ£letW«IfStatementÍ!Í!¹T°BinaryExpressionÍ!Í!LªIdentifierÍ!Í!¡g£===LªIdentifierÍ!Í!©undefinedM®BlockStatementÍ!Í!¹’Y³ExpressionStatementÍ!8Í!oZ´AssignmentExpressionÍ!8Í!n¡=LªIdentifierÍ!8Í!9¡gb°ObjectExpressionÍ!<Í!n“c¨PropertyÍ!>Í!PÂÂÂLªIdentifierÍ!>Í!E§subjectQ°MemberExpressionÍ!GÍ!PLªIdentifierÍ!GÍ!H¡tLªIdentifierÍ!IÍ!P§subjectÂÂ¤initc¨PropertyÍ!RÍ!bÂÂÂLªIdentifierÍ!RÍ!Y§contentQ°MemberExpressionÍ![Í!bLªIdentifierÍ![Í!\¡tLªIdentifierÍ!]Í!b¥titleÂÂ¤initc¨PropertyÍ!dÍ!lÂÂÂLªIdentifierÍ!dÍ!i¥countS§LiteralÍ!kÍ!l ¡0¤initY³ExpressionStatementÍ!‰Í!¢R®CallExpressionÍ!‰Í!¡Q°MemberExpressionÍ!‰Í!“LªIdentifierÍ!‰Í!¦groupsLªIdentifierÍ!Í!“£setÂÂ’Q°MemberExpressionÍ!”Í!LªIdentifierÍ!”Í!•¡tLªIdentifierÍ!–Í!§subjectÂÂLªIdentifierÍ!ŸÍ! ¡gÂÀY³ExpressionStatementÍ!ÏÍ!Ù]°UpdateExpressionÍ!ÏÍ!Ø¢++ÂQ°MemberExpressionÍ!ÏÍ!ÖLªIdentifierÍ!ÏÍ!Ğ¡gLªIdentifierÍ!ÑÍ!Ö¥countÂÂÀU³VariableDeclarationÍ"Í""‘V²VariableDeclaratorÍ"Í"!LªIdentifierÍ"Í"¦resultd¯ArrayExpressionÍ"Í"!¥constY³ExpressionStatementÍ",Í"zR®CallExpressionÍ",Í"yQ°MemberExpressionÍ",Í":LªIdentifierÍ",Í"2¦groupsLªIdentifierÍ"3Í":§forEachÂÂ‘O·ArrowFunctionExpressionÍ";Í"xÀÂÂÂ’LªIdentifierÍ"<Í"A¥valueLªIdentifierÍ"CÍ"F£keyM®BlockStatementÍ"KÍ"x‘Y³ExpressionStatementÍ"ZÍ"mR®CallExpressionÍ"ZÍ"lQ°MemberExpressionÍ"ZÍ"eLªIdentifierÍ"ZÍ"`¦resultLªIdentifierÍ"aÍ"e¤pushÂÂ‘LªIdentifierÍ"fÍ"k¥valueÂÂY³ExpressionStatementÍ"„Í"­R®CallExpressionÍ"„Í"¬Q°MemberExpressionÍ"„Í"LªIdentifierÍ"„Í"Š¦resultLªIdentifierÍ"‹Í"¤sortÂÂ‘O·ArrowFunctionExpressionÍ"Í"«ÀÃÂÂ’LªIdentifierÍ"‘Í"’¡aLªIdentifierÍ"”Í"•¡bT°BinaryExpressionÍ"šÍ"«Q°MemberExpressionÍ"šÍ"¡LªIdentifierÍ"šÍ"›¡bLªIdentifierÍ"œÍ"¡¥countÂÂ¡-Q°MemberExpressionÍ"¤Í"«LªIdentifierÍ"¤Í"¥¡aLªIdentifierÍ"¦Í"«¥countÂÂÂP¯ReturnStatementÍ"·Í"ÑR®CallExpressionÍ"¾Í"ĞQ°MemberExpressionÍ"¾Í"ÊLªIdentifierÍ"¾Í"Ä¦resultLªIdentifierÍ"ÅÍ"Ê¥sliceÂÂ’S§LiteralÍ"ËÍ"Ì ¡0S§LiteralÍ"ÎÍ"Ï¡5ÂN°MethodDefinitionÍ#Í& ÃÂLªIdentifierÍ#Í#­habitInsights¦methodO²FunctionExpressionÍ#Í& ÀÂÂÂ‘LªIdentifierÍ#Í#¨sessionsM®BlockStatementÍ# Í& ”U³VariableDeclarationÍ#+Í#]‘V²VariableDeclaratorÍ#1Í#\LªIdentifierÍ#1Í#;ªbestWindowR®CallExpressionÍ#>Í#\Q°MemberExpressionÍ#>Í#RLªIdentifierÍ#>Í#E§MetricsLªIdentifierÍ#FÍ#R¬goldenWindowÂÂ‘LªIdentifierÍ#SÍ#[¨sessionsÂ¥constU³VariableDeclarationÍ#gÍ#x‘V²VariableDeclaratorÍ#kÍ#wLªIdentifierÍ#kÍ#s¨bestRateS§LiteralÍ#vÍ#w ¡0£letW«IfStatementÍ#‚Í$ùT°BinaryExpressionÍ#†Í#›Q°MemberExpressionÍ#†Í#—LªIdentifierÍ#†Í#ªbestWindowLªIdentifierÍ#‘Í#—¦lengthÂÂ¡>S§LiteralÍ#šÍ#› ¡0M®BlockStatementÍ#Í$ù”U³VariableDeclarationÍ#¬Í#¸‘V²VariableDeclaratorÍ#°Í#·LªIdentifierÍ#°Í#³£sumS§LiteralÍ#¶Í#· ¡0£letU³VariableDeclarationÍ#ÆÍ#Ô‘V²VariableDeclaratorÍ#ÊÍ#ÓLªIdentifierÍ#ÊÍ#Ï¥countS§LiteralÍ#ÒÍ#Ó ¡0£letX®ForOfStatementÍ#âÍ$­ÂU³VariableDeclarationÍ#çÍ#î‘V²VariableDeclaratorÍ#íÍ#îLªIdentifierÍ#íÍ#î¡sÀ¥constLªIdentifierÍ#òÍ#ú¨sessionsM®BlockStatementÍ#üÍ$­‘W«IfStatementÍ$Í$T°BinaryExpressionÍ$Í$/R®CallExpressionÍ$Í$+Q°MemberExpressionÍ$Í$(LªIdentifierÍ$Í$§MetricsLªIdentifierÍ$Í$(­totalStudySecÂÂ‘LªIdentifierÍ$)Í$*¡sÂ¡>S§LiteralÍ$.Í$/ ¡0M®BlockStatementÍ$1Í$’Y³ExpressionStatementÍ$HÍ$mZ´AssignmentExpressionÍ$HÍ$l¢+=LªIdentifierÍ$HÍ$K£sumT°BinaryExpressionÍ$OÍ$lR®CallExpressionÍ$OÍ$fQ°MemberExpressionÍ$OÍ$cLªIdentifierÍ$OÍ$V§MetricsLªIdentifierÍ$WÍ$c¬netFocusRateÂÂ‘LªIdentifierÍ$dÍ$e¡sÂ¡*S§LiteralÍ$iÍ$lÌd£100Y³ExpressionStatementÍ$ƒÍ$‹]°UpdateExpressionÍ$ƒÍ$Š¢++ÂLªIdentifierÍ$ƒÍ$ˆ¥countÀY³ExpressionStatementÍ$»Í$îZ´AssignmentExpressionÍ$»Í$í¡=LªIdentifierÍ$»Í$Ã¨bestRateWµConditionalExpressionÍ$ÆÍ$íT°BinaryExpressionÍ$ÆÍ$ÏLªIdentifierÍ$ÆÍ$Ë¥count¡>S§LiteralÍ$ÎÍ$Ï ¡0R®CallExpressionÍ$ÒÍ$éQ°MemberExpressionÍ$ÒÍ$ÜLªIdentifierÍ$ÒÍ$Ö¤MathLªIdentifierÍ$×Í$Ü¥roundÂÂ‘T°BinaryExpressionÍ$İÍ$èLªIdentifierÍ$İÍ$à£sum¡/LªIdentifierÍ$ãÍ$è¥countÂS§LiteralÍ$ìÍ$í ¡0ÀP¯ReturnStatementÍ%Í%ùb°ObjectExpressionÍ%
+Í%ø•c¨PropertyÍ%Í%YÂÂÂLªIdentifierÍ%Í%#ªbestWindowWµConditionalExpressionÍ%%Í%YT°BinaryExpressionÍ%%Í%:Q°MemberExpressionÍ%%Í%6LªIdentifierÍ%%Í%/ªbestWindowLªIdentifierÍ%0Í%6¦lengthÂÂ¡>S§LiteralÍ%9Í%: ¡0LªIdentifierÍ%=Í%GªbestWindowS§LiteralÍ%JÍ%Y­08:00 - 10:00¯'08:00 - 10:00'¤initc¨PropertyÍ%hÍ%zÂÂÂLªIdentifierÍ%hÍ%p¨bestRateLªIdentifierÍ%rÍ%z¨bestRate¤initc¨PropertyÍ%‰Í%ÂÂÂLªIdentifierÍ%‰Í%’©lowWindowS§LiteralÍ%”Í%°æ™šé—´ 21 ç‚¹å²'æ™šé—´ 21 ç‚¹å'¤initc¨PropertyÍ%­Í%¼ÂÂÂLªIdentifierÍ%­Í%´§lowNoteS§LiteralÍ%¶Í%¼¬å®¹æ˜“åˆ†å¿ƒ®'å®¹æ˜“åˆ†å¿ƒ'¤initc¨PropertyÍ%ËÍ%íÂÂÂLªIdentifierÍ%ËÍ%Ñ¦adviceS§LiteralÍ%ÓÍ%íÙHéš¾é¢˜ä¼˜å…ˆå®‰æ’ä¸Šåˆæ”»å…‹ï¼Œæ™šé—´ä»¥å¤ä¹ å’Œè½»é‡æ•´ç†ä¸ºä¸»ã€‚ÙJ'éš¾é¢˜ä¼˜å…ˆå®‰æ’ä¸Šåˆæ”»å…‹ï¼Œæ™šé—´ä»¥å¤ä¹ å’Œè½»é‡æ•´ç†ä¸ºä¸»ã€‚'¤initN°MethodDefinitionÍ&€Í*'ÃÂLªIdentifierÍ&‡Í&–¯bestFocusPeriod¦methodO²FunctionExpressionÍ&–Í*'ÀÂÂÂ‘LªIdentifierÍ&—Í&˜¡sM®BlockStatementÍ&šÍ*'›U³VariableDeclarationÍ&¥Í&»‘V²VariableDeclaratorÍ&«Í&ºLªIdentifierÍ&«Í&­¢tlQ°MemberExpressionÍ&°Í&ºLªIdentifierÍ&°Í&±¡sLªIdentifierÍ&²Í&º¨timelineÂÂ¥constW«IfStatementÍ&ÅÍ&şT°BinaryExpressionÍ&ÉÍ&ØQ°MemberExpressionÍ&ÉÍ&ÒLªIdentifierÍ&ÉÍ&Ë¢tlLªIdentifierÍ&ÌÍ&Ò¦lengthÂÂ£===S§LiteralÍ&×Í&Ø ¡0M®BlockStatementÍ&ÚÍ&ş‘P¯ReturnStatementÍ&éÍ&óS§LiteralÍ&ğÍ&ò ¢''ÀU³VariableDeclarationÍ'Í'‘V²VariableDeclaratorÍ'Í'LªIdentifierÍ'Í'©bestStartS§LiteralÍ'Í' ¡0£letU³VariableDeclarationÍ'$Í'4‘V²VariableDeclaratorÍ'(Í'3LªIdentifierÍ'(Í'/§bestLenS§LiteralÍ'2Í'3 ¡0£letU³VariableDeclarationÍ'>Í'O‘V²VariableDeclaratorÍ'BÍ'NLªIdentifierÍ'BÍ'J¨curStartS§LiteralÍ'MÍ'N ¡0£letU³VariableDeclarationÍ'YÍ'h‘V²VariableDeclaratorÍ']Í'gLªIdentifierÍ']Í'c¦curLenS§LiteralÍ'fÍ'g ¡0£let^¬ForStatementÍ'rÍ)<U³VariableDeclarationÍ'wÍ'€‘V²VariableDeclaratorÍ'{Í'€LªIdentifierÍ'{Í'|¡iS§LiteralÍ'Í'€ ¡0£letT°BinaryExpressionÍ'‚Í'LªIdentifierÍ'‚Í'ƒ¡i¡<Q°MemberExpressionÍ'†Í'LªIdentifierÍ'†Í'ˆ¢tlLªIdentifierÍ'‰Í'¦lengthÂÂ]°UpdateExpressionÍ'‘Í'”¢++ÂLªIdentifierÍ'‘Í'’¡iM®BlockStatementÍ'–Í)<’U³VariableDeclarationÍ'¥Í'µ‘V²VariableDeclaratorÍ'«Í'´LªIdentifierÍ'«Í'¬¡pQ°MemberExpressionÍ'¯Í'´LªIdentifierÍ'¯Í'±¢tlLªIdentifierÍ'²Í'³¡iÃÂ¥constW«IfStatementÍ'ÃÍ)1T°BinaryExpressionÍ'ÇÍ'ÔQ°MemberExpressionÍ'ÇÍ'ÎLªIdentifierÍ'ÇÍ'È¡pLªIdentifierÍ'ÉÍ'Î¥levelÂÂ¢>=S§LiteralÍ'ÒÍ'ÔÌF¢70M®BlockStatementÍ'ÖÍ(ñ“W«IfStatementÍ'éÍ(9T°BinaryExpressionÍ'íÍ'ùLªIdentifierÍ'íÍ'ó¦curLen£===S§LiteralÍ'øÍ'ù ¡0M®BlockStatementÍ'ûÍ(9‘Y³ExpressionStatementÍ(Í(&Z´AssignmentExpressionÍ(Í(%¡=LªIdentifierÍ(Í(¨curStartQ°MemberExpressionÍ(Í(%LªIdentifierÍ(Í(¡pLªIdentifierÍ(Í(%¦minuteÂÂÀY³ExpressionStatementÍ(KÍ(T]°UpdateExpressionÍ(KÍ(S¢++ÂLªIdentifierÍ(KÍ(Q¦curLenW«IfStatementÍ(fÍ(âT°BinaryExpressionÍ(jÍ(zLªIdentifierÍ(jÍ(p¦curLen¡>LªIdentifierÍ(sÍ(z§bestLenM®BlockStatementÍ(|Í(â’Y³ExpressionStatementÍ(“Í(¤Z´AssignmentExpressionÍ(“Í(£¡=LªIdentifierÍ(“Í(š§bestLenLªIdentifierÍ(Í(£¦curLenY³ExpressionStatementÍ(ºÍ(ÏZ´AssignmentExpressionÍ(ºÍ(Î¡=LªIdentifierÍ(ºÍ(Ã©bestStartLªIdentifierÍ(ÆÍ(Î¨curStartÀM®BlockStatementÍ)Í)1‘Y³ExpressionStatementÍ)Í)"Z´AssignmentExpressionÍ)Í)!¡=LªIdentifierÍ)Í)¦curLenS§LiteralÍ) Í)! ¡0W«IfStatementÍ)FÍ)}T°BinaryExpressionÍ)JÍ)WLªIdentifierÍ)JÍ)Q§bestLen£===S§LiteralÍ)VÍ)W ¡0M®BlockStatementÍ)YÍ)}‘P¯ReturnStatementÍ)hÍ)rS§LiteralÍ)oÍ)q ¢''ÀU³VariableDeclarationÍ)‡Í)³‘V²VariableDeclaratorÍ)Í)²LªIdentifierÍ)Í)—ªstartClockR®CallExpressionÍ)šÍ)²Q°MemberExpressionÍ)šÍ)§LªIdentifierÍ)šÍ)¡§MetricsLªIdentifierÍ)¢Í)§¥clockÂÂ‘LªIdentifierÍ)¨Í)±©bestStartÂ¥constU³VariableDeclarationÍ)½Í)ñ‘V²VariableDeclaratorÍ)ÃÍ)ğLªIdentifierÍ)ÃÍ)Ë¨endClockR®CallExpressionÍ)ÎÍ)ğQ°MemberExpressionÍ)ÎÍ)ÛLªIdentifierÍ)ÎÍ)Õ§MetricsLªIdentifierÍ)ÖÍ)Û¥clockÂÂ‘T°BinaryExpressionÍ)ÜÍ)ïLªIdentifierÍ)ÜÍ)å©bestStart¡+LªIdentifierÍ)èÍ)ï§bestLenÂ¥constP¯ReturnStatementÍ)ûÍ* _¯TemplateLiteralÍ*Í*’LªIdentifierÍ*Í*ªstartClockLªIdentifierÍ*Í*¨endClock“`¯TemplateElementÍ*Í*a  Â`¯TemplateElementÍ*Í*a£ - £ - Â`¯TemplateElementÍ*Í*a  ÃN°MethodDefinitionÍ*MÍ+)ÃÂLªIdentifierÍ*TÍ*a­fatigueMinute¦methodO²FunctionExpressionÍ*aÍ+)ÀÂÂÂ‘LªIdentifierÍ*bÍ*c¡sM®BlockStatementÍ*eÍ+)’X®ForOfStatementÍ*pÍ+ÂU³VariableDeclarationÍ*uÍ*|‘V²VariableDeclaratorÍ*{Í*|LªIdentifierÍ*{Í*|¡pÀ¥constQ°MemberExpressionÍ*€Í*ŠLªIdentifierÍ*€Í*¡sLªIdentifierÍ*‚Í*Š¨timelineÂÂM®BlockStatementÍ*ŒÍ+‘W«IfStatementÍ*›Í+T±LogicalExpressionÍ*ŸÍ*ĞT°BinaryExpressionÍ*ŸÍ*ÀQ°MemberExpressionÍ*ŸÍ*¦LªIdentifierÍ*ŸÍ* ¡pLªIdentifierÍ*¡Í*¦¥stateÂÂ£===Q°MemberExpressionÍ*«Í*ÀLªIdentifierÍ*«Í*µªFocusStateLªIdentifierÍ*¶Í*ÀªDISTRACTEDÂÂ¢||T°BinaryExpressionÍ*ÄÍ*ĞQ°MemberExpressionÍ*ÄÍ*ËLªIdentifierÍ*ÄÍ*Å¡pLªIdentifierÍ*ÆÍ*Ë¥levelÂÂ¡<S§LiteralÍ*ÎÍ*Ğ-¢45M®BlockStatementÍ*ÒÍ+‘P¯ReturnStatementÍ*åÍ*õQ°MemberExpressionÍ*ìÍ*ôLªIdentifierÍ*ìÍ*í¡pLªIdentifierÍ*îÍ*ô¦minuteÂÂÀP¯ReturnStatementÍ+Í+"S§LiteralÍ+ Í+! ¡0N°MethodDefinitionÍ+LÍ-xÃÂLªIdentifierÍ+SÍ+f³distractionTriggers¦methodO²FunctionExpressionÍ+fÍ-xÀÂÂÂ‘LªIdentifierÍ+gÍ+h¡sM®BlockStatementÍ+jÍ-x”U³VariableDeclarationÍ+uÍ+…‘V²VariableDeclaratorÍ+{Í+„LªIdentifierÍ+{Í+¤seend¯ArrayExpressionÍ+‚Í+„¥constX®ForOfStatementÍ+Í,ïÂU³VariableDeclarationÍ+”Í+›‘V²VariableDeclaratorÍ+šÍ+›LªIdentifierÍ+šÍ+›¡eÀ¥constQ°MemberExpressionÍ+ŸÍ+§LªIdentifierÍ+ŸÍ+ ¡sLªIdentifierÍ+¡Í+§¦eventsÂÂM®BlockStatementÍ+©Í,ï‘W«IfStatementÍ+¸Í,äT±LogicalExpressionÍ+¼Í,T°BinaryExpressionÍ+¼Í+æQ°MemberExpressionÍ+¼Í+ÃLªIdentifierÍ+¼Í+½¡eLªIdentifierÍ+¾Í+Ã¥stateÂÂ£===Q°MemberExpressionÍ+ÈÍ+æLªIdentifierÍ+ÈÍ+ÒªFocusStateLªIdentifierÍ+ÓÍ+æ³SLIGHTLY_DISTRACTEDÂÂ¢||T°BinaryExpressionÍ+êÍ,Q°MemberExpressionÍ+êÍ+ñLªIdentifierÍ+êÍ+ë¡eLªIdentifierÍ+ìÍ+ñ¥stateÂÂ£===Q°MemberExpressionÍ+öÍ,LªIdentifierÍ+öÍ, ªFocusStateLªIdentifierÍ,Í,ªDISTRACTEDÂÂM®BlockStatementÍ,Í,ä’U³VariableDeclarationÍ, Í,X‘V²VariableDeclaratorÍ,&Í,WLªIdentifierÍ,&Í,+¥labelWµConditionalExpressionÍ,.Í,WT°BinaryExpressionÍ,.Í,CQ°MemberExpressionÍ,.Í,6LªIdentifierÍ,.Í,/¡eLªIdentifierÍ,0Í,6¦sourceÂÂ£===S§LiteralÍ,;Í,C¦CAMERA¨'CAMERA'S§LiteralÍ,FÍ,N²è§†çº¿ç¦»å¼€å±å¹•´'è§†çº¿ç¦»å¼€å±å¹•'S§LiteralÍ,QÍ,W¬çŠ¶æ€æ³¢åŠ¨®'çŠ¶æ€æ³¢åŠ¨'¥constW«IfStatementÍ,jÍ,ÕT±LogicalExpressionÍ,nÍ,˜T°BinaryExpressionÍ,nÍ,…R®CallExpressionÍ,nÍ,Q°MemberExpressionÍ,nÍ,zLªIdentifierÍ,nÍ,r¤seenLªIdentifierÍ,sÍ,z§indexOfÂÂ‘LªIdentifierÍ,{Í,€¥labelÂ¡<S§LiteralÍ,„Í,… ¡0¢&&T°BinaryExpressionÍ,‰Í,˜Q°MemberExpressionÍ,‰Í,”LªIdentifierÍ,‰Í,¤seenLªIdentifierÍ,Í,”¦lengthÂÂ¡<S§LiteralÍ,—Í,˜¡3M®BlockStatementÍ,šÍ,Õ‘Y³ExpressionStatementÍ,±Í,ÂR®CallExpressionÍ,±Í,ÁQ°MemberExpressionÍ,±Í,ºLªIdentifierÍ,±Í,µ¤seenLªIdentifierÍ,¶Í,º¤pushÂÂ‘LªIdentifierÍ,»Í,À¥labelÂÀÀW«IfStatementÍ,ùÍ-[T±LogicalExpressionÍ,ıÍ-+T°BinaryExpressionÍ,ıÍ-Q°MemberExpressionÍ,ıÍ-LªIdentifierÍ,ıÍ-¤seenLªIdentifierÍ-Í-¦lengthÂÂ£===S§LiteralÍ-Í- ¡0¢&&T°BinaryExpressionÍ-Í-+Q°MemberExpressionÍ-Í-'LªIdentifierÍ-Í-¡sLªIdentifierÍ-Í-'³distractionDurationÂÂ¡>S§LiteralÍ-*Í-+ ¡0M®BlockStatementÍ--Í-[‘Y³ExpressionStatementÍ-<Í-PR®CallExpressionÍ-<Í-OQ°MemberExpressionÍ-<Í-ELªIdentifierÍ-<Í-@¤seenLªIdentifierÍ-AÍ-E¤pushÂÂ‘S§LiteralÍ-FÍ-N²è§†çº¿ç¦»å¼€å±å¹•´'è§†çº¿ç¦»å¼€å±å¹•'ÂÀP¯ReturnStatementÍ-eÍ-qLªIdentifierÍ-lÍ-p¤seenN°MethodDefinitionÍ-·Í.ÃÂLªIdentifierÍ-¾Í-Ã¥clamp¦methodO²FunctionExpressionÍ-ÃÍ.ÀÂÂÂ“LªIdentifierÍ-ÄÍ-Å¡vLªIdentifierÍ-ÇÍ-É¢loLªIdentifierÍ-ËÍ-Í¢hiM®BlockStatementÍ-ÏÍ.‘P¯ReturnStatementÍ-ÚÍ-ÿR®CallExpressionÍ-áÍ-şQ°MemberExpressionÍ-áÍ-éLªIdentifierÍ-áÍ-å¤MathLªIdentifierÍ-æÍ-é£maxÂÂ’LªIdentifierÍ-êÍ-ì¢loR®CallExpressionÍ-îÍ-ıQ°MemberExpressionÍ-îÍ-öLªIdentifierÍ-îÍ-ò¤MathLªIdentifierÍ-óÍ-ö£minÂÂ’LªIdentifierÍ-÷Í-ù¢hiLªIdentifierÍ-ûÍ-ü¡vÂÂN°MethodDefinitionÍ.Í.âÃÂLªIdentifierÍ.Í.¤mean¦methodO²FunctionExpressionÍ.Í.âÀÂÂÂ‘LªIdentifierÍ.Í.£arrM®BlockStatementÍ.Í.â”W«IfStatementÍ.(Í.aT°BinaryExpressionÍ.,Í.<Q°MemberExpressionÍ.,Í.6LªIdentifierÍ.,Í./£arrLªIdentifierÍ.0Í.6¦lengthÂÂ£===S§LiteralÍ.;Í.< ¡0M®BlockStatementÍ.>Í.a‘P¯ReturnStatementÍ.MÍ.VS§LiteralÍ.TÍ.U ¡0ÀU³VariableDeclarationÍ.kÍ.w‘V²VariableDeclaratorÍ.oÍ.vLªIdentifierÍ.oÍ.r£sumS§LiteralÍ.uÍ.v ¡0£letX®ForOfStatementÍ.Í.¹ÂU³VariableDeclarationÍ.†Í.‘V²VariableDeclaratorÍ.ŒÍ.LªIdentifierÍ.ŒÍ.¡vÀ¥constLªIdentifierÍ.‘Í.”£arrM®BlockStatementÍ.–Í.¹‘Y³ExpressionStatementÍ.¥Í.®Z´AssignmentExpressionÍ.¥Í.­¢+=LªIdentifierÍ.¥Í.¨£sumLªIdentifierÍ.¬Í.­¡vP¯ReturnStatementÍ.ÃÍ.ÛT°BinaryExpressionÍ.ÊÍ.ÚLªIdentifierÍ.ÊÍ.Í£sum¡/Q°MemberExpressionÍ.ĞÍ.ÚLªIdentifierÍ.ĞÍ.Ó£arrLªIdentifierÍ.ÔÍ.Ú¦lengthÂÂN°MethodDefinitionÍ.èÍ0ÃÂLªIdentifierÍ.ïÍ.õ¦stddev¦methodO²FunctionExpressionÍ.õÍ0ÀÂÂÂ‘LªIdentifierÍ.öÍ.ù£arrM®BlockStatementÍ.ûÍ0•W«IfStatementÍ/Í/?T°BinaryExpressionÍ/
+Í/Q°MemberExpressionÍ/
+Í/LªIdentifierÍ/
+Í/£arrLªIdentifierÍ/Í/¦lengthÂÂ£===S§LiteralÍ/Í/ ¡0M®BlockStatementÍ/Í/?‘P¯ReturnStatementÍ/+Í/4S§LiteralÍ/2Í/3 ¡0ÀU³VariableDeclarationÍ/IÍ/e‘V²VariableDeclaratorÍ/OÍ/dLªIdentifierÍ/OÍ/P¡mR®CallExpressionÍ/SÍ/dQ°MemberExpressionÍ/SÍ/_LªIdentifierÍ/SÍ/Z§MetricsLªIdentifierÍ/[Í/_¤meanÂÂ‘LªIdentifierÍ/`Í/c£arrÂ¥constU³VariableDeclarationÍ/oÍ/{‘V²VariableDeclaratorÍ/sÍ/zLªIdentifierÍ/sÍ/v£accS§LiteralÍ/yÍ/z ¡0£letX®ForOfStatementÍ/…Í/ÍÂU³VariableDeclarationÍ/ŠÍ/‘‘V²VariableDeclaratorÍ/Í/‘LªIdentifierÍ/Í/‘¡vÀ¥constLªIdentifierÍ/•Í/˜£arrM®BlockStatementÍ/šÍ/Í‘Y³ExpressionStatementÍ/©Í/ÂZ´AssignmentExpressionÍ/©Í/Á¢+=LªIdentifierÍ/©Í/¬£accT°BinaryExpressionÍ/°Í/ÁT°BinaryExpressionÍ/±Í/¶LªIdentifierÍ/±Í/²¡v¡-LªIdentifierÍ/µÍ/¶¡m¡*T°BinaryExpressionÍ/»Í/ÀLªIdentifierÍ/»Í/¼¡v¡-LªIdentifierÍ/¿Í/À¡mP¯ReturnStatementÍ/×Í/úR®CallExpressionÍ/ŞÍ/ùQ°MemberExpressionÍ/ŞÍ/çLªIdentifierÍ/ŞÍ/â¤MathLªIdentifierÍ/ãÍ/ç¤sqrtÂÂ‘T°BinaryExpressionÍ/èÍ/øLªIdentifierÍ/èÍ/ë£acc¡/Q°MemberExpressionÍ/îÍ/øLªIdentifierÍ/îÍ/ñ£arrLªIdentifierÍ/òÍ/ø¦lengthÂÂÂN°MethodDefinitionÍ0Í1ÃÂLªIdentifierÍ0Í0¦median¦methodO²FunctionExpressionÍ0Í1ÀÂÂÂ‘LªIdentifierÍ0Í0£arrM®BlockStatementÍ0Í1”W«IfStatementÍ0%Í0^T°BinaryExpressionÍ0)Í09Q°MemberExpressionÍ0)Í03LªIdentifierÍ0)Í0,£arrLªIdentifierÍ0-Í03¦lengthÂÂ£===S§LiteralÍ08Í09 ¡0M®BlockStatementÍ0;Í0^‘P¯ReturnStatementÍ0JÍ0SS§LiteralÍ0QÍ0R ¡0ÀU³VariableDeclarationÍ0hÍ0”‘V²VariableDeclaratorÍ0nÍ0“LªIdentifierÍ0nÍ0o¡aR®CallExpressionÍ0rÍ0“Q°MemberExpressionÍ0rÍ0‚R®CallExpressionÍ0rÍ0}Q°MemberExpressionÍ0rÍ0{LªIdentifierÍ0rÍ0u£arrLªIdentifierÍ0vÍ0{¥sliceÂÂÂLªIdentifierÍ0~Í0‚¤sortÂÂ‘O·ArrowFunctionExpressionÍ0ƒÍ0’ÀÃÂÂ’LªIdentifierÍ0„Í0…¡xLªIdentifierÍ0‡Í0ˆ¡yT°BinaryExpressionÍ0Í0’LªIdentifierÍ0Í0¡x¡-LªIdentifierÍ0‘Í0’¡yÂ¥constU³VariableDeclarationÍ0Í0Ã‘V²VariableDeclaratorÍ0¤Í0ÂLªIdentifierÍ0¤Í0§£midR®CallExpressionÍ0ªÍ0ÂQ°MemberExpressionÍ0ªÍ0´LªIdentifierÍ0ªÍ0®¤MathLªIdentifierÍ0¯Í0´¥floorÂÂ‘T°BinaryExpressionÍ0µÍ0ÁQ°MemberExpressionÍ0µÍ0½LªIdentifierÍ0µÍ0¶¡aLªIdentifierÍ0·Í0½¦lengthÂÂ¡/S§LiteralÍ0ÀÍ0Á¡2Â¥constP¯ReturnStatementÍ0ÍÍ1WµConditionalExpressionÍ0ÔÍ1T°BinaryExpressionÍ0ÔÍ0æT°BinaryExpressionÍ0ÔÍ0àQ°MemberExpressionÍ0ÔÍ0ÜLªIdentifierÍ0ÔÍ0Õ¡aLªIdentifierÍ0ÖÍ0Ü¦lengthÂÂ¡%S§LiteralÍ0ßÍ0à¡2£===S§LiteralÍ0åÍ0æ ¡0T°BinaryExpressionÍ0éÍ1T°BinaryExpressionÍ0êÍ0ıQ°MemberExpressionÍ0êÍ0ôLªIdentifierÍ0êÍ0ë¡aT°BinaryExpressionÍ0ìÍ0óLªIdentifierÍ0ìÍ0ï£mid¡-S§LiteralÍ0òÍ0ó¡1ÃÂ¡+Q°MemberExpressionÍ0÷Í0ıLªIdentifierÍ0÷Í0ø¡aLªIdentifierÍ0ùÍ0ü£midÃÂ¡/S§LiteralÍ1Í1¡2Q°MemberExpressionÍ1Í1LªIdentifierÍ1Í1¡aLªIdentifierÍ1Í1
+£midÃÂN°MethodDefinitionÍ1Í1âÃÂLªIdentifierÍ1 Í1%¥clock¦methodO²FunctionExpressionÍ1%Í1âÀÂÂÂ‘LªIdentifierÍ1&Í1.¨totalMinM®BlockStatementÍ10Í1â“U³VariableDeclarationÍ1;Í1d‘V²VariableDeclaratorÍ1AÍ1cLªIdentifierÍ1AÍ1B¡hT°BinaryExpressionÍ1EÍ1cR®CallExpressionÍ1EÍ1^Q°MemberExpressionÍ1EÍ1OLªIdentifierÍ1EÍ1I¤MathLªIdentifierÍ1JÍ1O¥floorÂÂ‘T°BinaryExpressionÍ1PÍ1]LªIdentifierÍ1PÍ1X¨totalMin¡/S§LiteralÍ1[Í1]<¢60Â¡%S§LiteralÍ1aÍ1c¢24¥constU³VariableDeclarationÍ1nÍ1†‘V²VariableDeclaratorÍ1tÍ1…LªIdentifierÍ1tÍ1u¡mT°BinaryExpressionÍ1xÍ1…LªIdentifierÍ1xÍ1€¨totalMin¡%S§LiteralÍ1ƒÍ1…<¢60¥constP¯ReturnStatementÍ1Í1Û_¯TemplateLiteralÍ1—Í1Ú’R®CallExpressionÍ1šÍ1·Q°MemberExpressionÍ1šÍ1¯R®CallExpressionÍ1šÍ1¦Q°MemberExpressionÍ1šÍ1¤LªIdentifierÍ1šÍ1›¡hLªIdentifierÍ1œÍ1¤¨toStringÂÂÂLªIdentifierÍ1§Í1¯¨padStartÂÂ’S§LiteralÍ1°Í1±¡2S§LiteralÍ1³Í1¶¡0£'0'ÂR®CallExpressionÍ1»Í1ØQ°MemberExpressionÍ1»Í1ĞR®CallExpressionÍ1»Í1ÇQ°MemberExpressionÍ1»Í1ÅLªIdentifierÍ1»Í1¼¡mLªIdentifierÍ1½Í1Å¨toStringÂÂÂLªIdentifierÍ1ÈÍ1Ğ¨padStartÂÂ’S§LiteralÍ1ÑÍ1Ò¡2S§LiteralÍ1ÔÍ1×¡0£'0'Â“`¯TemplateElementÍ1˜Í1˜a  Â`¯TemplateElementÍ1¸Í1¹a¡:¡:Â`¯TemplateElementÍ1ÙÍ1Ùa  ÃN°MethodDefinitionÍ2#Í2ÒÃÂLªIdentifierÍ2*Í25«buildEstMap¦methodO²FunctionExpressionÍ25Í2ÒÀÂÂÂ‘LªIdentifierÍ26Í2;¥tasksM®BlockStatementÍ2=Í2Ò“U³VariableDeclarationÍ2HÍ2\‘V²VariableDeclaratorÍ2NÍ2[LªIdentifierÍ2NÍ2O¡m[­NewExpressionÍ2RÍ2[LªIdentifierÍ2VÍ2Y£Map¥constX®ForOfStatementÍ2fÍ2¸ÂU³VariableDeclarationÍ2kÍ2r‘V²VariableDeclaratorÍ2qÍ2rLªIdentifierÍ2qÍ2r¡tÀ¥constLªIdentifierÍ2vÍ2{¥tasksM®BlockStatementÍ2}Í2¸‘Y³ExpressionStatementÍ2ŒÍ2­R®CallExpressionÍ2ŒÍ2¬Q°MemberExpressionÍ2ŒÍ2‘LªIdentifierÍ2ŒÍ2¡mLªIdentifierÍ2Í2‘£setÂÂ’Q°MemberExpressionÍ2’Í2–LªIdentifierÍ2’Í2“¡tLªIdentifierÍ2”Í2–¢idÂÂQ°MemberExpressionÍ2˜Í2«LªIdentifierÍ2˜Í2™¡tLªIdentifierÍ2šÍ2«±estimatedDurationÂÂÂP¯ReturnStatementÍ2ÂÍ2ËLªIdentifierÍ2ÉÍ2Ê¡mÀ’Ôrf•¤type¥start£endªspecifiers¦source±ImportDeclaration -‘Ôrg•¤type¥start£end¨imported¥local¯ImportSpecifier	LªIdentifier	ªFocusStateLªIdentifier	ªFocusStateS§Literal,¯../models/Enums±'../models/Enums'f±ImportDeclaration/Ì^‘g¯ImportSpecifier8ÌALªIdentifier8ÌA©TimeUtilsLªIdentifier8ÌA©TimeUtilsS§LiteralÌIÌ]²../utils/TimeUtils´'../utils/TimeUtils'

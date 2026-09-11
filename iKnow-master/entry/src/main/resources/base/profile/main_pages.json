@@ -9,6 +9,9 @@
     "pages/Device",
     "pages/Settings",
     "pages/Privacy",
-    "pages/AIChat"
+    "pages/AIChat",
+    "pages/Review",
+    "pages/AICompanion",
+    "pages/Placeholder"
   ]
 }

@@ -2,6 +2,7 @@ import { FocusState, FocusSource } from "@normalized:N&&&entry/src/main/ets/mode
 import { FocusDetectionResult, MotionData } from "@normalized:N&&&entry/src/main/ets/services/ServiceTypes&";
 import type { FocusSensor } from "@normalized:N&&&entry/src/main/ets/services/ServiceTypes&";
 import { DemoFlag } from "@normalized:N&&&entry/src/main/ets/common/Constants&";
+import { PermissionService } from "@normalized:N&&&entry/src/main/ets/services/PermissionService&";
 /**
  * 专注检测服务 —— Mock 摄像头视觉
  * 未来替换为真实摄像头视觉检测时，仅需替换本类实现。
@@ -37,6 +38,10 @@ export class FocusDetectionService implements FocusSensor {
     /** 启动自动检测：每 DETECT_INTERVAL 回调一次 */
     start(cb: (r: FocusDetectionResult) => void): void {
         this.callback = cb;
+        // 硬规则 §4：未授权摄像头则不启动视觉检测，由调用方降级为"仅计时模式"
+        if (!PermissionService.getInstance().snapshot().camera) {
+            return;
+        }
         this.startTs = Date.now();
         if (this.timerId >= 0) {
             clearInterval(this.timerId);
@@ -48,6 +53,12 @@ export class FocusDetectionService implements FocusSensor {
         }, DemoFlag.DETECT_INTERVAL);
         if (this.callback !== null) {
             this.callback(this.current());
+        }
+    }
+    /** 由 PermissionService 在授权变化时调用：关闭则立即停止检测 */
+    setEnabled(enabled: boolean): void {
+        if (!enabled) {
+            this.stop();
         }
     }
     stop(): void {

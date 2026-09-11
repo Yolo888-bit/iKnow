@@ -8,6 +8,7 @@ interface Mine_Params {
 import router from "@ohos:router";
 import { Colors, Radius, Spacing } from "@normalized:N&&&entry/src/main/ets/common/Theme&";
 import { StorageKey } from "@normalized:N&&&entry/src/main/ets/common/Constants&";
+import { NavParams } from "@normalized:N&&&entry/src/main/ets/models/NavParams&";
 export class Mine extends ViewPU {
     constructor(parent, params, __localStorage, elmtId = -1, paramsLambda = undefined, extraInfo) {
         super(parent, __localStorage, elmtId, extraInfo);
@@ -47,7 +48,7 @@ export class Mine extends ViewPU {
     set avatar(newValue: string) {
         this.__avatar.set(newValue);
     }
-    menuItem(icon: string, title: string, subtitle: string, url: string, parent = null) {
+    menuItem(icon: string, title: string, subtitle: string, url: string, paramTitle: string, parent = null) {
         this.observeComponentCreation2((elmtId, isInitialRender) => {
             Row.create();
             Row.width('100%');
@@ -55,7 +56,12 @@ export class Mine extends ViewPU {
             Row.backgroundColor(Colors.CARD);
             Row.borderRadius(Radius.MD);
             Row.onClick(() => {
-                router.pushUrl({ url: url });
+                if (paramTitle.length > 0) {
+                    router.pushUrl({ url: url, params: new NavParams(paramTitle) });
+                }
+                else {
+                    router.pushUrl({ url: url });
+                }
             });
         }, Row);
         this.observeComponentCreation2((elmtId, isInitialRender) => {
@@ -154,11 +160,12 @@ export class Mine extends ViewPU {
             // 菜单
             Column.width('100%');
         }, Column);
-        this.menuItem.bind(this)('🕐', '个人专注画像', '五维雷达 · 成长趋势', 'pages/FocusProfile');
-        this.menuItem.bind(this)('💡', 'AI 学伴人格', '选择适合你的陪伴方式', 'pages/Settings');
-        this.menuItem.bind(this)('⌚', '设备连接', '摄像头 · 智能手表', 'pages/Device');
-        this.menuItem.bind(this)('🔒', '隐私与数据', '数据授权与管理', 'pages/Privacy');
-        this.menuItem.bind(this)('⚙️', '设置', '通用设置 · 数据清除', 'pages/Settings');
+        this.menuItem.bind(this)('💡', 'AI 学伴', '长期陪伴 · 智能答疑', 'pages/AICompanion', '');
+        this.menuItem.bind(this)('⌚', '设备', '摄像头 · 智能手表', 'pages/Device', '');
+        this.menuItem.bind(this)('🔔', '通知', '专注提醒与消息', 'pages/Placeholder', '通知');
+        this.menuItem.bind(this)('🔒', '隐私', '授权与数据权限', 'pages/Privacy', '');
+        this.menuItem.bind(this)('🗂️', '数据管理', '导出 · 清除学习数据', 'pages/Privacy', '');
+        this.menuItem.bind(this)('ℹ️', '关于', '版本与开发者信息', 'pages/Placeholder', '关于');
         // 菜单
         Column.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {

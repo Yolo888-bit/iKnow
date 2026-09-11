@@ -1,6 +1,6 @@
 {
 	"CommonInfo":{
-		"project.ide.version":"26.0.0.461",
+		"project.ide.version":"6.1.1.300",
 		"current.select.product":"default",
 		"current.select.buildMode":"",
 		"crossplatform.projectType":""
@@ -9,9 +9,8 @@
 		"SELECT_BUILD_PRODUCT":"default",
 		"BUNDLE_NAME":"com.iknow.study",
 		"BUILD_PATH":{
-			"OUTPUT_PATH":"E:\\iKnow\\iKnow-master\\build\\outputs\\default"
+			"OUTPUT_PATH":"D:\\iKnow\\iKnow-master\\build\\outputs\\default"
 		},
 		"SELECT_BUILD_MODE":""
-	},
-	"CertConfig":{}
+	}
 }

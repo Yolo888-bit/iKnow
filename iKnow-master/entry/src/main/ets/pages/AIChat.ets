@@ -9,6 +9,7 @@ import { MessageRole } from '../models/Enums'
 import { IdUtils } from '../utils/IdUtils'
 import { TimeUtils } from '../utils/TimeUtils'
 import { AITag } from '../components/AITag'
+import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
 
 /** 专注中的 AI 答疑（计时不中断） */
 @Entry
@@ -178,6 +179,7 @@ export struct AIChat {
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+    AIFirstDisclaimer()
     }
     .width('100%')
     .height('100%')

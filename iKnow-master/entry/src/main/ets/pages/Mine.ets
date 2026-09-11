@@ -1,6 +1,7 @@
 import { router } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
+import { NavParams } from '../models/NavParams'
 
 /** 我的 */
 @Component
@@ -9,7 +10,7 @@ export struct Mine {
   @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
 
   @Builder
-  menuItem(icon: string, title: string, subtitle: string, url: string) {
+  menuItem(icon: string, title: string, subtitle: string, url: string, paramTitle: string) {
     Row() {
       Text(icon).fontSize(22)
       Column() {
@@ -35,7 +36,11 @@ export struct Mine {
     .backgroundColor(Colors.CARD)
     .borderRadius(Radius.MD)
     .onClick(() => {
-      router.pushUrl({ url: url })
+      if (paramTitle.length > 0) {
+        router.pushUrl({ url: url, params: new NavParams(paramTitle) })
+      } else {
+        router.pushUrl({ url: url })
+      }
     })
   }
 
@@ -71,11 +76,12 @@ export struct Mine {
 
         // 菜单
         Column({ space: Spacing.SM }) {
-          this.menuItem('🕐', '个人专注画像', '五维雷达 · 成长趋势', 'pages/FocusProfile')
-          this.menuItem('💡', 'AI 学伴人格', '选择适合你的陪伴方式', 'pages/Settings')
-          this.menuItem('⌚', '设备连接', '摄像头 · 智能手表', 'pages/Device')
-          this.menuItem('🔒', '隐私与数据', '数据授权与管理', 'pages/Privacy')
-          this.menuItem('⚙️', '设置', '通用设置 · 数据清除', 'pages/Settings')
+          this.menuItem('💡', 'AI 学伴', '长期陪伴 · 智能答疑', 'pages/AICompanion', '')
+          this.menuItem('⌚', '设备', '摄像头 · 智能手表', 'pages/Device', '')
+          this.menuItem('🔔', '通知', '专注提醒与消息', 'pages/Placeholder', '通知')
+          this.menuItem('🔒', '隐私', '授权与数据权限', 'pages/Privacy', '')
+          this.menuItem('🗂️', '数据管理', '导出 · 清除学习数据', 'pages/Privacy', '')
+          this.menuItem('ℹ️', '关于', '版本与开发者信息', 'pages/Placeholder', '关于')
         }
         .width('100%')
 

@@ -5,6 +5,7 @@ interface Focus_Params {
     elapsed?: number;
     net?: number;
     focusState?: string;
+    perceptionMode?: string;
     taskTitle?: string;
     taskSubject?: string;
     showEndConfirm?: boolean;
@@ -16,6 +17,7 @@ import { StorageKey } from "@normalized:N&&&entry/src/main/ets/common/Constants&
 import { AppStore } from "@normalized:N&&&entry/src/main/ets/store/AppStore&";
 import { FocusController } from "@normalized:N&&&entry/src/main/ets/services/FocusController&";
 import { FocusDetectionService } from "@normalized:N&&&entry/src/main/ets/services/FocusDetectionService&";
+import { SensorService } from "@normalized:N&&&entry/src/main/ets/services/SensorService&";
 import type { Task } from '../models/Task';
 import { TimeUtils } from "@normalized:N&&&entry/src/main/ets/utils/TimeUtils&";
 import { FocusStateUi } from "@normalized:N&&&entry/src/main/ets/common/FocusStateUi&";
@@ -31,6 +33,7 @@ export class Focus extends ViewPU {
         this.__elapsed = this.createStorageProp(StorageKey.FOCUS_ELAPSED, 0, "elapsed");
         this.__net = this.createStorageProp(StorageKey.FOCUS_NET, 0, "net");
         this.__focusState = this.createStorageProp(StorageKey.FOCUS_STATE, 'FOCUSED', "focusState");
+        this.__perceptionMode = this.createStorageProp(StorageKey.PERCEPTION_MODE, 'PERCEPTION_FULL', "perceptionMode");
         this.__taskTitle = new ObservedPropertySimplePU('自由专注', this, "taskTitle");
         this.__taskSubject = new ObservedPropertySimplePU('无任务', this, "taskSubject");
         this.__showEndConfirm = new ObservedPropertySimplePU(false, this, "showEndConfirm");
@@ -58,6 +61,7 @@ export class Focus extends ViewPU {
         this.__elapsed.purgeDependencyOnElmtId(rmElmtId);
         this.__net.purgeDependencyOnElmtId(rmElmtId);
         this.__focusState.purgeDependencyOnElmtId(rmElmtId);
+        this.__perceptionMode.purgeDependencyOnElmtId(rmElmtId);
         this.__taskTitle.purgeDependencyOnElmtId(rmElmtId);
         this.__taskSubject.purgeDependencyOnElmtId(rmElmtId);
         this.__showEndConfirm.purgeDependencyOnElmtId(rmElmtId);
@@ -67,6 +71,7 @@ export class Focus extends ViewPU {
         this.__elapsed.aboutToBeDeleted();
         this.__net.aboutToBeDeleted();
         this.__focusState.aboutToBeDeleted();
+        this.__perceptionMode.aboutToBeDeleted();
         this.__taskTitle.aboutToBeDeleted();
         this.__taskSubject.aboutToBeDeleted();
         this.__showEndConfirm.aboutToBeDeleted();
@@ -94,6 +99,13 @@ export class Focus extends ViewPU {
     }
     set focusState(newValue: string) {
         this.__focusState.set(newValue);
+    }
+    private __perceptionMode: ObservedPropertyAbstractPU<string>;
+    get perceptionMode() {
+        return this.__perceptionMode.get();
+    }
+    set perceptionMode(newValue: string) {
+        this.__perceptionMode.set(newValue);
     }
     private __taskTitle: ObservedPropertySimplePU<string>;
     get taskTitle() {
@@ -194,11 +206,11 @@ export class Focus extends ViewPU {
             Column.height('100%');
         }, Column);
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            // 顶部合规栏：红色摄像头指示灯 + AI 智能体标签
+            // 顶部合规栏：感知状态指示灯 + AI 智能体标签
             Row.create();
-            // 顶部合规栏：红色摄像头指示灯 + AI 智能体标签
+            // 顶部合规栏：感知状态指示灯 + AI 智能体标签
             Row.width('100%');
-            // 顶部合规栏：红色摄像头指示灯 + AI 智能体标签
+            // 顶部合规栏：感知状态指示灯 + AI 智能体标签
             Row.padding({ left: 20, right: 20, top: 14, bottom: 8 });
         }, Row);
         this.observeComponentCreation2((elmtId, isInitialRender) => {
@@ -208,10 +220,10 @@ export class Focus extends ViewPU {
             Circle.create();
             Circle.width(8);
             Circle.height(8);
-            Circle.fill(Colors.CAMERA_RED);
+            Circle.fill(this.perceptionMode === 'PERCEPTION_TIMER_ONLY' ? Colors.TEXT_TERTIARY : Colors.CAMERA_RED);
         }, Circle);
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('摄像头感知中');
+            Text.create(this.perceptionMode === 'PERCEPTION_TIMER_ONLY' ? '本次未开启感知' : '摄像头感知中');
             Text.fontSize(12);
             Text.fontColor(Colors.TEXT_SECONDARY);
             Text.margin({ left: 6 });
@@ -225,7 +237,7 @@ export class Focus extends ViewPU {
         {
             this.observeComponentCreation2((elmtId, isInitialRender) => {
                 if (isInitialRender) {
-                    let componentCall = new AITag(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Focus.ets", line: 105, col: 11 });
+                    let componentCall = new AITag(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Focus.ets", line: 107, col: 11 });
                     ViewPU.create(componentCall);
                     let paramsLambda = () => {
                         return {};
@@ -237,7 +249,7 @@ export class Focus extends ViewPU {
                 }
             }, { name: "AITag" });
         }
-        // 顶部合规栏：红色摄像头指示灯 + AI 智能体标签
+        // 顶部合规栏：感知状态指示灯 + AI 智能体标签
         Row.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
             // 主体
@@ -271,13 +283,51 @@ export class Focus extends ViewPU {
         }, Text);
         Text.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
+            If.create();
+            // 摄像头感知预览占位（开启感知时展示；仅计时模式不显示）
+            if (this.perceptionMode === 'PERCEPTION_FULL') {
+                this.ifElseBranchUpdateFunction(0, () => {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Stack.create({ alignContent: Alignment.Center });
+                        Stack.width('100%');
+                        Stack.height(150);
+                        Stack.backgroundColor(Colors.CARD);
+                        Stack.borderRadius(Radius.MD);
+                        Stack.margin({ top: 20 });
+                    }, Stack);
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Column.create();
+                    }, Column);
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create('📷');
+                        Text.fontSize(34);
+                    }, Text);
+                    Text.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        Text.create('AI 实时专注感知预览');
+                        Text.fontSize(13);
+                        Text.fontColor(Colors.TEXT_SECONDARY);
+                        Text.margin({ top: 6 });
+                    }, Text);
+                    Text.pop();
+                    Column.pop();
+                    Stack.pop();
+                });
+            }
+            else {
+                this.ifElseBranchUpdateFunction(1, () => {
+                });
+            }
+        }, If);
+        If.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
             __Common__.create();
             __Common__.margin({ top: 40 });
         }, __Common__);
         {
             this.observeComponentCreation2((elmtId, isInitialRender) => {
                 if (isInitialRender) {
-                    let componentCall = new FocusTimer(this, { seconds: this.elapsed, big: true }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Focus.ets", line: 125, col: 11 });
+                    let componentCall = new FocusTimer(this, { seconds: this.elapsed, big: true }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Focus.ets", line: 146, col: 11 });
                     ViewPU.create(componentCall);
                     let paramsLambda = () => {
                         return {
@@ -314,7 +364,7 @@ export class Focus extends ViewPU {
                         onTap: () => {
                             FocusController.getInstance().demoCycleState();
                         }
-                    }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Focus.ets", line: 133, col: 11 });
+                    }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Focus.ets", line: 154, col: 11 });
                     ViewPU.create(componentCall);
                     let paramsLambda = () => {
                         return {
@@ -375,6 +425,25 @@ export class Focus extends ViewPU {
                         Text.margin({ top: 6 });
                     }, Text);
                     Text.pop();
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        If.create();
+                        if (!SensorService.getInstance().isWristPresent()) {
+                            this.ifElseBranchUpdateFunction(0, () => {
+                                this.observeComponentCreation2((elmtId, isInitialRender) => {
+                                    Text.create('（手机提醒，未连接手表，不会震动）');
+                                    Text.fontSize(12);
+                                    Text.fontColor(Colors.TEXT_TERTIARY);
+                                    Text.margin({ top: 8 });
+                                }, Text);
+                                Text.pop();
+                            });
+                        }
+                        else {
+                            this.ifElseBranchUpdateFunction(1, () => {
+                            });
+                        }
+                    }, If);
+                    If.pop();
                     this.observeComponentCreation2((elmtId, isInitialRender) => {
                         Row.create({ space: 10 });
                         Row.margin({ top: 16 });

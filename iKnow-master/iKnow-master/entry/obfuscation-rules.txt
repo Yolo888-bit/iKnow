@@ -1,1 +1,0 @@
-# iKnow obfuscation rules (empty for MVP demo)

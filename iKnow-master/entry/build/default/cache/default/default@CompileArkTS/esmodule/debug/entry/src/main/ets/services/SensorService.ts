@@ -37,6 +37,10 @@ export class SensorService implements FocusSensor {
     isConnected(): boolean {
         return this.connected;
     }
+    /** 当前是否佩戴手表（PRD §12：无手表时 RED 干预走手机声音+屏幕，不假装震动） */
+    isWristPresent(): boolean {
+        return this.connected;
+    }
     connect(): void {
         this.connected = true;
     }

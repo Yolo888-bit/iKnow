@@ -1,15 +1,17 @@
 import type common from "@ohos:app.ability.common";
 import { User } from "@normalized:N&&&entry/src/main/ets/models/User&";
 import { Task, LearningGoal } from "@normalized:N&&&entry/src/main/ets/models/Task&";
-import { FocusSession } from "@normalized:N&&&entry/src/main/ets/models/FocusSession&";
+import type { FocusSession } from '../models/FocusSession';
 import type { StudyReport } from '../models/StudyReport';
 import { FocusProfile } from "@normalized:N&&&entry/src/main/ets/models/FocusProfile&";
 import { Dashboard, SubjectProgress } from "@normalized:N&&&entry/src/main/ets/models/Dashboard&";
-import { AIPersonality, TaskStatus, SessionStatus } from "@normalized:N&&&entry/src/main/ets/models/Enums&";
+import { AIPersonality, TaskStatus } from "@normalized:N&&&entry/src/main/ets/models/Enums&";
 import { StorageService } from "@normalized:N&&&entry/src/main/ets/services/StorageService&";
 import { AIService } from "@normalized:N&&&entry/src/main/ets/services/AIService&";
 import { ReportService } from "@normalized:N&&&entry/src/main/ets/services/ReportService&";
 import { FocusController } from "@normalized:N&&&entry/src/main/ets/services/FocusController&";
+import { PermissionService } from "@normalized:N&&&entry/src/main/ets/services/PermissionService&";
+import { Metrics } from "@normalized:N&&&entry/src/main/ets/services/Metrics&";
 import { StorageKey } from "@normalized:N&&&entry/src/main/ets/common/Constants&";
 import { IdUtils } from "@normalized:N&&&entry/src/main/ets/utils/IdUtils&";
 import { TimeUtils } from "@normalized:N&&&entry/src/main/ets/utils/TimeUtils&";
@@ -48,6 +50,8 @@ export class AppStore {
             return;
         }
         await StorageService.getInstance().init(context);
+        await PermissionService.getInstance().init();
+        AppStorage.setOrCreate<number>(StorageKey.METRICS_MIN_SAMPLES, Metrics.MIN_SAMPLES);
         this.initAppStorageDefaults();
         const user = await StorageService.getInstance().loadUser();
         if (user === null) {
@@ -83,7 +87,7 @@ export class AppStore {
         AppStorage.setOrCreate<string>(StorageKey.FOCUS_STATE, 'FOCUSED');
         AppStorage.setOrCreate<number>(StorageKey.FOCUS_QA_ELAPSED, 0);
     }
-    // ---------- 首次启动种子数据 ----------
+    // ---------- 首次启动种子数据（空模板，硬规则 §5：冷启动不得伪造五维/会话）----------
     private async seed(): Promise<void> {
         const now = Date.now();
         const u = new User();
@@ -102,96 +106,16 @@ export class AppStore {
         g.subjects = ['高等数学', '英语', '政治'];
         await StorageService.getInstance().saveGoal(g);
         this.goal = g;
+        // 画像保持空模板：sampleCount = 0，五维全 0，UI 显示"还在了解你"
         const p = new FocusProfile();
         p.id = IdUtils.uuid();
         p.bestFocusTime = '09:30 - 11:30';
-        p.averageFocusDuration = 42;
-        p.focusThreshold = 48;
-        p.efficiency = 82;
-        p.concentration = 75;
-        p.stability = 68;
-        p.execution = 86;
-        p.antiDistraction = 72;
-        p.weeklyTrend = [52, 60, 45, 68, 55, 72, 40];
-        p.monthlyTrend = this.genMonthlyTrend();
         p.updatedAt = now;
         await StorageService.getInstance().saveProfile(p);
         this.profile = p;
-        this.sessions = this.seedSessions(now);
-        for (const s of this.sessions) {
-            await StorageService.getInstance().saveSession(s);
-        }
-        await this.seedTasks();
-    }
-    private seedSessions(now: number): FocusSession[] {
-        const list: FocusSession[] = [];
-        const dayMs = 24 * 3600 * 1000;
-        const plan: number[] = [70, 90, 50, 110, 60, 85, 45];
-        for (let i = 0; i < plan.length; i++) {
-            const s = new FocusSession();
-            s.id = IdUtils.uuid();
-            s.title = '高等数学复习';
-            s.startTime = TimeUtils.dayStart(now - (plan.length - 1 - i) * dayMs) + 9.5 * 3600 * 1000;
-            const totalSec = plan[i] * 60;
-            s.totalDuration = totalSec;
-            s.focusDuration = Math.round(totalSec * 0.85);
-            s.distractionDuration = totalSec - s.focusDuration;
-            s.qaDuration = 0;
-            s.breakDuration = 0;
-            s.plannedDuration = plan[i];
-            s.endTime = s.startTime + totalSec * 1000;
-            s.status = SessionStatus.FINISHED;
-            list.push(s);
-        }
-        return list;
-    }
-    private async seedTasks(): Promise<void> {
-        const now = Date.now();
-        const dayMs = 24 * 3600 * 1000;
-        const specs: Array<[
-            string,
-            string,
-            boolean
-        ]> = [
-            ['极限章节复习', '高等数学', true],
-            ['导数章节复习', '高等数学', true],
-            ['极限练习题', '高等数学', true],
-            ['导数练习题', '高等数学', true],
-            ['综合题型训练', '高等数学', false],
-            ['背诵核心单词', '英语', true],
-            ['精读阅读理解', '英语', true],
-            ['英语生词整理', '英语', false],
-            ['马原框架梳理', '政治', true],
-            ['政治选择题练习', '政治', false]
-        ];
-        for (let i = 0; i < specs.length; i++) {
-            const t = new Task();
-            t.id = IdUtils.uuid();
-            t.title = specs[i][0];
-            t.subject = specs[i][1];
-            t.estimatedDuration = 30;
-            t.done = specs[i][2];
-            t.status = t.done ? TaskStatus.DONE : TaskStatus.TODO;
-            t.sortOrder = i;
-            t.createdAt = now - (specs.length - i) * dayMs + 3600 * 1000;
-            await StorageService.getInstance().saveTask(t);
-            this.tasks.push(t);
-        }
-    }
-    private genMonthlyTrend(): number[] {
-        const arr: number[] = [];
-        let v = 38;
-        for (let i = 0; i < 30; i++) {
-            v += Math.round(Math.random() * 4) - 1;
-            if (v < 35) {
-                v = 35;
-            }
-            if (v > 55) {
-                v = 55;
-            }
-            arr.push(v);
-        }
-        return arr;
+        // 不预置任何会话 / 任务：用户首次跑通后才会产生真实数据
+        this.sessions = [];
+        this.tasks = [];
     }
     // ---------- Getters ----------
     getUser(): User {

@@ -4,6 +4,7 @@ import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { FocusController } from '../services/FocusController'
 import { FocusDetectionService } from '../services/FocusDetectionService'
+import { SensorService } from '../services/SensorService'
 import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
 import { FocusStateUi } from '../common/FocusStateUi'
@@ -18,6 +19,7 @@ export struct Focus {
   @StorageProp(StorageKey.FOCUS_ELAPSED) elapsed: number = 0
   @StorageProp(StorageKey.FOCUS_NET) net: number = 0
   @StorageProp(StorageKey.FOCUS_STATE) focusState: string = 'FOCUSED'
+  @StorageProp(StorageKey.PERCEPTION_MODE) perceptionMode: string = 'PERCEPTION_FULL'
   @State taskTitle: string = '自由专注'
   @State taskSubject: string = '无任务'
   @State showEndConfirm: boolean = false
@@ -89,14 +91,14 @@ export struct Focus {
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
-        // 顶部合规栏：红色摄像头指示灯 + AI 智能体标签
+        // 顶部合规栏：感知状态指示灯 + AI 智能体标签
         Row() {
           Row() {
             Circle()
               .width(8)
               .height(8)
-              .fill(Colors.CAMERA_RED)
-            Text('摄像头感知中')
+              .fill(this.perceptionMode === 'PERCEPTION_TIMER_ONLY' ? Colors.TEXT_TERTIARY : Colors.CAMERA_RED)
+            Text(this.perceptionMode === 'PERCEPTION_TIMER_ONLY' ? '本次未开启感知' : '摄像头感知中')
               .fontSize(12)
               .fontColor(Colors.TEXT_SECONDARY)
               .margin({ left: 6 })
@@ -121,6 +123,25 @@ export struct Focus {
             .fontSize(12)
             .fontColor(Colors.TEXT_TERTIARY)
             .margin({ top: 4 })
+
+          // 摄像头感知预览占位（开启感知时展示；仅计时模式不显示）
+          if (this.perceptionMode === 'PERCEPTION_FULL') {
+            Stack({ alignContent: Alignment.Center }) {
+              Column() {
+                Text('📷')
+                  .fontSize(34)
+                Text('AI 实时专注感知预览')
+                  .fontSize(13)
+                  .fontColor(Colors.TEXT_SECONDARY)
+                  .margin({ top: 6 })
+              }
+            }
+            .width('100%')
+            .height(150)
+            .backgroundColor(Colors.CARD)
+            .borderRadius(Radius.MD)
+            .margin({ top: 20 })
+          }
 
           FocusTimer({ seconds: this.elapsed, big: true })
             .margin({ top: 40 })
@@ -159,6 +180,12 @@ export struct Focus {
                 .fontSize(13)
                 .fontColor(Colors.TEXT_SECONDARY)
                 .margin({ top: 6 })
+              if (!SensorService.getInstance().isWristPresent()) {
+                Text('（手机提醒，未连接手表，不会震动）')
+                  .fontSize(12)
+                  .fontColor(Colors.TEXT_TERTIARY)
+                  .margin({ top: 8 })
+              }
 
               Row({ space: 10 }) {
                 Button('继续学习')

@@ -13,6 +13,7 @@ import { AIMessage } from "@normalized:N&&&entry/src/main/ets/models/AIMessage&"
 import { MessageRole } from "@normalized:N&&&entry/src/main/ets/models/Enums&";
 import { IdUtils } from "@normalized:N&&&entry/src/main/ets/utils/IdUtils&";
 import { AITag } from "@normalized:N&&&entry/src/main/ets/components/AITag&";
+import { AIFirstDisclaimer } from "@normalized:N&&&entry/src/main/ets/components/AIFirstDisclaimer&";
 export class AICompanion extends ViewPU {
     constructor(parent, params, __localStorage, elmtId = -1, paramsLambda = undefined, extraInfo) {
         super(parent, __localStorage, elmtId, extraInfo);
@@ -182,7 +183,7 @@ export class AICompanion extends ViewPU {
         {
             this.observeComponentCreation2((elmtId, isInitialRender) => {
                 if (isInitialRender) {
-                    let componentCall = new AITag(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/AICompanion.ets", line: 87, col: 9 });
+                    let componentCall = new AITag(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/AICompanion.ets", line: 89, col: 9 });
                     ViewPU.create(componentCall);
                     let paramsLambda = () => {
                         return {};
@@ -309,9 +310,28 @@ export class AICompanion extends ViewPU {
         }, Button);
         Button.pop();
         Row.pop();
+        {
+            this.observeComponentCreation2((elmtId, isInitialRender) => {
+                if (isInitialRender) {
+                    let componentCall = new AIFirstDisclaimer(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/AICompanion.ets", line: 160, col: 5 });
+                    ViewPU.create(componentCall);
+                    let paramsLambda = () => {
+                        return {};
+                    };
+                    componentCall.paramsGenerator_ = paramsLambda;
+                }
+                else {
+                    this.updateStateVarsOfChildByElmtId(elmtId, {});
+                }
+            }, { name: "AIFirstDisclaimer" });
+        }
         Column.pop();
     }
     rerender() {
         this.updateDirtyElements();
     }
+    static getEntryName(): string {
+        return "AICompanion";
+    }
 }
+registerNamedRoute(() => new AICompanion(undefined, {}), "", { bundleName: "com.iknow.study", moduleName: "entry", pagePath: "pages/AICompanion", pageFullPath: "entry/src/main/ets/pages/AICompanion", integratedHsp: "false", moduleType: "followWithHap" });

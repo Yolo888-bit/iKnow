@@ -90,7 +90,7 @@
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets": {
-      "mtimeMs": 1789048765121.5176,
+      "mtimeMs": 1789099690978.7188,
       "children": [
         "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.app.ability.common.d.ts",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\User.ets",
@@ -104,6 +104,8 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ReportService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\PermissionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\TimeUtils.ets"
@@ -117,7 +119,9 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\StudyReport.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusProfile.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Settings.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Privacy.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Privacy.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets"
       ],
       "error": false
     },
@@ -703,7 +707,10 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Focus.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusBreak.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\StudyReport.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Placeholder.ets"
       ],
       "error": false
     },
@@ -1599,21 +1606,31 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Home.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\TaskPlanning.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Focus.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Focus.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets"
       ],
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets": {
-      "mtimeMs": 1789048764749.4143,
+      "mtimeMs": 1789099059621.0493,
       "children": [
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\TaskTimeline.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\InterventionEvent.ets"
       ],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ReportService.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\ReviewService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MemoryService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets"
       ],
       "error": false
     },
@@ -1626,18 +1643,22 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ReportService.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ReportService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets"
       ],
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusProfile.ets": {
-      "mtimeMs": 1789048764737.718,
+      "mtimeMs": 1789099059638.4763,
       "children": [],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusProfile.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusProfile.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MemoryService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets"
       ],
       "error": false
     },
@@ -1651,7 +1672,7 @@
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets": {
-      "mtimeMs": 1789048764726.1045,
+      "mtimeMs": 1789099043880.5078,
       "children": [],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
@@ -1670,25 +1691,38 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\DeviceService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\SensorService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Settings.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\InterventionEvent.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyPlan.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\InterventionEngine.ets"
       ],
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets": {
-      "mtimeMs": 1789048765096.1152,
+      "mtimeMs": 1789101715346.0935,
       "children": [
         "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.data.relationalStore.d.ts",
         "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.app.ability.common.d.ts",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\User.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Task.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\SessionSnapshot.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\InterventionEvent.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\TaskTimeline.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyPlan.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Authorization.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\QuestionRecord.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyReport.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusProfile.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets"
       ],
       "parent": [
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\PermissionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\InterventionEngine.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets"
       ],
       "error": true,
       "errorCodes": [
@@ -1696,15 +1730,14 @@
       ]
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets": {
-      "mtimeMs": 1789048765015.635,
+      "mtimeMs": 1789099411139.7666,
       "children": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Task.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyReport.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusProfile.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\TimeUtils.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets"
       ],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
@@ -1713,19 +1746,21 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AICompanion.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\TaskPlanning.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusProfile.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Dashboard.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets"
       ],
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ReportService.ets": {
-      "mtimeMs": 1789048765062.5212,
+      "mtimeMs": 1789099659315.2444,
       "children": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\QuestionRecord.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyReport.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\TimeUtils.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets"
       ],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets"
@@ -1733,27 +1768,37 @@
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets": {
-      "mtimeMs": 1789048765039.0808,
+      "mtimeMs": 1789102076804.3943,
       "children": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\SessionSnapshot.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\InterventionEvent.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Task.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\QuestionRecord.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusDetectionService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ServiceTypes.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\FocusTuning.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\PermissionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusDetectionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\SensorService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\InterventionEngine.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\CompanionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\InterventionEvent.ets"
       ],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Focus.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusBreak.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets"
       ],
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets": {
-      "mtimeMs": 1789048764511.0017,
+      "mtimeMs": 1789101703282.1948,
       "children": [],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
@@ -1763,7 +1808,9 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Dashboard.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Mine.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Focus.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\AIFirstDisclaimer.ets"
       ],
       "error": false
     },
@@ -1776,7 +1823,11 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AICompanion.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\TaskPlanning.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyPlan.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ReportService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\InterventionEngine.ets"
       ],
       "error": false
     },
@@ -1793,7 +1844,8 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\FocusTimer.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusBreak.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\StudyReport.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets"
       ],
       "error": false
     },
@@ -1806,7 +1858,9 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ReportService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\StudyReport.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\ReviewService.ets"
       ],
       "error": false
     },
@@ -1855,11 +1909,12 @@
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusDetectionService.ets": {
-      "mtimeMs": 1789048765051.1807,
+      "mtimeMs": 1789099551489.8318,
       "children": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ServiceTypes.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\PermissionService.ets"
       ],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
@@ -1883,17 +1938,16 @@
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Home.ets": {
-      "mtimeMs": 1789048764917.8896,
+      "mtimeMs": 1789129333142.646,
       "children": [
         "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.router.d.ts",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\PermissionService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Task.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\TimeUtils.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\TaskCard.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\CircularProgress.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\TaskCard.ets"
       ],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets"
@@ -1905,28 +1959,15 @@
       ]
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Dashboard.ets": {
-      "mtimeMs": 1789048764850.238,
+      "mtimeMs": 1789129322943.8777,
       "children": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\TimeUtils.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\BarChart.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Dashboard.ets"
-      ],
-      "parent": [
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets"
-      ],
-      "error": false
-    },
-    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AICompanion.ets": {
-      "mtimeMs": 1789048764838.608,
-      "children": [
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\AIMessage.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\BarChart.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Dashboard.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\AITag.ets"
       ],
       "parent": [
@@ -1934,12 +1975,29 @@
       ],
       "error": false
     },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AICompanion.ets": {
+      "mtimeMs": 1789121784214.068,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\AIMessage.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\AITag.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\AIFirstDisclaimer.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets"
+      ],
+      "error": false
+    },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Mine.ets": {
-      "mtimeMs": 1789048764941.763,
+      "mtimeMs": 1789121681899.1953,
       "children": [
         "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.router.d.ts",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\NavParams.ets"
       ],
       "parent": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets"
@@ -1974,21 +2032,33 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Device.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Settings.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Privacy.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\AIFirstDisclaimer.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Placeholder.ets"
       ],
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets": {
-      "mtimeMs": 1789048764930.263,
+      "mtimeMs": 1789121648871.3435,
       "children": [
+        "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.router.d.ts",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Home.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Dashboard.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AICompanion.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Mine.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\SessionSnapshot.ets"
       ],
       "parent": [],
-      "error": false
+      "error": true,
+      "errorCodes": [
+        28007
+      ]
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\TaskCard.ets": {
       "mtimeMs": 1789048764651.0022,
@@ -2044,7 +2114,8 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Focus.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\StudyReport.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusProfile.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Dashboard.ets"
       ],
       "error": false
     },
@@ -2102,7 +2173,7 @@
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Focus.ets": {
-      "mtimeMs": 1789048764875.427,
+      "mtimeMs": 1789129338421.3186,
       "children": [
         "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.router.d.ts",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
@@ -2110,6 +2181,7 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusDetectionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\SensorService.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Task.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\TimeUtils.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\FocusStateUi.ets",
@@ -2172,16 +2244,18 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets"
       ],
       "parent": [
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusProfile.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusProfile.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets"
       ],
       "error": false
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusProfile.ets": {
-      "mtimeMs": 1789048764905.0542,
+      "mtimeMs": 1789102112733.7036,
       "children": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusProfile.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\RadarChart.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\BarChart.ets",
@@ -2218,13 +2292,15 @@
       ]
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\SensorService.ets": {
-      "mtimeMs": 1789048765074.2412,
+      "mtimeMs": 1789099544710.6804,
       "children": [
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ServiceTypes.ets"
       ],
       "parent": [
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\DeviceService.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\DeviceService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Focus.ets"
       ],
       "error": false
     },
@@ -2257,7 +2333,7 @@
       ]
     },
     "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets": {
-      "mtimeMs": 1789048764824.5461,
+      "mtimeMs": 1789102155418.445,
       "children": [
         "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.router.d.ts",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
@@ -2269,7 +2345,8 @@
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets",
         "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\TimeUtils.ets",
-        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\AITag.ets"
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\AITag.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\AIFirstDisclaimer.ets"
       ],
       "parent": [],
       "error": true,
@@ -2756,6 +2833,300 @@
         "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.security.cert.d.ts"
       ],
       "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\PermissionService.ets": {
+      "mtimeMs": 1789103304355.606,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Authorization.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusDetectionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Home.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets": {
+      "mtimeMs": 1789130096371.984,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Task.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\TimeUtils.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ReportService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\FocusProfile.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\TaskTimeline.ets": {
+      "mtimeMs": 1789099030358.2397,
+      "children": [],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\InterventionEvent.ets": {
+      "mtimeMs": 1789099030358.2397,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\InterventionEngine.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\SessionSnapshot.ets": {
+      "mtimeMs": 1789099030358.2397,
+      "children": [],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyPlan.ets": {
+      "mtimeMs": 1789099030358.2397,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\PlanningService.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Authorization.ets": {
+      "mtimeMs": 1789099030358.2397,
+      "children": [],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\PermissionService.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets": {
+      "mtimeMs": 1789103895387.1199,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\QAService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\CompanionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\ReviewService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\PlanningService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MemoryService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\SchemaValidator.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\QuestionRecord.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusProfile.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyPlan.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Task.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyReport.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ReportService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\InterventionEngine.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets": {
+      "mtimeMs": 1789099262977.6174,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\QAService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\CompanionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\ReviewService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\PlanningService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MemoryService.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\QAService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\CompanionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\ReviewService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\PlanningService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MemoryService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\SchemaValidator.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\QAService.ets": {
+      "mtimeMs": 1789102986163.1453,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\SchemaValidator.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\CompanionService.ets": {
+      "mtimeMs": 1789102986163.1453,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\SchemaValidator.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\InterventionEngine.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\ReviewService.ets": {
+      "mtimeMs": 1789099262976.5256,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\QuestionRecord.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\SchemaValidator.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\PlanningService.ets": {
+      "mtimeMs": 1789099262976.5256,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\StudyPlan.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\SchemaValidator.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MemoryService.ets": {
+      "mtimeMs": 1789102986163.1453,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusProfile.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\SchemaValidator.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\SchemaValidator.ets": {
+      "mtimeMs": 1789103793991.0466,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\QAService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\CompanionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\ReviewService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\PlanningService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MemoryService.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\FocusTuning.ets": {
+      "mtimeMs": 1789099030355.7202,
+      "children": [],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\InterventionEngine.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\InterventionEngine.ets": {
+      "mtimeMs": 1789103141492.9749,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Enums.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\InterventionEvent.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\CompanionService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\ai\\MockAIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\FocusTuning.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\StorageService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\utils\\IdUtils.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\FocusController.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\AIFirstDisclaimer.ets": {
+      "mtimeMs": 1789102088684.406,
+      "children": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Constants.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AICompanion.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\AIChat.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets": {
+      "mtimeMs": 1789130174491.7136,
+      "children": [
+        "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.router.d.ts",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\store\\AppStore.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\Metrics.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\services\\AIService.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusProfile.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\components\\RadarChart.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\FocusSession.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\Task.ets"
+      ],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Index.ets"
+      ],
+      "error": true,
+      "errorCodes": [
+        28007
+      ]
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\NavParams.ets": {
+      "mtimeMs": 1789121635781.8286,
+      "children": [],
+      "parent": [
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Review.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Mine.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Placeholder.ets"
+      ],
+      "error": false
+    },
+    "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\pages\\Placeholder.ets": {
+      "mtimeMs": 1789121635781.8286,
+      "children": [
+        "D:\\soft\\env\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api\\@ohos.router.d.ts",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\common\\Theme.ets",
+        "D:\\iKnow\\iKnow-master\\iKnow-master\\entry\\src\\main\\ets\\models\\NavParams.ets"
+      ],
+      "parent": [],
+      "error": true,
+      "errorCodes": [
+        28007
+      ]
     }
   }
 }

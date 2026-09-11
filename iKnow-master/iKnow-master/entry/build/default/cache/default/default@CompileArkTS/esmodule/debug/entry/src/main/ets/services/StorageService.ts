@@ -4,14 +4,20 @@ import { User } from "@normalized:N&&&entry/src/main/ets/models/User&";
 import { LearningGoal, Task } from "@normalized:N&&&entry/src/main/ets/models/Task&";
 import { FocusSession } from "@normalized:N&&&entry/src/main/ets/models/FocusSession&";
 import type { FocusEvent, FocusTimelinePoint } from "@normalized:N&&&entry/src/main/ets/models/FocusSession&";
+import { SessionSnapshot } from "@normalized:N&&&entry/src/main/ets/models/SessionSnapshot&";
+import { InterventionEvent } from "@normalized:N&&&entry/src/main/ets/models/InterventionEvent&";
+import { TaskTimelinePoint } from "@normalized:N&&&entry/src/main/ets/models/TaskTimeline&";
+import { StudyPlan } from "@normalized:N&&&entry/src/main/ets/models/StudyPlan&";
+import type { PlanTask } from "@normalized:N&&&entry/src/main/ets/models/StudyPlan&";
+import { Authorization } from "@normalized:N&&&entry/src/main/ets/models/Authorization&";
 import { QuestionRecord } from "@normalized:N&&&entry/src/main/ets/models/QuestionRecord&";
 import { StudyReport } from "@normalized:N&&&entry/src/main/ets/models/StudyReport&";
 import { FocusProfile } from "@normalized:N&&&entry/src/main/ets/models/FocusProfile&";
-import type { AIPersonality, TaskStatus, SessionStatus } from '../models/Enums';
+import type { AIPersonality, TaskStatus, SessionStatus, InterventionLevel, FeedbackAction, FocusSource } from '../models/Enums';
 const DB_NAME = 'iKnow.db';
 /**
  * 持久化层 —— 基于 @ohos.data.relationalStore（经 @kit.ArkData 暴露）
- * 所有学习数据、画像、会话、复盘均落库，App 重启后仍保留
+ * 所有学习数据、画像、会话、快照、干预、授权均落库，App 重启后仍保留。
  */
 export class StorageService {
     private static inst: StorageService | null = null;
@@ -51,8 +57,10 @@ export class StorageService {
         await this.store.executeSql(`CREATE TABLE IF NOT EXISTS focus_session (
       id TEXT PRIMARY KEY, title TEXT, start_time INTEGER, end_time INTEGER,
       total_duration INTEGER, focus_duration INTEGER, distraction_duration INTEGER,
-      qa_duration INTEGER, break_duration INTEGER, planned_duration INTEGER,
-      task_ids TEXT, completed_task_ids TEXT, timeline TEXT, events TEXT, status TEXT)`);
+      qa_duration INTEGER, break_duration INTEGER, paused_duration INTEGER, planned_duration INTEGER,
+      task_ids TEXT, completed_task_ids TEXT, timeline TEXT, task_timeline TEXT,
+      events TEXT, interventions TEXT, snapshots_count INTEGER, last_snapshot_at INTEGER,
+      perception_mode TEXT, status TEXT, updated_at INTEGER)`);
         await this.store.executeSql(`CREATE TABLE IF NOT EXISTS question (
       id TEXT PRIMARY KEY, session_id TEXT, question TEXT, answer TEXT, created_at INTEGER)`);
         await this.store.executeSql(`CREATE TABLE IF NOT EXISTS study_report (
@@ -63,7 +71,50 @@ export class StorageService {
       id TEXT PRIMARY KEY, best_focus_time TEXT, average_focus_duration INTEGER,
       focus_threshold INTEGER, efficiency INTEGER, concentration INTEGER,
       stability INTEGER, execution INTEGER, anti_distraction INTEGER,
-      weekly_trend TEXT, monthly_trend TEXT, updated_at INTEGER)`);
+      weekly_trend TEXT, monthly_trend TEXT, sample_count INTEGER,
+      recent_concentrations TEXT, recent_distraction_rates TEXT, updated_at INTEGER)`);
+        // ---- 新增表（Phase 0）----
+        await this.store.executeSql(`CREATE TABLE IF NOT EXISTS authorization (
+      id TEXT PRIMARY KEY, camera INTEGER, microphone INTEGER, health INTEGER,
+      notification INTEGER, updated_at INTEGER)`);
+        await this.store.executeSql(`CREATE TABLE IF NOT EXISTS session_snapshot (
+      session_id TEXT, ts INTEGER, total_sec INTEGER, focus_sec INTEGER,
+      distraction_sec INTEGER, qa_sec INTEGER, break_sec INTEGER,
+      current_task_id TEXT, state TEXT, perception_mode TEXT,
+      PRIMARY KEY(session_id, ts))`);
+        await this.store.executeSql(`CREATE TABLE IF NOT EXISTS intervention_event (
+      id TEXT PRIMARY KEY, session_id TEXT, ts INTEGER, level TEXT, channel TEXT,
+      message TEXT, source TEXT, user_feedback TEXT, recovered_focus INTEGER, payload_json TEXT)`);
+        await this.store.executeSql(`CREATE TABLE IF NOT EXISTS study_plan (
+      id TEXT PRIMARY KEY, title TEXT, exam_type TEXT, total_estimated_minutes INTEGER,
+      tasks TEXT, created_at INTEGER)`);
+        await this.store.executeSql(`CREATE TABLE IF NOT EXISTS task_timeline (
+      session_id TEXT, minute_offset INTEGER, task_id TEXT, level INTEGER,
+      PRIMARY KEY(session_id, minute_offset))`);
+        // 轻量键值表（用于持久化进行中会话 id 等需要跨崩溃保留的标记）
+        await this.store.executeSql(`CREATE TABLE IF NOT EXISTS app_kv (
+      key TEXT PRIMARY KEY, value TEXT)`);
+        // ---- 迁移：为已存在的旧表补列（忽略失败）----
+        const alters: string[] = [
+            'ALTER TABLE focus_session ADD COLUMN paused_duration INTEGER',
+            'ALTER TABLE focus_session ADD COLUMN task_timeline TEXT',
+            'ALTER TABLE focus_session ADD COLUMN interventions TEXT',
+            'ALTER TABLE focus_session ADD COLUMN snapshots_count INTEGER',
+            'ALTER TABLE focus_session ADD COLUMN last_snapshot_at INTEGER',
+            'ALTER TABLE focus_session ADD COLUMN perception_mode TEXT',
+            'ALTER TABLE focus_session ADD COLUMN updated_at INTEGER',
+            'ALTER TABLE focus_profile ADD COLUMN sample_count INTEGER',
+            'ALTER TABLE focus_profile ADD COLUMN recent_concentrations TEXT',
+            'ALTER TABLE focus_profile ADD COLUMN recent_distraction_rates TEXT'
+        ];
+        for (const sql of alters) {
+            try {
+                await this.store.executeSql(sql);
+            }
+            catch (e) {
+                // 列已存在则忽略
+            }
+        }
     }
     // ---------- 结果集读取辅助 ----------
     private getString(rs: relationalStore.ResultSet, col: string): string {
@@ -77,6 +128,9 @@ export class StorageService {
     private getReal(rs: relationalStore.ResultSet, col: string): number {
         const i = rs.getColumnIndex(col);
         return i >= 0 ? rs.getDouble(i) : 0;
+    }
+    private getBool(rs: relationalStore.ResultSet, col: string): boolean {
+        return this.getNum(rs, col) === 1;
     }
     // ---------- JSON 解析辅助 ----------
     private parseStringArray(json: string): string[] {
@@ -106,6 +160,15 @@ export class StorageService {
             return [];
         }
     }
+    private parseTaskTimeline(json: string): TaskTimelinePoint[] {
+        try {
+            const a = JSON.parse(json) as TaskTimelinePoint[];
+            return Array.isArray(a) ? a : [];
+        }
+        catch (e) {
+            return [];
+        }
+    }
     private parseEvents(json: string): FocusEvent[] {
         try {
             const a = JSON.parse(json) as FocusEvent[];
@@ -115,9 +178,27 @@ export class StorageService {
             return [];
         }
     }
+    private parseInterventions(json: string): InterventionEvent[] {
+        try {
+            const a = JSON.parse(json) as InterventionEvent[];
+            return Array.isArray(a) ? a : [];
+        }
+        catch (e) {
+            return [];
+        }
+    }
     private parseQuestions(json: string): QuestionRecord[] {
         try {
             const a = JSON.parse(json) as QuestionRecord[];
+            return Array.isArray(a) ? a : [];
+        }
+        catch (e) {
+            return [];
+        }
+    }
+    private parsePlanTasks(json: string): PlanTask[] {
+        try {
+            const a = JSON.parse(json) as PlanTask[];
             return Array.isArray(a) ? a : [];
         }
         catch (e) {
@@ -188,7 +269,7 @@ export class StorageService {
             t.estimatedDuration = this.getNum(rs, 'estimated_duration');
             t.actualDuration = this.getNum(rs, 'actual_duration');
             t.status = this.getString(rs, 'status') as TaskStatus;
-            t.done = this.getNum(rs, 'done') === 1;
+            t.done = this.getBool(rs, 'done');
             t.sortOrder = this.getNum(rs, 'sort_order');
             t.sessionId = this.getString(rs, 'session_id');
             t.createdAt = this.getNum(rs, 'created_at');
@@ -232,12 +313,19 @@ export class StorageService {
             s.distractionDuration = this.getNum(rs, 'distraction_duration');
             s.qaDuration = this.getNum(rs, 'qa_duration');
             s.breakDuration = this.getNum(rs, 'break_duration');
+            s.pausedDuration = this.getNum(rs, 'paused_duration');
             s.plannedDuration = this.getNum(rs, 'planned_duration');
             s.taskIds = this.parseStringArray(this.getString(rs, 'task_ids'));
             s.completedTaskIds = this.parseStringArray(this.getString(rs, 'completed_task_ids'));
             s.timeline = this.parseTimeline(this.getString(rs, 'timeline'));
+            s.taskTimeline = this.parseTaskTimeline(this.getString(rs, 'task_timeline'));
             s.events = this.parseEvents(this.getString(rs, 'events'));
+            s.interventions = this.parseInterventions(this.getString(rs, 'interventions'));
+            s.snapshotsCount = this.getNum(rs, 'snapshots_count');
+            s.lastSnapshotAt = this.getNum(rs, 'last_snapshot_at');
+            s.perceptionMode = this.getString(rs, 'perception_mode') || 'PERCEPTION_FULL';
             s.status = this.getString(rs, 'status') as SessionStatus;
+            s.updatedAt = this.getNum(rs, 'updated_at');
             list.push(s);
         }
         rs.close();
@@ -254,12 +342,19 @@ export class StorageService {
             'distraction_duration': s.distractionDuration,
             'qa_duration': s.qaDuration,
             'break_duration': s.breakDuration,
+            'paused_duration': s.pausedDuration,
             'planned_duration': s.plannedDuration,
             'task_ids': JSON.stringify(s.taskIds),
             'completed_task_ids': JSON.stringify(s.completedTaskIds),
             'timeline': JSON.stringify(s.timeline),
+            'task_timeline': JSON.stringify(s.taskTimeline),
             'events': JSON.stringify(s.events),
-            'status': s.status
+            'interventions': JSON.stringify(s.interventions),
+            'snapshots_count': s.snapshotsCount,
+            'last_snapshot_at': s.lastSnapshotAt,
+            'perception_mode': s.perceptionMode,
+            'status': s.status,
+            'updated_at': s.updatedAt
         };
         await this.store.insert('focus_session', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
     }
@@ -348,6 +443,9 @@ export class StorageService {
         f.antiDistraction = this.getNum(rs, 'anti_distraction');
         f.weeklyTrend = this.parseNumberArray(this.getString(rs, 'weekly_trend'));
         f.monthlyTrend = this.parseNumberArray(this.getString(rs, 'monthly_trend'));
+        f.sampleCount = this.getNum(rs, 'sample_count');
+        f.recentConcentrations = this.parseNumberArray(this.getString(rs, 'recent_concentrations'));
+        f.recentDistractionRates = this.parseNumberArray(this.getString(rs, 'recent_distraction_rates'));
         f.updatedAt = this.getNum(rs, 'updated_at');
         rs.close();
         return f;
@@ -365,13 +463,217 @@ export class StorageService {
             'anti_distraction': f.antiDistraction,
             'weekly_trend': JSON.stringify(f.weeklyTrend),
             'monthly_trend': JSON.stringify(f.monthlyTrend),
+            'sample_count': f.sampleCount,
+            'recent_concentrations': JSON.stringify(f.recentConcentrations),
+            'recent_distraction_rates': JSON.stringify(f.recentDistractionRates),
             'updated_at': f.updatedAt
         };
         await this.store.insert('focus_profile', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
     }
+    // ---------- Authorization（PRD §17 全局唯一事实源）----------
+    async loadAuthorization(): Promise<Authorization | null> {
+        const rs = await this.store.query(new relationalStore.RdbPredicates('authorization'));
+        if (!rs.goToNextRow()) {
+            rs.close();
+            return null;
+        }
+        const a = new Authorization();
+        a.camera = this.getBool(rs, 'camera');
+        a.microphone = this.getBool(rs, 'microphone');
+        a.health = this.getBool(rs, 'health');
+        a.notification = this.getBool(rs, 'notification');
+        a.updatedAt = this.getNum(rs, 'updated_at');
+        rs.close();
+        return a;
+    }
+    async saveAuthorization(a: Authorization): Promise<void> {
+        const v: relationalStore.ValuesBucket = {
+            'id': 'global',
+            'camera': a.camera ? 1 : 0,
+            'microphone': a.microphone ? 1 : 0,
+            'health': a.health ? 1 : 0,
+            'notification': a.notification ? 1 : 0,
+            'updated_at': a.updatedAt
+        };
+        await this.store.insert('authorization', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+    }
+    // ---------- SessionSnapshot（§4 每 10s 落盘，支持崩溃/后台恢复）----------
+    async saveSnapshot(snap: SessionSnapshot): Promise<void> {
+        const v: relationalStore.ValuesBucket = {
+            'session_id': snap.sessionId,
+            'ts': snap.ts,
+            'total_sec': snap.totalSec,
+            'focus_sec': snap.focusSec,
+            'distraction_sec': snap.distractionSec,
+            'qa_sec': snap.qaSec,
+            'break_sec': snap.breakSec,
+            'current_task_id': snap.currentTaskId,
+            'state': snap.state,
+            'perception_mode': snap.perceptionMode
+        };
+        await this.store.insert('session_snapshot', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+    }
+    async loadSnapshots(sessionId: string): Promise<SessionSnapshot[]> {
+        const p = new relationalStore.RdbPredicates('session_snapshot');
+        p.equalTo('session_id', sessionId);
+        const rs = await this.store.query(p);
+        const list: SessionSnapshot[] = [];
+        while (rs.goToNextRow()) {
+            const s = new SessionSnapshot();
+            s.sessionId = this.getString(rs, 'session_id');
+            s.ts = this.getNum(rs, 'ts');
+            s.totalSec = this.getNum(rs, 'total_sec');
+            s.focusSec = this.getNum(rs, 'focus_sec');
+            s.distractionSec = this.getNum(rs, 'distraction_sec');
+            s.qaSec = this.getNum(rs, 'qa_sec');
+            s.breakSec = this.getNum(rs, 'break_sec');
+            s.currentTaskId = this.getString(rs, 'current_task_id');
+            s.state = this.getString(rs, 'state') || 'FOCUSED';
+            s.perceptionMode = this.getString(rs, 'perception_mode') || 'PERCEPTION_FULL';
+            list.push(s);
+        }
+        rs.close();
+        return list;
+    }
+    async loadLatestSnapshot(sessionId: string): Promise<SessionSnapshot | null> {
+        const list = await this.loadSnapshots(sessionId);
+        if (list.length === 0) {
+            return null;
+        }
+        let latest = list[0];
+        for (const s of list) {
+            if (s.ts > latest.ts) {
+                latest = s;
+            }
+        }
+        return latest;
+    }
+    async deleteSnapshots(sessionId: string): Promise<void> {
+        const p = new relationalStore.RdbPredicates('session_snapshot');
+        p.equalTo('session_id', sessionId);
+        await this.store.delete(p);
+    }
+    // ---------- InterventionEvent（§9 反馈回收）----------
+    async saveIntervention(e: InterventionEvent): Promise<void> {
+        const v: relationalStore.ValuesBucket = {
+            'id': e.id,
+            'session_id': e.sessionId,
+            'ts': e.ts,
+            'level': e.level,
+            'channel': e.channel,
+            'message': e.message,
+            'source': e.source,
+            'user_feedback': e.userFeedback,
+            'recovered_focus': e.recoveredFocus ? 1 : 0,
+            'payload_json': e.payloadJson
+        };
+        await this.store.insert('intervention_event', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+    }
+    async saveInterventions(list: InterventionEvent[]): Promise<void> {
+        for (const e of list) {
+            await this.saveIntervention(e);
+        }
+    }
+    async loadInterventions(sessionId: string): Promise<InterventionEvent[]> {
+        const p = new relationalStore.RdbPredicates('intervention_event');
+        p.equalTo('session_id', sessionId);
+        const rs = await this.store.query(p);
+        const list: InterventionEvent[] = [];
+        while (rs.goToNextRow()) {
+            const e = new InterventionEvent();
+            e.id = this.getString(rs, 'id');
+            e.sessionId = this.getString(rs, 'session_id');
+            e.ts = this.getNum(rs, 'ts');
+            e.level = this.getString(rs, 'level') as InterventionLevel;
+            e.channel = this.getString(rs, 'channel');
+            e.message = this.getString(rs, 'message');
+            e.source = this.getString(rs, 'source') as FocusSource;
+            e.userFeedback = this.getString(rs, 'user_feedback') as FeedbackAction;
+            e.recoveredFocus = this.getBool(rs, 'recovered_focus');
+            e.payloadJson = this.getString(rs, 'payload_json');
+            list.push(e);
+        }
+        rs.close();
+        return list;
+    }
+    // ---------- StudyPlan（§12）----------
+    async saveStudyPlan(plan: StudyPlan): Promise<void> {
+        const v: relationalStore.ValuesBucket = {
+            'id': plan.id,
+            'title': plan.title,
+            'exam_type': plan.examType,
+            'total_estimated_minutes': plan.totalEstimatedMinutes,
+            'tasks': JSON.stringify(plan.tasks),
+            'created_at': plan.createdAt
+        };
+        await this.store.insert('study_plan', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+    }
+    async loadStudyPlan(): Promise<StudyPlan | null> {
+        const rs = await this.store.query(new relationalStore.RdbPredicates('study_plan'));
+        if (!rs.goToNextRow()) {
+            rs.close();
+            return null;
+        }
+        const p = new StudyPlan();
+        p.id = this.getString(rs, 'id');
+        p.title = this.getString(rs, 'title');
+        p.examType = this.getString(rs, 'exam_type');
+        p.totalEstimatedMinutes = this.getNum(rs, 'total_estimated_minutes');
+        p.tasks = this.parsePlanTasks(this.getString(rs, 'tasks'));
+        p.createdAt = this.getNum(rs, 'created_at');
+        rs.close();
+        return p;
+    }
+    // ---------- TaskTimeline（§12 任务归属曲线）----------
+    async saveTaskTimeline(points: TaskTimelinePoint[], sessionId: string): Promise<void> {
+        for (const p of points) {
+            const v: relationalStore.ValuesBucket = {
+                'session_id': sessionId,
+                'minute_offset': p.minuteOffset,
+                'task_id': p.taskId,
+                'level': p.level
+            };
+            await this.store.insert('task_timeline', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+        }
+    }
+    async loadTaskTimeline(sessionId: string): Promise<TaskTimelinePoint[]> {
+        const p = new relationalStore.RdbPredicates('task_timeline');
+        p.equalTo('session_id', sessionId);
+        const rs = await this.store.query(p);
+        const list: TaskTimelinePoint[] = [];
+        while (rs.goToNextRow()) {
+            const t = new TaskTimelinePoint();
+            t.minuteOffset = this.getNum(rs, 'minute_offset');
+            t.taskId = this.getString(rs, 'task_id');
+            t.level = this.getNum(rs, 'level');
+            list.push(t);
+        }
+        rs.close();
+        return list;
+    }
+    // ---------- 轻量 KV（跨崩溃持久化标记，如进行中会话 id）----------
+    async saveKv(key: string, value: string): Promise<void> {
+        const v: relationalStore.ValuesBucket = { 'key': key, 'value': value };
+        await this.store.insert('app_kv', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+    }
+    async loadKv(key: string): Promise<string> {
+        const p = new relationalStore.RdbPredicates('app_kv');
+        p.equalTo('key', key);
+        const rs = await this.store.query(p);
+        if (!rs.goToNextRow()) {
+            rs.close();
+            return '';
+        }
+        const val = this.getString(rs, 'value');
+        rs.close();
+        return val;
+    }
     // ---------- 清除 ----------
     async clearAll(): Promise<void> {
-        const tables: string[] = ['user', 'learning_goal', 'task', 'focus_session', 'question', 'study_report', 'focus_profile'];
+        const tables: string[] = [
+            'user', 'learning_goal', 'task', 'focus_session', 'question', 'study_report', 'focus_profile',
+            'authorization', 'session_snapshot', 'intervention_event', 'study_plan', 'task_timeline', 'app_kv'
+        ];
         for (let i = 0; i < tables.length; i++) {
             await this.store.delete(new relationalStore.RdbPredicates(tables[i]));
         }

@@ -1,16 +1,29 @@
-Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚ#Eimport { FocusState, SessionStatus } from '../models/Enums';
+Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚKimport { FocusState, SessionStatus } from '../models/Enums';
 import { FocusSession, FocusEvent, FocusTimelinePoint } from '../models/FocusSession';
+import { SessionSnapshot } from '../models/SessionSnapshot';
+import { StorageKey } from '../common/Constants';
+import { FocusTuning } from '../common/FocusTuning';
+import { PermissionService } from './PermissionService';
+import { StorageService } from './StorageService';
 import { FocusDetectionService } from './FocusDetectionService';
-import { StorageKey, DemoFlag } from '../common/Constants';
+import { SensorService } from './SensorService';
+import { InterventionEngine } from './InterventionEngine';
 import { IdUtils } from '../utils/IdUtils';
 /**
- * ä¸“æ³¨æ§åˆ¶å™¨ â€”â€” ç»Ÿä¸€é©±åŠ¨ï¼š
- *   è®¡æ—¶ï¼ˆæ€»/å‡€/åˆ†å¿ƒ/ç­”ç–‘/ä¼‘æ¯ï¼‰ + çŠ¶æ€æœºï¼ˆç»¿/é»„/çº¢ï¼‰ + æ£€æµ‹è®¢é˜… + æ›²çº¿é‡‡æ ·
- * æ˜¯ã€Œè§„åˆ’ â†’ ä¸“æ³¨ â†’ çŠ¶æ€æœº â†’ ç­”ç–‘(è®¡æ—¶ä¸ä¸­æ–­) â†’ å¤ç›˜ã€é—­ç¯çš„è¿è¡Œæ—¶å¼•æ“ã€‚
+ * ä¸“æ³¨æ§åˆ¶å™¨ â€”â€” å”¯ä¸€è®¡æ—¶æºï¼ˆPRD Â§8ï¼Œç¡¬è§„åˆ™ Â§6/Â§7/Â§8ï¼‰
+ *
+ *  - è®¡æ—¶ç”¨ Date.now() å·®å€¼é©±åŠ¨ï¼ˆé setInterval è®¡æ•°ï¼‰ï¼šæ¯å¿ƒè·³ç´¯åŠ å·®å€¼ï¼Œåå°é•¿ç¡æ—¶
+ *    ä»¥ MAX_TICK_DELTA_MS å°é¡¶ï¼Œé¿å…å·®å€¼çˆ†ç‚¸ã€‚
+ *  - æ¯ 10 s è½ä¸€æ¡ SessionSnapshotï¼Œæ”¯æŒå´©æºƒ/åå°æ¢å¤ã€‚
+ *  - çŠ¶æ€æœºå»æŠ–ï¼šconfidence < 0.5 å¿½ç•¥ï¼ˆé‡‡è€Œä¸ä¿¡ï¼‰ï¼›æŒ‰ FocusTuning çš„é©»ç•™/å†·å´å‚æ•°
+ *    å†³å®šæ˜¯å¦åˆ‡æ¢ï¼ˆGREENâ†’é»„ 5s / çº¢â†’é»„ 5s / é»„â†’ç»¿ 10sï¼›é»„ 3min / çº¢ 5min å†·å´ï¼‰ã€‚
+ *  - è¿›å…¥åˆ†å¿ƒçŠ¶æ€æ—¶ç» InterventionEngine è¯„ä¼°æ˜¯å¦å¹²é¢„ï¼ˆæ— æ‰‹è¡¨ RED èµ°æ‰‹æœºå£°éŸ³+å±å¹•ï¼‰ã€‚
+ *  - FocusBreak ç­‰é¡µé¢åªæ¶ˆè´¹æœ¬æ§åˆ¶å™¨çŠ¶æ€ï¼Œä¸å¾—è‡ªå¸¦è®¡æ—¶å™¨ã€‚
  */
 export class FocusController {
     constructor() {
         this.tickId = -1;
+        this.snapshotId = -1;
         this.session = new FocusSession();
         this.tasks = [];
         this.questions = [];
@@ -18,16 +31,26 @@ export class FocusController {
         this.qaMode = false;
         this.resting = false;
         this.paused = false;
+        // è®¡æ—¶ç´¯åŠ å™¨ï¼ˆç§’ï¼Œæµ®ç‚¹ï¼›æ˜¾ç¤ºæ—¶å–æ•´ï¼‰
         this.totalSec = 0;
         this.focusSec = 0;
         this.distractionSec = 0;
         this.qaSec = 0;
         this.breakSec = 0;
+        this.pausedAccum = 0;
         this.state = FocusState.FOCUSED;
-        this.stateSinceSec = 0;
-        this.sampleCounter = 0;
+        this.stateEnteredAt = 0;
+        this.lastTickAt = 0;
+        this.sampleAccumMs = 0;
+        this.lastYellowAt = 0;
+        this.lastRedAt = 0;
         this.timeline = [];
         this.events = [];
+        this.currentTaskId = '';
+        this.perceptionMode = 'PERCEPTION_FULL';
+        this.onIntervention = null;
+        this.lastDecision = null;
+        this.permSubscribed = false;
     }
     static getInstance() {
         if (FocusController.inst === null) {
@@ -48,13 +71,13 @@ export class FocusController {
         return this.state;
     }
     getTotalSec() {
-        return this.totalSec;
+        return Math.floor(this.totalSec);
     }
     getFocusSec() {
-        return this.focusSec;
+        return Math.floor(this.focusSec);
     }
     getQaSec() {
-        return this.qaSec;
+        return Math.floor(this.qaSec);
     }
     isQaMode() {
         return this.qaMode;
@@ -68,6 +91,16 @@ export class FocusController {
     isRunning() {
         return this.running;
     }
+    getPerceptionMode() {
+        return this.perceptionMode;
+    }
+    getLastDecision() {
+        return this.lastDecision;
+    }
+    /** UI æ³¨å†Œå¹²é¢„å›è°ƒï¼ˆPhase 1 ç”¨äºå¼¹çª—/æ¨ªå¹…å‘ˆç°ï¼‰ */
+    setOnIntervention(cb) {
+        this.onIntervention = cb;
+    }
     /** å¼€å§‹ä¸€ä¸ªä¸“æ³¨ä¼šè¯ */
     start(tasks) {
         this.tasks = tasks;
@@ -78,17 +111,47 @@ export class FocusController {
         this.session.taskIds = tasks.map((t) => t.id);
         this.session.plannedDuration = tasks.reduce((sum, t) => sum + t.estimatedDuration, 0);
         this.session.status = SessionStatus.RUNNING;
+        this.session.perceptionMode = PermissionService.getInstance().snapshot().camera ? 'PERCEPTION_FULL' : 'PERCEPTION_TIMER_ONLY';
+        this.perceptionMode = this.session.perceptionMode;
+        this.currentTaskId = tasks.length > 0 ? tasks[0].id : '';
         this.resetCounters();
         this.running = true;
         this.state = FocusState.FOCUSED;
+        this.stateEnteredAt = Date.now();
         this.questions = [];
-        FocusDetectionService.getInstance().start((r) => {
-            this.onDetection(r);
-        });
+        InterventionEngine.getInstance().setSessionId(this.session.id);
+        this.subscribePermission();
+        if (PermissionService.getInstance().snapshot().camera) {
+            FocusDetectionService.getInstance().start((r) => {
+                this.onDetection(r);
+            });
+        }
         this.tickId = setInterval(() => {
-            this.tick();
-        }, DemoFlag.TICK);
+            this.recomputeTick();
+        }, FocusTuning.TICK_MS);
+        this.snapshotId = setInterval(() => {
+            this.writeSnapshot();
+        }, FocusTuning.SNAPSHOT_INTERVAL_MS);
         this.pushLive();
+        StorageService.getInstance().saveKv(StorageKey.ACTIVE_SESSION_ID, this.session.id).catch(() => { });
+    }
+    subscribePermission() {
+        if (this.permSubscribed) {
+            return;
+        }
+        this.permSubscribed = true;
+        PermissionService.getInstance().onChange((a) => {
+            if (!a.camera) {
+                FocusDetectionService.getInstance().stop();
+                this.perceptionMode = 'PERCEPTION_TIMER_ONLY';
+            }
+            else if (this.running && !this.qaMode && !this.resting && !this.paused) {
+                this.perceptionMode = 'PERCEPTION_FULL';
+                FocusDetectionService.getInstance().start((r) => {
+                    this.onDetection(r);
+                });
+            }
+        });
     }
     resetCounters() {
         this.totalSec = 0;
@@ -96,57 +159,101 @@ export class FocusController {
         this.distractionSec = 0;
         this.qaSec = 0;
         this.breakSec = 0;
-        this.stateSinceSec = 0;
-        this.sampleCounter = 0;
+        this.pausedAccum = 0;
+        this.stateEnteredAt = Date.now();
+        this.lastTickAt = Date.now();
+        this.sampleAccumMs = 0;
+        this.lastYellowAt = 0;
+        this.lastRedAt = 0;
         this.timeline = [];
         this.events = [];
         this.qaMode = false;
         this.resting = false;
         this.paused = false;
     }
-    tick() {
+    /** è®¡æ—¶å¿ƒè·³ï¼šç”¨ Date.now() å·®å€¼ç´¯åŠ ï¼ˆç¡¬è§„åˆ™ Â§7ï¼‰ */
+    recomputeTick() {
+        const now = Date.now();
         if (!this.running) {
+            this.lastTickAt = now;
             return;
         }
+        const dtMs = Math.min(now - this.lastTickAt, FocusTuning.MAX_TICK_DELTA_MS);
+        this.lastTickAt = now;
+        const dt = dtMs / 1000;
+        // å¢™é’Ÿï¼šåŒ…å«ä¼‘æ¯ / æš‚åœ / ç­”ç–‘ï¼ˆPRD Â§5 æ€»å­¦ä¹  = å¢™é’Ÿ âˆ’ ä¼‘æ¯ âˆ’ æš‚åœï¼‰
+        this.totalSec += dt;
         if (this.paused) {
+            this.pausedAccum += dt;
             return;
         }
         if (this.resting) {
-            this.breakSec++;
+            this.breakSec += dt;
             this.pushLive();
             return;
         }
-        this.totalSec++;
         if (this.qaMode) {
-            this.qaSec++;
+            this.qaSec += dt;
         }
         else if (this.state === FocusState.FOCUSED) {
-            this.focusSec++;
+            this.focusSec += dt;
         }
         else {
-            this.distractionSec++;
+            this.distractionSec += dt;
         }
-        this.stateSinceSec++;
-        this.sampleCounter++;
-        if (this.sampleCounter >= 30) {
-            this.sampleCounter = 0;
+        this.sampleAccumMs += dtMs;
+        if (this.sampleAccumMs >= 30000) {
+            this.sampleAccumMs = 0;
             this.sampleTimeline();
         }
         this.pushLive();
     }
-    /** æ‘„åƒå¤´æ£€æµ‹å›è°ƒ â†’ çŠ¶æ€æœº */
+    /** æ‘„åƒå¤´æ£€æµ‹å›è°ƒ â†’ å»æŠ–çŠ¶æ€æœºï¼ˆç¡¬è§„åˆ™ Â§9 é‡‡è€Œä¸ä¿¡ï¼‰ */
     onDetection(r) {
         if (!this.running || this.qaMode || this.resting || this.paused) {
             return;
         }
-        const target = this.mapState(r.state);
-        if (target !== this.state) {
-            this.state = target;
-            this.stateSinceSec = 0;
-            this.recordEvent(target, r.source, r.confidence, r.detail);
-            this.sampleTimeline();
-            this.pushLive();
+        if (r.confidence < FocusTuning.CONFIDENCE_FLOOR) {
+            // é‡‡è€Œä¸ä¿¡ï¼šä»…è®°è´¦ï¼Œä¸åˆ‡æ¢
+            this.recordEvent(this.mapState(r.state), r.source, r.confidence, 'below-confidence');
+            return;
         }
+        const target = this.mapState(r.state);
+        if (target === this.state) {
+            this.recordEvent(target, r.source, r.confidence, 'no-transit');
+            return;
+        }
+        const now = Date.now();
+        const dwellOk = now - this.stateEnteredAt >= this.dwellFor(target);
+        const coolOk = this.cooldownElapsed(target);
+        if (dwellOk && coolOk) {
+            this.transitionTo(target, r.confidence, r.source, r.detail);
+        }
+        else {
+            this.recordEvent(target, r.source, r.confidence, 'debounced');
+        }
+    }
+    dwellFor(target) {
+        if (target === FocusState.SLIGHTLY_DISTRACTED) {
+            return FocusTuning.DWELL_GREEN_TO_YELLOW_MS;
+        }
+        if (target === FocusState.DISTRACTED) {
+            return FocusTuning.DWELL_RED_TO_YELLOW_MS;
+        }
+        if (target === FocusState.FOCUSED) {
+            return FocusTuning.DWELL_YELLOW_TO_GREEN_MS;
+        }
+        return FocusTuning.MIN_DWELL_MS;
+    }
+    cooldownElapsed(target) {
+        const now = Date.now();
+        if (target === FocusState.SLIGHTLY_DISTRACTED) {
+            return now - this.lastYellowAt >= FocusTuning.YELLOW_COOLDOWN_MS;
+        }
+        if (target === FocusState.DISTRACTED) {
+            return now - this.lastRedAt >= FocusTuning.RED_COOLDOWN_MS;
+        }
+        return true;
     }
     mapState(s) {
         if (s === FocusState.SLIGHTLY_DISTRACTED) {
@@ -156,6 +263,23 @@ export class FocusController {
             return FocusState.DISTRACTED;
         }
         return FocusState.FOCUSED;
+    }
+    transitionTo(target, confidence, source, detail) {
+        const now = Date.now();
+        this.state = target;
+        this.stateEnteredAt = now;
+        if (target === FocusState.SLIGHTLY_DISTRACTED) {
+            this.lastYellowAt = now;
+        }
+        else if (target === FocusState.DISTRACTED) {
+            this.lastRedAt = now;
+        }
+        this.recordEvent(target, source, confidence, detail);
+        this.sampleTimeline();
+        this.pushLive();
+        if (target === FocusState.SLIGHTLY_DISTRACTED || target === FocusState.DISTRACTED) {
+            this.evaluateIntervention();
+        }
     }
     recordEvent(state, source, confidence, detail) {
         const e = new FocusEvent();
@@ -183,6 +307,26 @@ export class FocusController {
         }
         return 25 + Math.round(Math.random() * 15);
     }
+    /** è¯„ä¼°æ˜¯å¦å¹²é¢„ï¼ˆç» InterventionEngineï¼ŒPhase 0 ä»…å†³ç­–+è®°å½•ï¼ŒUI å‘ˆç°ç•™å¾…ç¬¬ 1 æ­¥ï¼‰ */
+    evaluateIntervention() {
+        const ctx = {
+            sessionId: this.session.id,
+            state: this.state,
+            sinceMs: Date.now() - this.stateEnteredAt,
+            hasWatch: SensorService.getInstance().isWristPresent(),
+            personality: AppStorage.get(StorageKey.USER_PERSONALITY) ?? 'GENTLE',
+            perceptionMode: this.perceptionMode,
+            recent: InterventionEngine.getInstance().getRecent()
+        };
+        const res = InterventionEngine.getInstance().evaluate(ctx);
+        this.lastDecision = res.decision;
+        if (res.event !== null) {
+            this.session.interventions.push(res.event);
+            if (this.onIntervention !== null) {
+                this.onIntervention(res.decision, res.event);
+            }
+        }
+    }
     /** è¿›å…¥ AI ç­”ç–‘ï¼šåœæ­¢æ‘„åƒå¤´ç›‘æµ‹ï¼Œè®¡æ—¶ä¸ä¸­æ–­ï¼ˆè®¡å…¥æ€»æ—¶é•¿ï¼Œä¸è®¡å‡€ä¸“æ³¨ï¼‰ */
     startQA() {
         if (!this.running) {
@@ -196,9 +340,12 @@ export class FocusController {
     endQA() {
         this.qaMode = false;
         this.state = FocusState.FOCUSED;
-        FocusDetectionService.getInstance().start((r) => {
-            this.onDetection(r);
-        });
+        this.stateEnteredAt = Date.now();
+        if (PermissionService.getInstance().snapshot().camera) {
+            FocusDetectionService.getInstance().start((r) => {
+                this.onDetection(r);
+            });
+        }
         this.pushLive();
     }
     addQuestion(q) {
@@ -214,12 +361,15 @@ export class FocusController {
     resume() {
         this.paused = false;
         this.state = FocusState.FOCUSED;
-        FocusDetectionService.getInstance().start((r) => {
-            this.onDetection(r);
-        });
+        this.stateEnteredAt = Date.now();
+        if (PermissionService.getInstance().snapshot().camera) {
+            FocusDetectionService.getInstance().start((r) => {
+                this.onDetection(r);
+            });
+        }
         this.pushLive();
     }
-    /** ä¼‘æ¯ï¼šåœæ­¢æ£€æµ‹ï¼Œæš‚åœä¸“æ³¨ç»Ÿè®¡ */
+    /** ä¼‘æ¯ï¼šåœæ­¢æ£€æµ‹ï¼Œæš‚åœä¸“æ³¨ç»Ÿè®¡ï¼ˆè®¡å…¥å¢™é’Ÿï¼Œè®¡å…¥ä¼‘æ¯ï¼‰ */
     startBreak() {
         this.resting = true;
         this.state = FocusState.RESTING;
@@ -229,9 +379,12 @@ export class FocusController {
     endBreak() {
         this.resting = false;
         this.state = FocusState.FOCUSED;
-        FocusDetectionService.getInstance().start((r) => {
-            this.onDetection(r);
-        });
+        this.stateEnteredAt = Date.now();
+        if (PermissionService.getInstance().snapshot().camera) {
+            FocusDetectionService.getInstance().start((r) => {
+                this.onDetection(r);
+            });
+        }
         this.pushLive();
     }
     /** æ‰‹åŠ¨åˆ‡æ¢çŠ¶æ€ï¼ˆæ¼”ç¤ºç”¨ï¼Œé•¿æŒ‰å‘¼å¸ç¯è§¦å‘ï¼‰ */
@@ -249,52 +402,140 @@ export class FocusController {
             FocusDetectionService.getInstance().resume();
         }
     }
+    /** å´©æºƒ/åå°æ¢å¤ï¼šä»å¿«ç…§æ¢å¤è®¡æ—¶ç´¯åŠ å™¨ä¸çŠ¶æ€ï¼ˆæ¢å¤å¼¹çª—åœ¨ç¬¬ 1 æ­¥æ¥å…¥ï¼‰ */
+    restore(snap, tasks) {
+        if (tasks !== undefined) {
+            this.tasks = tasks;
+        }
+        this.session = new FocusSession();
+        this.session.id = snap.sessionId;
+        this.session.status = SessionStatus.RUNNING;
+        this.session.perceptionMode = snap.perceptionMode;
+        this.perceptionMode = snap.perceptionMode;
+        this.totalSec = snap.totalSec;
+        this.focusSec = snap.focusSec;
+        this.distractionSec = snap.distractionSec;
+        this.qaSec = snap.qaSec;
+        this.breakSec = snap.breakSec;
+        this.state = snap.state;
+        this.stateEnteredAt = Date.now();
+        this.running = true;
+        this.lastTickAt = Date.now();
+        this.tickId = setInterval(() => {
+            this.recomputeTick();
+        }, FocusTuning.TICK_MS);
+        this.snapshotId = setInterval(() => {
+            this.writeSnapshot();
+        }, FocusTuning.SNAPSHOT_INTERVAL_MS);
+        this.pushLive();
+        if (PermissionService.getInstance().snapshot().camera) {
+            FocusDetectionService.getInstance().start((r) => {
+                this.onDetection(r);
+            });
+        }
+        StorageService.getInstance().saveKv(StorageKey.ACTIVE_SESSION_ID, this.session.id).catch(() => { });
+    }
     /** ç»“æŸä¼šè¯ï¼šè½ç›˜å‰çš„æ”¶å°¾ */
     finalize() {
         if (this.tickId >= 0) {
             clearInterval(this.tickId);
             this.tickId = -1;
         }
+        if (this.snapshotId >= 0) {
+            clearInterval(this.snapshotId);
+            this.snapshotId = -1;
+        }
         FocusDetectionService.getInstance().stop();
         this.running = false;
         this.session.endTime = Date.now();
-        this.session.totalDuration = this.totalSec;
-        this.session.focusDuration = this.focusSec;
-        this.session.distractionDuration = this.distractionSec;
-        this.session.qaDuration = this.qaSec;
-        this.session.breakDuration = this.breakSec;
+        this.session.totalDuration = Math.floor(this.totalSec);
+        this.session.focusDuration = Math.floor(this.focusSec);
+        this.session.distractionDuration = Math.floor(this.distractionSec);
+        this.session.qaDuration = Math.floor(this.qaSec);
+        this.session.breakDuration = Math.floor(this.breakSec);
+        this.session.pausedDuration = Math.floor(this.pausedAccum);
         this.session.timeline = this.timeline;
         this.session.events = this.events;
         this.session.completedTaskIds = this.tasks.filter((t) => t.done).map((t) => t.id);
         this.session.status = SessionStatus.FINISHED;
+        this.session.updatedAt = Date.now();
+        // è½æœ€ç»ˆå¿«ç…§ + æŒä¹…åŒ–å¹²é¢„äº‹ä»¶ + ä»»åŠ¡å½’å±æ›²çº¿
+        this.writeSnapshot().catch(() => { });
+        if (this.session.interventions.length > 0) {
+            StorageService.getInstance().saveInterventions(this.session.interventions).catch(() => { });
+        }
+        if (this.session.taskTimeline.length > 0) {
+            StorageService.getInstance().saveTaskTimeline(this.session.taskTimeline, this.session.id).catch(() => { });
+        }
+        StorageService.getInstance().saveKv(StorageKey.ACTIVE_SESSION_ID, '').catch(() => { });
         this.pushLive();
         return this.session;
     }
+    async writeSnapshot() {
+        if (!this.running) {
+            return;
+        }
+        const snap = new SessionSnapshot();
+        snap.sessionId = this.session.id;
+        snap.ts = Date.now();
+        snap.totalSec = Math.floor(this.totalSec);
+        snap.focusSec = Math.floor(this.focusSec);
+        snap.distractionSec = Math.floor(this.distractionSec);
+        snap.qaSec = Math.floor(this.qaSec);
+        snap.breakSec = Math.floor(this.breakSec);
+        snap.currentTaskId = this.currentTaskId;
+        snap.state = this.state;
+        snap.perceptionMode = this.perceptionMode;
+        try {
+            await StorageService.getInstance().saveSnapshot(snap);
+            this.session.snapshotsCount += 1;
+            this.session.lastSnapshotAt = snap.ts;
+        }
+        catch (e) {
+            // å­˜å‚¨å¤±è´¥ä¸å½±å“è®¡æ—¶
+        }
+    }
     pushLive() {
-        AppStorage.setOrCreate(StorageKey.FOCUS_ELAPSED, this.totalSec);
-        AppStorage.setOrCreate(StorageKey.FOCUS_NET, this.focusSec);
+        AppStorage.setOrCreate(StorageKey.FOCUS_ELAPSED, Math.floor(this.totalSec));
+        AppStorage.setOrCreate(StorageKey.FOCUS_NET, Math.floor(this.focusSec));
         AppStorage.setOrCreate(StorageKey.FOCUS_STATE, this.state);
-        AppStorage.setOrCreate(StorageKey.FOCUS_QA_ELAPSED, this.qaSec);
+        AppStorage.setOrCreate(StorageKey.FOCUS_QA_ELAPSED, Math.floor(this.qaSec));
+        AppStorage.setOrCreate(StorageKey.PERCEPTION_MODE, this.perceptionMode);
     }
 }
 FocusController.inst = null;
-//# sourceMappingURL=FocusController.js.mapÂ•ÙFD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\Enums.etsÙMD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\FocusSession.etsÙXD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\FocusDetectionService.etsÙJD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\common\Constants.etsÙGD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\utils\IdUtils.etsÙRD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\FocusController.etsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ(D:\iKnow\iKnow-master\iKnow-master\entryÙ"D:\iKnow\iKnow-master\iKnow-master¥entry¥1.0.0Ô  ‘ÔrC’²hostDependencyName®hostModuleName»../services/FocusController¥entryÙ(D:\iKnow\iKnow-master\iKnow-master\entryÃÃÚ!kimport { FocusState, FocusSource, SessionStatus } from '../models/Enums'
+//# sourceMappingURL=FocusController.js.mapÂ›ÙFD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\Enums.etsÙMD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\FocusSession.etsÙPD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\SessionSnapshot.etsÙJD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\common\Constants.etsÙLD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\common\FocusTuning.etsÙTD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\PermissionService.etsÙQD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\StorageService.etsÙXD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\FocusDetectionService.etsÙPD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\SensorService.etsÙUD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\InterventionEngine.etsÙGD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\utils\IdUtils.etsÙRD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\FocusController.etsÔrB›ªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath¬shouldEmitJs¥entryÃÂÙ(D:\iKnow\iKnow-master\iKnow-master\entryÙ"D:\iKnow\iKnow-master\iKnow-master¥entry¥1.0.0Ô  ‘ÔrC’²hostDependencyName®hostModuleName»../services/FocusController¥entryÙ(D:\iKnow\iKnow-master\iKnow-master\entryÃÃÚGimport { FocusState, FocusSource, SessionStatus } from '../models/Enums'
 import { FocusSession, FocusEvent, FocusTimelinePoint } from '../models/FocusSession'
+import { SessionSnapshot } from '../models/SessionSnapshot'
+import { InterventionEvent } from '../models/InterventionEvent'
 import { Task } from '../models/Task'
 import { QuestionRecord } from '../models/QuestionRecord'
-import { FocusDetectionService } from './FocusDetectionService'
 import { FocusDetectionResult } from './ServiceTypes'
-import { StorageKey, DemoFlag } from '../common/Constants'
+import { StorageKey } from '../common/Constants'
+import { FocusTuning } from '../common/FocusTuning'
+import { PermissionService } from './PermissionService'
+import { StorageService } from './StorageService'
+import { FocusDetectionService } from './FocusDetectionService'
+import { SensorService } from './SensorService'
+import { InterventionEngine, InterventionEvalContext } from './InterventionEngine'
+import { CompanionDecision } from './ai/CompanionService'
 import { IdUtils } from '../utils/IdUtils'
 
 /**
- * ä¸“æ³¨æ§åˆ¶å™¨ â€”â€” ç»Ÿä¸€é©±åŠ¨ï¼š
- *   è®¡æ—¶ï¼ˆæ€»/å‡€/åˆ†å¿ƒ/ç­”ç–‘/ä¼‘æ¯ï¼‰ + çŠ¶æ€æœºï¼ˆç»¿/é»„/çº¢ï¼‰ + æ£€æµ‹è®¢é˜… + æ›²çº¿é‡‡æ ·
- * æ˜¯ã€Œè§„åˆ’ â†’ ä¸“æ³¨ â†’ çŠ¶æ€æœº â†’ ç­”ç–‘(è®¡æ—¶ä¸ä¸­æ–­) â†’ å¤ç›˜ã€é—­ç¯çš„è¿è¡Œæ—¶å¼•æ“ã€‚
+ * ä¸“æ³¨æ§åˆ¶å™¨ â€”â€” å”¯ä¸€è®¡æ—¶æºï¼ˆPRD Â§8ï¼Œç¡¬è§„åˆ™ Â§6/Â§7/Â§8ï¼‰
+ *
+ *  - è®¡æ—¶ç”¨ Date.now() å·®å€¼é©±åŠ¨ï¼ˆé setInterval è®¡æ•°ï¼‰ï¼šæ¯å¿ƒè·³ç´¯åŠ å·®å€¼ï¼Œåå°é•¿ç¡æ—¶
+ *    ä»¥ MAX_TICK_DELTA_MS å°é¡¶ï¼Œé¿å…å·®å€¼çˆ†ç‚¸ã€‚
+ *  - æ¯ 10 s è½ä¸€æ¡ SessionSnapshotï¼Œæ”¯æŒå´©æºƒ/åå°æ¢å¤ã€‚
+ *  - çŠ¶æ€æœºå»æŠ–ï¼šconfidence < 0.5 å¿½ç•¥ï¼ˆé‡‡è€Œä¸ä¿¡ï¼‰ï¼›æŒ‰ FocusTuning çš„é©»ç•™/å†·å´å‚æ•°
+ *    å†³å®šæ˜¯å¦åˆ‡æ¢ï¼ˆGREENâ†’é»„ 5s / çº¢â†’é»„ 5s / é»„â†’ç»¿ 10sï¼›é»„ 3min / çº¢ 5min å†·å´ï¼‰ã€‚
+ *  - è¿›å…¥åˆ†å¿ƒçŠ¶æ€æ—¶ç» InterventionEngine è¯„ä¼°æ˜¯å¦å¹²é¢„ï¼ˆæ— æ‰‹è¡¨ RED èµ°æ‰‹æœºå£°éŸ³+å±å¹•ï¼‰ã€‚
+ *  - FocusBreak ç­‰é¡µé¢åªæ¶ˆè´¹æœ¬æ§åˆ¶å™¨çŠ¶æ€ï¼Œä¸å¾—è‡ªå¸¦è®¡æ—¶å™¨ã€‚
  */
 export class FocusController {
   private static inst: FocusController | null = null
   private tickId: number = -1
+  private snapshotId: number = -1
   private session: FocusSession = new FocusSession()
   private tasks: Task[] = []
   private questions: QuestionRecord[] = []
@@ -303,17 +544,29 @@ export class FocusController {
   private resting: boolean = false
   private paused: boolean = false
 
+  // è®¡æ—¶ç´¯åŠ å™¨ï¼ˆç§’ï¼Œæµ®ç‚¹ï¼›æ˜¾ç¤ºæ—¶å–æ•´ï¼‰
   private totalSec: number = 0
   private focusSec: number = 0
   private distractionSec: number = 0
   private qaSec: number = 0
   private breakSec: number = 0
+  private pausedAccum: number = 0
 
   private state: FocusState = FocusState.FOCUSED
-  private stateSinceSec: number = 0
-  private sampleCounter: number = 0
+  private stateEnteredAt: number = 0
+  private lastTickAt: number = 0
+  private sampleAccumMs: number = 0
+  private lastYellowAt: number = 0
+  private lastRedAt: number = 0
+
   private timeline: FocusTimelinePoint[] = []
   private events: FocusEvent[] = []
+  private currentTaskId: string = ''
+  private perceptionMode: string = 'PERCEPTION_FULL'
+
+  private onIntervention: ((d: CompanionDecision, e: InterventionEvent) => void) | null = null
+  private lastDecision: CompanionDecision | null = null
+  private permSubscribed: boolean = false
 
   static getInstance(): FocusController {
     if (FocusController.inst === null) {
@@ -339,15 +592,15 @@ export class FocusController {
   }
 
   getTotalSec(): number {
-    return this.totalSec
+    return Math.floor(this.totalSec)
   }
 
   getFocusSec(): number {
-    return this.focusSec
+    return Math.floor(this.focusSec)
   }
 
   getQaSec(): number {
-    return this.qaSec
+    return Math.floor(this.qaSec)
   }
 
   isQaMode(): boolean {
@@ -366,6 +619,19 @@ export class FocusController {
     return this.running
   }
 
+  getPerceptionMode(): string {
+    return this.perceptionMode
+  }
+
+  getLastDecision(): CompanionDecision | null {
+    return this.lastDecision
+  }
+
+  /** UI æ³¨å†Œå¹²é¢„å›è°ƒï¼ˆPhase 1 ç”¨äºå¼¹çª—/æ¨ªå¹…å‘ˆç°ï¼‰ */
+  setOnIntervention(cb: (d: CompanionDecision, e: import('../models/InterventionEvent').InterventionEvent) => void): void {
+    this.onIntervention = cb
+  }
+
   /** å¼€å§‹ä¸€ä¸ªä¸“æ³¨ä¼šè¯ */
   start(tasks: Task[]): void {
     this.tasks = tasks
@@ -376,19 +642,48 @@ export class FocusController {
     this.session.taskIds = tasks.map((t: Task): string => t.id)
     this.session.plannedDuration = tasks.reduce((sum: number, t: Task): number => sum + t.estimatedDuration, 0)
     this.session.status = SessionStatus.RUNNING
-
+    this.session.perceptionMode = PermissionService.getInstance().snapshot().camera ? 'PERCEPTION_FULL' : 'PERCEPTION_TIMER_ONLY'
+    this.perceptionMode = this.session.perceptionMode
+    this.currentTaskId = tasks.length > 0 ? tasks[0].id : ''
     this.resetCounters()
     this.running = true
     this.state = FocusState.FOCUSED
+    this.stateEnteredAt = Date.now()
     this.questions = []
+    InterventionEngine.getInstance().setSessionId(this.session.id)
+    this.subscribePermission()
 
-    FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
-      this.onDetection(r)
-    })
+    if (PermissionService.getInstance().snapshot().camera) {
+      FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
+        this.onDetection(r)
+      })
+    }
     this.tickId = setInterval(() => {
-      this.tick()
-    }, DemoFlag.TICK)
+      this.recomputeTick()
+    }, FocusTuning.TICK_MS)
+    this.snapshotId = setInterval(() => {
+      this.writeSnapshot()
+    }, FocusTuning.SNAPSHOT_INTERVAL_MS)
     this.pushLive()
+    StorageService.getInstance().saveKv(StorageKey.ACTIVE_SESSION_ID, this.session.id).catch(() => {})
+  }
+
+  private subscribePermission(): void {
+    if (this.permSubscribed) {
+      return
+    }
+    this.permSubscribed = true
+    PermissionService.getInstance().onChange((a) => {
+      if (!a.camera) {
+        FocusDetectionService.getInstance().stop()
+        this.perceptionMode = 'PERCEPTION_TIMER_ONLY'
+      } else if (this.running && !this.qaMode && !this.resting && !this.paused) {
+        this.perceptionMode = 'PERCEPTION_FULL'
+        FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
+          this.onDetection(r)
+        })
+      }
+    })
   }
 
   private resetCounters(): void {
@@ -397,8 +692,12 @@ export class FocusController {
     this.distractionSec = 0
     this.qaSec = 0
     this.breakSec = 0
-    this.stateSinceSec = 0
-    this.sampleCounter = 0
+    this.pausedAccum = 0
+    this.stateEnteredAt = Date.now()
+    this.lastTickAt = Date.now()
+    this.sampleAccumMs = 0
+    this.lastYellowAt = 0
+    this.lastRedAt = 0
     this.timeline = []
     this.events = []
     this.qaMode = false
@@ -406,48 +705,89 @@ export class FocusController {
     this.paused = false
   }
 
-  private tick(): void {
+  /** è®¡æ—¶å¿ƒè·³ï¼šç”¨ Date.now() å·®å€¼ç´¯åŠ ï¼ˆç¡¬è§„åˆ™ Â§7ï¼‰ */
+  private recomputeTick(): void {
+    const now = Date.now()
     if (!this.running) {
+      this.lastTickAt = now
       return
     }
+    const dtMs = Math.min(now - this.lastTickAt, FocusTuning.MAX_TICK_DELTA_MS)
+    this.lastTickAt = now
+    const dt = dtMs / 1000
+    // å¢™é’Ÿï¼šåŒ…å«ä¼‘æ¯ / æš‚åœ / ç­”ç–‘ï¼ˆPRD Â§5 æ€»å­¦ä¹  = å¢™é’Ÿ âˆ’ ä¼‘æ¯ âˆ’ æš‚åœï¼‰
+    this.totalSec += dt
     if (this.paused) {
+      this.pausedAccum += dt
       return
     }
     if (this.resting) {
-      this.breakSec++
+      this.breakSec += dt
       this.pushLive()
       return
     }
-    this.totalSec++
     if (this.qaMode) {
-      this.qaSec++
+      this.qaSec += dt
     } else if (this.state === FocusState.FOCUSED) {
-      this.focusSec++
+      this.focusSec += dt
     } else {
-      this.distractionSec++
+      this.distractionSec += dt
     }
-    this.stateSinceSec++
-    this.sampleCounter++
-    if (this.sampleCounter >= 30) {
-      this.sampleCounter = 0
+    this.sampleAccumMs += dtMs
+    if (this.sampleAccumMs >= 30000) {
+      this.sampleAccumMs = 0
       this.sampleTimeline()
     }
     this.pushLive()
   }
 
-  /** æ‘„åƒå¤´æ£€æµ‹å›è°ƒ â†’ çŠ¶æ€æœº */
+  /** æ‘„åƒå¤´æ£€æµ‹å›è°ƒ â†’ å»æŠ–çŠ¶æ€æœºï¼ˆç¡¬è§„åˆ™ Â§9 é‡‡è€Œä¸ä¿¡ï¼‰ */
   private onDetection(r: FocusDetectionResult): void {
     if (!this.running || this.qaMode || this.resting || this.paused) {
       return
     }
-    const target = this.mapState(r.state)
-    if (target !== this.state) {
-      this.state = target
-      this.stateSinceSec = 0
-      this.recordEvent(target, r.source, r.confidence, r.detail)
-      this.sampleTimeline()
-      this.pushLive()
+    if (r.confidence < FocusTuning.CONFIDENCE_FLOOR) {
+      // é‡‡è€Œä¸ä¿¡ï¼šä»…è®°è´¦ï¼Œä¸åˆ‡æ¢
+      this.recordEvent(this.mapState(r.state), r.source, r.confidence, 'below-confidence')
+      return
     }
+    const target = this.mapState(r.state)
+    if (target === this.state) {
+      this.recordEvent(target, r.source, r.confidence, 'no-transit')
+      return
+    }
+    const now = Date.now()
+    const dwellOk = now - this.stateEnteredAt >= this.dwellFor(target)
+    const coolOk = this.cooldownElapsed(target)
+    if (dwellOk && coolOk) {
+      this.transitionTo(target, r.confidence, r.source, r.detail)
+    } else {
+      this.recordEvent(target, r.source, r.confidence, 'debounced')
+    }
+  }
+
+  private dwellFor(target: FocusState): number {
+    if (target === FocusState.SLIGHTLY_DISTRACTED) {
+      return FocusTuning.DWELL_GREEN_TO_YELLOW_MS
+    }
+    if (target === FocusState.DISTRACTED) {
+      return FocusTuning.DWELL_RED_TO_YELLOW_MS
+    }
+    if (target === FocusState.FOCUSED) {
+      return FocusTuning.DWELL_YELLOW_TO_GREEN_MS
+    }
+    return FocusTuning.MIN_DWELL_MS
+  }
+
+  private cooldownElapsed(target: FocusState): boolean {
+    const now = Date.now()
+    if (target === FocusState.SLIGHTLY_DISTRACTED) {
+      return now - this.lastYellowAt >= FocusTuning.YELLOW_COOLDOWN_MS
+    }
+    if (target === FocusState.DISTRACTED) {
+      return now - this.lastRedAt >= FocusTuning.RED_COOLDOWN_MS
+    }
+    return true
   }
 
   private mapState(s: FocusState): FocusState {
@@ -458,6 +798,23 @@ export class FocusController {
       return FocusState.DISTRACTED
     }
     return FocusState.FOCUSED
+  }
+
+  private transitionTo(target: FocusState, confidence: number, source: FocusSource, detail: string): void {
+    const now = Date.now()
+    this.state = target
+    this.stateEnteredAt = now
+    if (target === FocusState.SLIGHTLY_DISTRACTED) {
+      this.lastYellowAt = now
+    } else if (target === FocusState.DISTRACTED) {
+      this.lastRedAt = now
+    }
+    this.recordEvent(target, source, confidence, detail)
+    this.sampleTimeline()
+    this.pushLive()
+    if (target === FocusState.SLIGHTLY_DISTRACTED || target === FocusState.DISTRACTED) {
+      this.evaluateIntervention()
+    }
   }
 
   private recordEvent(state: FocusState, source: FocusSource, confidence: number, detail: string): void {
@@ -489,6 +846,27 @@ export class FocusController {
     return 25 + Math.round(Math.random() * 15)
   }
 
+  /** è¯„ä¼°æ˜¯å¦å¹²é¢„ï¼ˆç» InterventionEngineï¼ŒPhase 0 ä»…å†³ç­–+è®°å½•ï¼ŒUI å‘ˆç°ç•™å¾…ç¬¬ 1 æ­¥ï¼‰ */
+  private evaluateIntervention(): void {
+    const ctx: InterventionEvalContext = {
+      sessionId: this.session.id,
+      state: this.state,
+      sinceMs: Date.now() - this.stateEnteredAt,
+      hasWatch: SensorService.getInstance().isWristPresent(),
+      personality: AppStorage.get<string>(StorageKey.USER_PERSONALITY) ?? 'GENTLE',
+      perceptionMode: this.perceptionMode,
+      recent: InterventionEngine.getInstance().getRecent()
+    }
+    const res = InterventionEngine.getInstance().evaluate(ctx)
+    this.lastDecision = res.decision
+    if (res.event !== null) {
+      this.session.interventions.push(res.event)
+      if (this.onIntervention !== null) {
+        this.onIntervention(res.decision, res.event as InterventionEvent)
+      }
+    }
+  }
+
   /** è¿›å…¥ AI ç­”ç–‘ï¼šåœæ­¢æ‘„åƒå¤´ç›‘æµ‹ï¼Œè®¡æ—¶ä¸ä¸­æ–­ï¼ˆè®¡å…¥æ€»æ—¶é•¿ï¼Œä¸è®¡å‡€ä¸“æ³¨ï¼‰ */
   startQA(): void {
     if (!this.running) {
@@ -503,9 +881,12 @@ export class FocusController {
   endQA(): void {
     this.qaMode = false
     this.state = FocusState.FOCUSED
-    FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
-      this.onDetection(r)
-    })
+    this.stateEnteredAt = Date.now()
+    if (PermissionService.getInstance().snapshot().camera) {
+      FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
+        this.onDetection(r)
+      })
+    }
     this.pushLive()
   }
 
@@ -524,13 +905,16 @@ export class FocusController {
   resume(): void {
     this.paused = false
     this.state = FocusState.FOCUSED
-    FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
-      this.onDetection(r)
-    })
+    this.stateEnteredAt = Date.now()
+    if (PermissionService.getInstance().snapshot().camera) {
+      FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
+        this.onDetection(r)
+      })
+    }
     this.pushLive()
   }
 
-  /** ä¼‘æ¯ï¼šåœæ­¢æ£€æµ‹ï¼Œæš‚åœä¸“æ³¨ç»Ÿè®¡ */
+  /** ä¼‘æ¯ï¼šåœæ­¢æ£€æµ‹ï¼Œæš‚åœä¸“æ³¨ç»Ÿè®¡ï¼ˆè®¡å…¥å¢™é’Ÿï¼Œè®¡å…¥ä¼‘æ¯ï¼‰ */
   startBreak(): void {
     this.resting = true
     this.state = FocusState.RESTING
@@ -541,9 +925,12 @@ export class FocusController {
   endBreak(): void {
     this.resting = false
     this.state = FocusState.FOCUSED
-    FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
-      this.onDetection(r)
-    })
+    this.stateEnteredAt = Date.now()
+    if (PermissionService.getInstance().snapshot().camera) {
+      FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
+        this.onDetection(r)
+      })
+    }
     this.pushLive()
   }
 
@@ -561,210 +948,353 @@ export class FocusController {
     }
   }
 
+  /** å´©æºƒ/åå°æ¢å¤ï¼šä»å¿«ç…§æ¢å¤è®¡æ—¶ç´¯åŠ å™¨ä¸çŠ¶æ€ï¼ˆæ¢å¤å¼¹çª—åœ¨ç¬¬ 1 æ­¥æ¥å…¥ï¼‰ */
+  restore(snap: SessionSnapshot, tasks?: Task[]): void {
+    if (tasks !== undefined) {
+      this.tasks = tasks
+    }
+    this.session = new FocusSession()
+    this.session.id = snap.sessionId
+    this.session.status = SessionStatus.RUNNING
+    this.session.perceptionMode = snap.perceptionMode
+    this.perceptionMode = snap.perceptionMode
+    this.totalSec = snap.totalSec
+    this.focusSec = snap.focusSec
+    this.distractionSec = snap.distractionSec
+    this.qaSec = snap.qaSec
+    this.breakSec = snap.breakSec
+    this.state = (snap.state as FocusState)
+    this.stateEnteredAt = Date.now()
+    this.running = true
+    this.lastTickAt = Date.now()
+    this.tickId = setInterval(() => {
+      this.recomputeTick()
+    }, FocusTuning.TICK_MS)
+    this.snapshotId = setInterval(() => {
+      this.writeSnapshot()
+    }, FocusTuning.SNAPSHOT_INTERVAL_MS)
+    this.pushLive()
+    if (PermissionService.getInstance().snapshot().camera) {
+      FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
+        this.onDetection(r)
+      })
+    }
+    StorageService.getInstance().saveKv(StorageKey.ACTIVE_SESSION_ID, this.session.id).catch(() => {})
+  }
+
   /** ç»“æŸä¼šè¯ï¼šè½ç›˜å‰çš„æ”¶å°¾ */
   finalize(): FocusSession {
     if (this.tickId >= 0) {
       clearInterval(this.tickId)
       this.tickId = -1
     }
+    if (this.snapshotId >= 0) {
+      clearInterval(this.snapshotId)
+      this.snapshotId = -1
+    }
     FocusDetectionService.getInstance().stop()
     this.running = false
     this.session.endTime = Date.now()
-    this.session.totalDuration = this.totalSec
-    this.session.focusDuration = this.focusSec
-    this.session.distractionDuration = this.distractionSec
-    this.session.qaDuration = this.qaSec
-    this.session.breakDuration = this.breakSec
+    this.session.totalDuration = Math.floor(this.totalSec)
+    this.session.focusDuration = Math.floor(this.focusSec)
+    this.session.distractionDuration = Math.floor(this.distractionSec)
+    this.session.qaDuration = Math.floor(this.qaSec)
+    this.session.breakDuration = Math.floor(this.breakSec)
+    this.session.pausedDuration = Math.floor(this.pausedAccum)
     this.session.timeline = this.timeline
     this.session.events = this.events
     this.session.completedTaskIds = this.tasks.filter((t: Task): boolean => t.done).map((t: Task): string => t.id)
     this.session.status = SessionStatus.FINISHED
+    this.session.updatedAt = Date.now()
+    // è½æœ€ç»ˆå¿«ç…§ + æŒä¹…åŒ–å¹²é¢„äº‹ä»¶ + ä»»åŠ¡å½’å±æ›²çº¿
+    this.writeSnapshot().catch(() => {})
+    if (this.session.interventions.length > 0) {
+      StorageService.getInstance().saveInterventions(this.session.interventions).catch(() => {})
+    }
+    if (this.session.taskTimeline.length > 0) {
+      StorageService.getInstance().saveTaskTimeline(this.session.taskTimeline, this.session.id).catch(() => {})
+    }
+    StorageService.getInstance().saveKv(StorageKey.ACTIVE_SESSION_ID, '').catch(() => {})
     this.pushLive()
     return this.session
   }
 
+  private async writeSnapshot(): Promise<void> {
+    if (!this.running) {
+      return
+    }
+    const snap = new SessionSnapshot()
+    snap.sessionId = this.session.id
+    snap.ts = Date.now()
+    snap.totalSec = Math.floor(this.totalSec)
+    snap.focusSec = Math.floor(this.focusSec)
+    snap.distractionSec = Math.floor(this.distractionSec)
+    snap.qaSec = Math.floor(this.qaSec)
+    snap.breakSec = Math.floor(this.breakSec)
+    snap.currentTaskId = this.currentTaskId
+    snap.state = this.state
+    snap.perceptionMode = this.perceptionMode
+    try {
+      await StorageService.getInstance().saveSnapshot(snap)
+      this.session.snapshotsCount += 1
+      this.session.lastSnapshotAt = snap.ts
+    } catch (e) {
+      // å­˜å‚¨å¤±è´¥ä¸å½±å“è®¡æ—¶
+    }
+  }
+
   private pushLive(): void {
-    AppStorage.setOrCreate<number>(StorageKey.FOCUS_ELAPSED, this.totalSec)
-    AppStorage.setOrCreate<number>(StorageKey.FOCUS_NET, this.focusSec)
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_ELAPSED, Math.floor(this.totalSec))
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_NET, Math.floor(this.focusSec))
     AppStorage.setOrCreate<string>(StorageKey.FOCUS_STATE, this.state)
-    AppStorage.setOrCreate<number>(StorageKey.FOCUS_QA_ELAPSED, this.qaSec)
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_QA_ELAPSED, Math.floor(this.qaSec))
+    AppStorage.setOrCreate<string>(StorageKey.PERCEPTION_MODE, this.perceptionMode)
   }
 }
-ÀÔrD•¯../models/Enums³../common/Constants·./FocusDetectionService¶../models/FocusSession°../utils/IdUtilsÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÂÙFD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\Enums.etsAÃªoh-resolveÂEAÂÙJD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\common\Constants.etsAÃªoh-resolveÂEAÂÙXD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\FocusDetectionService.etsAÃªoh-resolveÂEAÂÙMD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\FocusSession.etsAÃªoh-resolveÂEAÂÙGD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\utils\IdUtils.etsAÃªoh-resolveÂ“ÔrF–§version¤fileªsourceRoot§sources¥names¨mappings²FocusController.js ‘³FocusController.etsÜš”    ”  ”	  	”  ”  "”"  /”$  1”*  7”;  ÌH”<  ÌHœ”   ” ”	 	” ” ”! !”# #”5 5”7 7”= =”ÌU ÌU”ÌV ÌU˜”   ” ”	 	” ”   ”& &”? ?”Ì@ ?š”   ” ”	 	” ” ” ” ”% %”: :”; :˜”   ” ”	 	” ” ” ”* *”+ *‘”  	 ‘” ””   ” ” ” ‘”  –” 
-” ” ” ” ” —” 
-” ” "” &”' 2”) 4”* 4•” 
-” ” ” ” •” 
-” ” (” *” *•” 
-” ” ” "” "•” 
-” ” ” !” !•” 
-” ” ” "” "•” 
-” ” ” !” !•” 
-” ” ” ” •” 
-” ” ” ” •” 
-” ” #” $”  $•” 
-” ” ” ” •” 
-” ” ” ” —” 
-” ” ” (”  )”' 0”( 0•”  
-”  ”  "”  #”  #•” !
-” !” !"” !#” !#•” "
-” "” "+” "-” "-•” #
-” #” #!” ##” ##’” Í7 ” Í7”” %”
- %” %	” %˜” &” &” &” &”  &”% &!”) &%”+ &'™” '” '” '”  '”# '”' '!”6 '0”8 '2”9 '2‘”	 (–” )” )” )” )”# )”$ )’” *” *’” ,” ,–” -” -” -” -” -” -’” .” .’” 0” 0
-–” 1” 1” 1” 1” 1” 1’” 2” 2’” 4” 4–” 5” 5” 5” 5” 5” 5’” 6” 6’” 8” 8
-–” 9” 9” 9” 9” 9” 9’” :” :’” <” <–” =” =” =” =” =” =’” >” >’” Ì@” Ì@–” ÌA” ÌA” ÌA” ÌA” ÌA” ÌA’” ÌB” ÌB’” ÌD” ÌD
-–” ÌE” ÌE” ÌE” ÌE” ÌE” ÌE’” ÌF” ÌF’” ÌH” ÌH
-–” ÌI” ÌI” ÌI” ÌI” ÌI” ÌI’” ÌJ” ÌJ’” ÌL” ÌL–” ÌM” ÌM” ÌM” ÌM” ÌM” ÌM’” ÌN” ÌN’” ÌP” ÌP
-–” ÌQ” ÌQ” ÌQ” ÌQ” ÌQ” ÌQ’” ÌR” ÌR’” ÌT” ÌT–” ÌU” ÌU” ÌU” ÌU” ÌU” ÌU’” ÌV” ÌV’” ÌX” ÌX”” ÌY”	 ÌY”
- ÌY” ÌY—” ÌZ” ÌZ” ÌZ	” ÌZ” ÌZ” ÌZ” ÌZ™” Ì[” Ì[” Ì[	” Ì[” Ì[” Ì[”' Ì[#”) Ì[%”* Ì[%œ” Ì\” Ì\” Ì\	” Ì\” Ì\” Ì\” Ì\”! Ì\”" Ì\”& Ì\"”( Ì\$”) Ì\$Ü ” Ì]” Ì]” Ì]	” Ì]” Ì]” Ì]” Ì]”" Ì]”# Ì]”) Ì]%”, Ì](”- Ì])”. Ì]*”/ Ì]+”0 Ì],”5 Ì]1”6 Ì]2”7 Ì]3”8 Ì]4”9 Ì]5”Ì@ Ì]<”ÌA Ì]=”ÌB Ì]>”ÌC Ì]?”ÌI Ì]ÌE”ÌJ Ì]ÌEœ” Ì^” Ì^” Ì^	” Ì^” Ì^” Ì^”! Ì^”% Ì^!”& Ì^"”) Ì^%”+ Ì^'”, Ì^'Ü ” Ì_” Ì_” Ì_	” Ì_” Ì_” Ì_” Ì_”$ Ì_ ”% Ì_!”( Ì_$”) Ì_%”* Ì_&”+ Ì_-”- Ì_7”/ Ì_9”0 Ì_:”1 Ì_;”2 Ì_<”4 Ì_>”5 Ì_?”6 Ì_?Ü ” Ì`” Ì`” Ì`	” Ì`” Ì`”$ Ì` ”' Ì`#”, Ì`(”- Ì`)”3 Ì`/”4 Ì`0”5 Ì`1”8 Ì`<”: Ì`>”; Ì`ÌE”= Ì`ÌO”? Ì`ÌQ”Ì@ Ì`ÌR”ÌC Ì`ÌU”ÌF Ì`ÌX”ÌG Ì`ÌY”ÌH Ì`ÌZ”ÌY Ì`Ìk”Ì[ Ì`Ìm”Ì\ Ì`Ìn”Ì] Ì`Ìo”Ì^ Ì`Ìo›” Ìa” Ìa” Ìa	” Ìa” Ìa” Ìa” Ìa”+ Ìa'”, Ìa(”3 Ìa/”4 Ìa/–” Ìc” Ìc” Ìc	” Ìc” Ìc” Ìc—” Ìd” Ìd” Ìd	” Ìd” Ìd” Ìd” Ìd™” Ìe” Ìe” Ìe	” Ìe” Ìe” Ìe”  Ìe”' Ìe#”( Ìe#—” Ìf” Ìf” Ìf	” Ìf” Ìf” Ìf” Ìfœ” Ìh” Ìh” Ìh”) Ìh%”+ Ìh'”, Ìh(”1 Ìh-”2 Ìh.”3 Ìh/”4 ÌhÌF”6 ÌhÌH”8 ÌhÌJ˜” Ìi” Ìi
-” Ìi” Ìi” Ìi” Ìi” Ìi”  Ìi”” Ìj”	 Ìj”
- Ìj” Ìj™” Ìk” Ìk” Ìk	” Ìk” Ìk”! Ìk”" Ìk”% Ìk!”' Ìk#–” Ìl” Ìl
-” Ìl” Ìl” Ìl” Ìl˜” Ìm”	 Ìm” Ìm” Ìm” Ìm” Ìm” Ìm” Ìm–” Ìn” Ìn” Ìn	” Ìn” Ìn” Ìn’” Ìo” Ìo’” Ìq
-” Ìq—” Ìr” Ìr” Ìr	” Ìr” Ìr” Ìr” Ìr—” Ìs” Ìs” Ìs	” Ìs” Ìs” Ìs” Ìs—” Ìt” Ìt” Ìt	” Ìt” Ìt” Ìt”  Ìt—” Ìu” Ìu” Ìu	” Ìu” Ìu” Ìu” Ìu—” Ìv” Ìv” Ìv	” Ìv” Ìv” Ìv” Ìv—” Ìw” Ìw” Ìw	” Ìw” Ìw” Ìw” Ìw—” Ìx” Ìx” Ìx	” Ìx” Ìx” Ìx” Ìx—” Ìy” Ìy” Ìy	” Ìy” Ìy” Ìy” Ìy—” Ìz” Ìz” Ìz	” Ìz” Ìz” Ìz” Ìz—” Ì{” Ì{” Ì{	” Ì{” Ì{” Ì{” Ì{—” Ì|” Ì|” Ì|	” Ì|” Ì|” Ì|” Ì|—” Ì}” Ì}” Ì}	” Ì}” Ì}” Ì}” Ì}’” Ì~” Ì~’” Ì€
-” Ì€—” Ì” Ì” Ì	” Ì” Ì” Ì” Ì’” Ì‚” Ì‚‘”	 Ìƒ–” Ì„” Ì„” Ì„” Ì„” Ì„” Ì„’” Ì…” Ì…‘”	 Ì†–” Ì‡” Ì‡” Ì‡” Ì‡” Ì‡” Ì‡–” Ìˆ” Ìˆ
-” Ìˆ” Ìˆ” Ìˆ” Ìˆ–” Ì‰” Ì‰
-” Ì‰” Ì‰” Ì‰” Ì‰’” ÌŠ” ÌŠ‘”	 Ì‹–” ÌŒ” ÌŒ” ÌŒ	” ÌŒ” ÌŒ” ÌŒ–” Ì” Ì” Ì” Ì” Ì” Ì–” Ì” Ì
-” Ì” Ì” Ì” Ì‘”	 Ìš” Ì” Ì” Ì” Ì” Ì”  Ì”* Ì(”+ Ì)”2 Ì0”4 Ì2–” Ì” Ì
-” Ì” Ì” Ì” Ì‘”	 Ì‘‘” Ì‘–” Ì’” Ì’
-” Ì’” Ì’”! Ì’”" Ì’‘”	 Ì“–” Ì”” Ì”” Ì”	” Ì”” Ì”” Ì”–” Ì•” Ì•” Ì•	” Ì•” Ì•” Ì•˜” Ì–” Ì–” Ì–” Ì–” Ì–”" Ì–”$ Ì– ”& Ì–"—” Ì—” Ì—
-” Ì—” Ì—”! Ì—”" Ì—”# Ì—–” Ì˜” Ì˜
-” Ì˜” Ì˜”! Ì˜”" Ì˜‘”	 Ì™–” Ìš” Ìš” Ìš	” Ìš” Ìš” Ìš’” Ì›” Ì›’” Ì” Ì”” Ì
-” Ì” Ì” Ì-Ü ” ÌŸ” ÌŸ” ÌŸ	” ÌŸ” ÌŸ” ÌŸ” ÌŸ”! ÌŸ”" ÌŸ”( ÌŸ$”, ÌŸ(”0 ÌŸ,”1 ÌŸ-”8 ÌŸ4”< ÌŸ8”Ì@ ÌŸ<”ÌA ÌŸ=”ÌG ÌŸÌC”ÌI ÌŸÌE’” Ì ” Ì ‘”	 Ì¡” Ì¢” Ì¢
-” Ì¢” Ì¢” Ì¢” Ì¢”$ Ì¢ ”% Ì¢!”& Ì¢"”' Ì¢#”, Ì¢(”- Ì¢)”. Ì¢)˜” Ì£” Ì£” Ì£” Ì£” Ì£” Ì£”! Ì£”# Ì£—” Ì¤” Ì¤
-” Ì¤” Ì¤” Ì¤” Ì¤”  Ì¤—” Ì¥” Ì¥
-” Ì¥” Ì¥”! Ì¥”" Ì¥”# Ì¥Ü ” Ì¦” Ì¦
-” Ì¦” Ì¦” Ì¦”# Ì¦”% Ì¦”& Ì¦ ”' Ì¦!”- Ì¦'”/ Ì¦)”0 Ì¦*”1 Ì¦+”; Ì¦5”= Ì¦7”> Ì¦8”? Ì¦9”ÌE Ì¦?”ÌF Ì¦Ì@”ÌG Ì¦Ì@–” Ì§” Ì§
-” Ì§” Ì§”! Ì§”" Ì§–” Ì¨” Ì¨
-” Ì¨” Ì¨” Ì¨” Ì¨‘”	 Ì©’” Ìª” Ìª”” Ì¬
-” Ì¬” Ì¬” Ì¬ ˜” Ì­” Ì­” Ì­	” Ì­” Ì­” Ì­”0 Ì­,”2 Ì­.–” Ì®” Ì®” Ì®” Ì®”1 Ì®+”2 Ì®+‘”	 Ì¯˜” Ì°” Ì°” Ì°	” Ì°” Ì°” Ì°”' Ì°#”) Ì°%–” Ì±” Ì±” Ì±” Ì±”( Ì±"”) Ì±"‘”	 Ì²–” Ì³” Ì³” Ì³” Ì³”! Ì³”" Ì³’” Ì´” Ì´š” Ì¶
-” Ì¶” Ì¶” Ì¶'” Ì¶)” Ì¶<” Ì¶>”) Ì¶ÌP”+ Ì¶ÌR”1 Ì¶Ì`˜” Ì·” Ì·
-” Ì·” Ì·” Ì·”  Ì·”" Ì·”# Ì·š” Ì¸”	 Ì¸”
- Ì¸” Ì¸” Ì¸” Ì¸” Ì¸” Ì¸” Ì¸” Ì¸›” Ì¹”	 Ì¹”
- Ì¹” Ì¹” Ì¹” Ì¹” Ì¹”" Ì¹”# Ì¹”% Ì¹!”& Ì¹!š” Ìº”	 Ìº”
- Ìº” Ìº” Ìº” Ìº” Ìº” Ìº”  Ìº”! Ìº—” Ì»”	 Ì»”
- Ì»” Ì»” Ì»” Ì»” Ì»—” Ì¼”	 Ì¼”
- Ì¼” Ì¼” Ì¼” Ì¼” Ì¼—” Ì½”	 Ì½”
- Ì½” Ì½” Ì½”! Ì½”" Ì½š” Ì¾” Ì¾” Ì¾	” Ì¾” Ì¾” Ì¾” Ì¾” Ì¾” Ì¾” Ì¾’” Ì¿” Ì¿’” ÌÁ
-” ÌÁ˜” ÌÂ” ÌÂ
-” ÌÂ” ÌÂ” ÌÂ”( ÌÂ$”* ÌÂ&”+ ÌÂ&Ü ” ÌÃ”	 ÌÃ”
- ÌÃ” ÌÃ” ÌÃ” ÌÃ” ÌÃ” ÌÃ” ÌÃ”" ÌÃ”# ÌÃ”+ ÌÃ'”. ÌÃ*”0 ÌÃ,”1 ÌÃ-”2 ÌÃ-” ÌÄ”	 ÌÄ”
- ÌÄ” ÌÄ” ÌÄ” ÌÄ” ÌÄ”$ ÌÄ ”% ÌÄ!”) ÌÄ%”* ÌÄ&”/ ÌÄ+”0 ÌÄ,”1 ÌÄ,™” ÌÅ”	 ÌÅ”
- ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅš” ÌÆ” ÌÆ” ÌÆ	” ÌÆ” ÌÆ” ÌÆ” ÌÆ” ÌÆ” ÌÆ” ÌÆ’” ÌÇ” ÌÇ”” ÌÉ
-” ÌÉ” ÌÉ” ÌÉ%˜” ÌÊ” ÌÊ” ÌÊ	” ÌÊ” ÌÊ” ÌÊ”$ ÌÊ ”& ÌÊ"Ü ” ÌË” ÌË” ÌË” ÌË” ÌË” ÌË”" ÌË”# ÌË”' ÌË!”( ÌË"”. ÌË(”0 ÌË*”3 ÌË-”4 ÌË.”5 ÌË/”6 ÌË/‘”	 ÌÌ˜” ÌÍ” ÌÍ” ÌÍ	” ÌÍ” ÌÍ” ÌÍ”0 ÌÍ,”2 ÌÍ.Ü ” ÌÎ” ÌÎ” ÌÎ” ÌÎ” ÌÎ” ÌÎ”" ÌÎ”# ÌÎ”' ÌÎ!”( ÌÎ"”. ÌÎ(”0 ÌÎ*”3 ÌÎ-”5 ÌÎ/”6 ÌÎ0”7 ÌÎ0‘”	 ÌÏÜ ” ÌĞ” ÌĞ” ÌĞ” ÌĞ” ÌĞ” ÌĞ” ÌĞ” ÌĞ”# ÌĞ”$ ÌĞ ”* ÌĞ&”, ÌĞ(”/ ÌĞ+”1 ÌĞ-”2 ÌĞ.”3 ÌĞ.’” ÌÑ” ÌÑ’” ÌÓ”. ÌÓ,’” ÌÔ” ÌÔ	—” ÌÕ” ÌÕ” ÌÕ	” ÌÕ” ÌÕ” ÌÕ” ÌÕ’” ÌÖ” ÌÖ‘”	 Ì×—” ÌØ” ÌØ” ÌØ	” ÌØ” ÌØ” ÌØ” ÌØ™” ÌÙ” ÌÙ” ÌÙ	” ÌÙ” ÌÙ” ÌÙ”  ÌÙ”' ÌÙ#”( ÌÙ#™” ÌÚ” ÌÚ” ÌÚ”) ÌÚ%”+ ÌÚ'”, ÌÚ(”0 ÌÚ,”2 ÌÚ.”3 ÌÚ.–” ÌÛ” ÌÛ” ÌÛ	” ÌÛ” ÌÛ” ÌÛ’” ÌÜ” ÌÜ’” ÌŞ”	 ÌŞ—” Ìß” Ìß” Ìß	” Ìß” Ìß” Ìß” Ìß™” Ìà” Ìà” Ìà	” Ìà” Ìà” Ìà”  Ìà”' Ìà#”( Ìà#œ” Ìá” Ìá” Ìá”) Ìá%”+ Ìá'”, Ìá(”1 Ìá-”2 Ìá.”3 Ìá/”4 ÌáÌF”6 ÌáÌH”8 ÌáÌJ˜” Ìâ” Ìâ
-” Ìâ” Ìâ” Ìâ” Ìâ” Ìâ”  Ìâ”” Ìã”	 Ìã”
- Ìã” Ìã–” Ìä” Ìä” Ìä	” Ìä” Ìä” Ìä’” Ìå” Ìå”” Ìç” Ìç” Ìç” Ìçš” Ìè” Ìè” Ìè	” Ìè” Ìè” Ìè” Ìè” Ìè” Ìè” Ìè’” Ìé” Ìé’” Ìë” Ìë’” Ìì”	 Ìì—” Ìí” Ìí” Ìí	” Ìí” Ìí” Ìí” Ìí™” Ìî” Ìî” Ìî	” Ìî” Ìî” Ìî”  Ìî”& Ìî"”' Ìî"™” Ìï” Ìï” Ìï”) Ìï%”+ Ìï'”, Ìï(”0 Ìï,”2 Ìï.”3 Ìï.–” Ìğ” Ìğ” Ìğ	” Ìğ” Ìğ” Ìğ’” Ìñ” Ìñ’” Ìó”
- Ìó—” Ìô” Ìô” Ìô	” Ìô” Ìô” Ìô” Ìô™” Ìõ” Ìõ” Ìõ	” Ìõ” Ìõ” Ìõ”  Ìõ”' Ìõ#”( Ìõ#œ” Ìö” Ìö” Ìö”) Ìö%”+ Ìö'”, Ìö(”1 Ìö-”2 Ìö.”3 Ìö/”4 ÌöÌF”6 ÌöÌH”8 ÌöÌJ˜” Ì÷” Ì÷
-” Ì÷” Ì÷” Ì÷” Ì÷” Ì÷”  Ì÷”” Ìø”	 Ìø”
- Ìø” Ìø–” Ìù” Ìù” Ìù	” Ìù” Ìù” Ìù’” Ìú” Ìú’” Ìü” Ìü’” Ìı” Ìı—” Ìş” Ìş” Ìş	” Ìş” Ìş” Ìş” Ìş™” Ìÿ” Ìÿ” Ìÿ	” Ìÿ” Ìÿ” Ìÿ”  Ìÿ”' Ìÿ#”( Ìÿ#™” Í ” Í ” Í ”) Í %”+ Í '”, Í (”0 Í ,”2 Í .”3 Í .–” Í” Í” Í	” Í” Í” Í’” Í” Í’” Í” Í
-—” Í” Í” Í	” Í” Í” Í” Í™” Í” Í” Í	” Í” Í” Í”  Í”' Í#”( Í#œ” Í” Í” Í”) Í%”+ Í'”, Í(”1 Í-”2 Í.”3 Í/”4 ÍÌF”6 ÍÌH”8 ÍÌJ˜” Í” Í
-” Í” Í” Í” Í” Í”  Í”” Í	”	 Í	”
- Í	” Í	–” Í
+ÀÔrD›¯../models/Enums³../common/Constants¶../models/FocusSession¹../models/SessionSnapshot³./PermissionService°./StorageServiceµ../common/FocusTuning¯./SensorService·./FocusDetectionService°../utils/IdUtils´./InterventionEngineÔrE—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÂÙFD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\Enums.etsAÃªoh-resolveÂEAÂÙJD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\common\Constants.etsAÃªoh-resolveÂEAÂÙMD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\FocusSession.etsAÃªoh-resolveÂEAÂÙPD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\models\SessionSnapshot.etsAÃªoh-resolveÂEAÂÙTD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\PermissionService.etsAÃªoh-resolveÂEAÂÙQD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\StorageService.etsAÃªoh-resolveÂEAÂÙLD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\common\FocusTuning.etsAÃªoh-resolveÂEAÂÙPD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\SensorService.etsAÃªoh-resolveÂEAÂÙXD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\FocusDetectionService.etsAÃªoh-resolveÂEAÂÙGD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\utils\IdUtils.etsAÃªoh-resolveÂEAÂÙUD:\iKnow\iKnow-master\iKnow-master\entry\src\main\ets\services\InterventionEngine.etsAÃªoh-resolveÂ“ÔrF–§version¤fileªsourceRoot§sources¥names¨mappings²FocusController.js ‘³FocusController.etsÜúš”    ”  ”	  	”  ”  "”"  /”$  1”*  7”;  ÌH”<  ÌHœ”   ” ”	 	” ” ”! !”# #”5 5”7 7”= =”ÌU ÌU”ÌV ÌU˜”   ” ”	 	” ” ”   ”; ;”< ;˜”   ” ”	 	” ” ” ”0 0”1 0˜”   ” ”	 	” ” ” ”3 3”4 3˜”  	 ” 	”	 		” 	” 	”" 	"”7 	7”8 	7˜”  
+ ” 
+”	 
+	” 
+” 
+” 
+”1 
+1”2 
+1˜”   ” ”	 	” ”   ”& &”? ?”Ì@ ?˜”   ” ”	 	” ” ” ”/ /”0 /˜”   ” ”	 	” ” 6”# <”9 ÌR”: ÌR˜”   ” ”	 	” ” ” ”* *”+ *‘”   ‘” ””   ” ” ” ‘”  –” 
+” ” ” ” ” –” 
+” ” ”  ” !” !—”  
+”  ”  "”  &”'  2”)  4”*  4•” !
+” !” !” !” !•” "
+” "” "(” "*” "*•” #
+” #” #” #"” #"•” $
+” $” $” $!” $!•” %
+” %” %” %"” %"•” &
+” &” &” &!” &!’” (” (•” )
+” )” )” )” )•” *
+” *” *” *” *•” +
+” +” +#” +$”  +$•” ,
+” ,” ,” ,” ,•” -
+” -” -” -” -•” .
+” .” . ” .!” .!—” 0
+” 0” 0” 0(”  0)”' 00”( 00•” 1
+” 1” 1#” 1$”  1$•” 2
+” 2” 2” 2 ” 2 •” 3
+” 3” 3"” 3#” 3#•” 4
+” 4” 4!” 4"” 4"•” 5
+” 5” 5” 5” 5•” 7
+” 7” 7+” 7-” 7-•” 8
+” 8” 8!” 8#” 8#•” 9
+” 9” 9"” 9$”  9$•” :
+” :” :#”/ :4”0 :4•” <
+” <” <ÌZ”" <Ì^”# <Ì^•” =
+” =” =3”  =7”! =7•” >
+” >” >$”# >)”$ >)’” Í" ” Í"”” Ì@”
+ Ì@” Ì@	” Ì@˜” ÌA” ÌA” ÌA” ÌA”  ÌA”% ÌA!”) ÌA%”+ ÌA'™” ÌB” ÌB” ÌB”  ÌB”# ÌB”' ÌB!”6 ÌB0”8 ÌB2”9 ÌB2‘”	 ÌC–” ÌD” ÌD” ÌD” ÌD”# ÌD”$ ÌD’” ÌE” ÌE’” ÌG” ÌG–” ÌH” ÌH” ÌH” ÌH” ÌH” ÌH’” ÌI” ÌI’” ÌK” ÌK
+–” ÌL” ÌL” ÌL” ÌL” ÌL” ÌL’” ÌM” ÌM’” ÌO” ÌO–” ÌP” ÌP” ÌP” ÌP” ÌP” ÌP’” ÌQ” ÌQ’” ÌS” ÌS
+–” ÌT” ÌT” ÌT” ÌT” ÌT” ÌT’” ÌU” ÌU’” ÌW” ÌW›” ÌX” ÌX” ÌX” ÌX” ÌX” ÌX” ÌX” ÌX”' ÌX#”( ÌX$”) ÌX$’” ÌY” ÌY’” Ì[” Ì[›” Ì\” Ì\” Ì\” Ì\” Ì\” Ì\” Ì\” Ì\”' Ì\#”( Ì\$”) Ì\$’” Ì]” Ì]’” Ì_” Ì_
+›” Ì`” Ì`” Ì`” Ì`” Ì`” Ì`” Ì`” Ì`”$ Ì` ”% Ì`!”& Ì`!’” Ìa” Ìa’” Ìc” Ìc
+–” Ìd” Ìd” Ìd” Ìd” Ìd” Ìd’” Ìe” Ìe’” Ìg” Ìg–” Ìh” Ìh” Ìh” Ìh” Ìh” Ìh’” Ìi” Ìi’” Ìk” Ìk
+–” Ìl” Ìl” Ìl” Ìl” Ìl” Ìl’” Ìm” Ìm’” Ìo” Ìo–” Ìp” Ìp” Ìp” Ìp” Ìp” Ìp’” Ìq” Ìq’” Ìs” Ìs–” Ìt” Ìt” Ìt” Ìt”" Ìt”# Ìt’” Ìu” Ìu’” Ìw” Ìw–” Ìx” Ìx” Ìx” Ìx”  Ìx”! Ìx’” Ìy” Ìy’” Ì{”' Ì{%”” Ì|” Ì|” Ì|” Ì|Ìr—” Ì}” Ì}” Ì}	” Ì}” Ì}”  Ì}”! Ì}’” Ì~” Ì~’” Ì€” Ì€”” Ì”	 Ì”
+ Ì” Ì—” Ì‚” Ì‚” Ì‚	” Ì‚” Ì‚” Ì‚” Ì‚™” Ìƒ” Ìƒ” Ìƒ	” Ìƒ” Ìƒ” Ìƒ”' Ìƒ#”) Ìƒ%”* Ìƒ%œ” Ì„” Ì„” Ì„	” Ì„” Ì„” Ì„” Ì„”! Ì„”" Ì„”& Ì„"”( Ì„$”) Ì„$Ü ” Ì…” Ì…” Ì…	” Ì…” Ì…” Ì…” Ì…”" Ì…”# Ì…”) Ì…%”, Ì…(”- Ì…)”. Ì…*”/ Ì…+”0 Ì…,”5 Ì…1”6 Ì…2”7 Ì…3”8 Ì…4”9 Ì…5”Ì@ Ì…<”ÌA Ì…=”ÌB Ì…>”ÌC Ì…?”ÌI Ì…ÌE”ÌJ Ì…ÌEœ” Ì†” Ì†” Ì†	” Ì†” Ì†” Ì†”! Ì†”% Ì†!”& Ì†"”) Ì†%”+ Ì†'”, Ì†'Ü ” Ì‡” Ì‡” Ì‡	” Ì‡” Ì‡” Ì‡” Ì‡”$ Ì‡ ”% Ì‡!”( Ì‡$”) Ì‡%”* Ì‡&”+ Ì‡-”- Ì‡7”/ Ì‡9”0 Ì‡:”1 Ì‡;”2 Ì‡<”4 Ì‡>”5 Ì‡?”6 Ì‡?Ü ” Ìˆ” Ìˆ” Ìˆ	” Ìˆ” Ìˆ”$ Ìˆ ”' Ìˆ#”, Ìˆ(”- Ìˆ)”3 Ìˆ/”4 Ìˆ0”5 Ìˆ1”8 Ìˆ<”: Ìˆ>”; ÌˆÌE”= ÌˆÌO”? ÌˆÌQ”Ì@ ÌˆÌR”ÌC ÌˆÌU”ÌF ÌˆÌX”ÌG ÌˆÌY”ÌH ÌˆÌZ”ÌY ÌˆÌk”Ì[ ÌˆÌm”Ì\ ÌˆÌn”Ì] ÌˆÌo”Ì^ ÌˆÌo›” Ì‰” Ì‰” Ì‰	” Ì‰” Ì‰” Ì‰” Ì‰”+ Ì‰'”, Ì‰(”3 Ì‰/”4 Ì‰/Ü ” ÌŠ” ÌŠ” ÌŠ	” ÌŠ” ÌŠ”# ÌŠ”& ÌŠ"”7 ÌŠ3”8 ÌŠ4”ÌC ÌŠ?”ÌE ÌŠÌA”ÌF ÌŠÌB”ÌN ÌŠÌJ”ÌP ÌŠÌL”ÌQ ÌŠÌM”ÌW ÌŠÌS”ÌX ÌŠÌT”ÌY ÌŠÌU”ÌZ ÌŠÌV”Ìk ÌŠÌg”Ìl ÌŠÌh”Ìm ÌŠÌi”Ìn ÌŠÌj”Ì… ÌŠÌ”Ì† ÌŠÌ›” Ì‹” Ì‹” Ì‹	” Ì‹” Ì‹”" Ì‹”# Ì‹”* Ì‹&”+ Ì‹'”9 Ì‹5”: Ì‹5Ü ” ÌŒ” ÌŒ” ÌŒ	” ÌŒ” ÌŒ”" ÌŒ”# ÌŒ”) ÌŒ%”, ÌŒ(”- ÌŒ)”. ÌŒ*”/ ÌŒ+”0 ÌŒ,”5 ÌŒ1”6 ÌŒ2”7 ÌŒ3”8 ÌŒ4”9 ÌŒ5”; ÌŒ7”< ÌŒ8”= ÌŒ9”> ÌŒ:”Ì@ ÌŒ<”ÌA ÌŒ<–” Ì” Ì” Ì	” Ì” Ì” Ì—” Ì” Ì” Ì	” Ì” Ì” Ì” Ì™” Ì” Ì” Ì	” Ì” Ì” Ì”  Ì”' Ì#”( Ì#š” Ì” Ì” Ì	” Ì” Ì”" Ì”# Ì”& Ì"”( Ì$”) Ì$—” Ì‘” Ì‘” Ì‘	” Ì‘” Ì‘” Ì‘” Ì‘Ÿ” Ì’” Ì’” Ì’”& Ì’"”( Ì’$”) Ì’%”5 Ì’1”6 Ì’2”: Ì’6”; Ì’7”ÌB Ì’>”ÌC Ì’?”ÌE Ì’ÌA”ÌF Ì’ÌB”ÌG Ì’ÌB–” Ì“” Ì“” Ì“	”  Ì“”" Ì“”# Ì“œ” Ì•” Ì•” Ì•” Ì•”) Ì•%”+ Ì•'”, Ì•(”4 Ì•0”6 Ì•2”7 Ì•3”= Ì•9”? Ì•;œ” Ì–”! Ì–”" Ì–”- Ì–'”/ Ì–)”0 Ì–*”5 Ì–/”6 Ì–0”7 Ì–1”8 Ì–ÌH”: Ì–ÌJ”< Ì–ÌL˜” Ì—” Ì—” Ì—”  Ì—”! Ì—”" Ì—”# Ì—”$ Ì—”” Ì˜” Ì˜” Ì˜” Ì˜‘”	 Ì™™” Ìš” Ìš” Ìš	” Ìš” Ìš”! Ìš”" Ìš”% Ìš!”' Ìš#–” Ì›” Ì›
+” Ì›” Ì›”  Ì›”! Ì›˜” Ìœ”	 Ìœ” Ìœ” Ìœ” Ìœ” Ìœ” Ìœ”  Ìœ™” Ì” Ì” Ì	” Ì” Ì”% Ì!”& Ì"”) Ì%”+ Ì'–” Ì” Ì
+” Ì” Ì”  Ì”! Ì˜” ÌŸ”	 ÌŸ” ÌŸ” ÌŸ” ÌŸ”+ ÌŸ'”, ÌŸ(”- ÌŸ(–” Ì ” Ì ” Ì 	” Ì ” Ì ” Ì Ü ” Ì¡” Ì¡” Ì¡”" Ì¡”$ Ì¡ ”% Ì¡!”+ Ì¡'”, Ì¡(”6 Ì¡2”7 Ì¡3”ÌH Ì¡ÌD”ÌJ Ì¡ÌF”ÌN Ì¡ÌJ”ÌO Ì¡ÌK”ÌV Ì¡ÌR”ÌW Ì¡ÌS”ÌY Ì¡ÌU”ÌZ Ì¡ÌV”Ì[ Ì¡ÌW”Ì` Ì¡Ì\”Ìa Ì¡Ì]”Ìd Ì¡Ì`”Ìf Ì¡Ìb”Ìi Ì¡Ìd”Ìj Ì¡Ìe”Ìk Ì¡Ìf”Ìl Ì¡Ìf’” Ì¢” Ì¢’” Ì¤
+” Ì¤–” Ì¥” Ì¥” Ì¥” Ì¥” Ì¥”! Ì¥’” Ì¦” Ì¦‘”	 Ì§—” Ì¨” Ì¨” Ì¨	” Ì¨” Ì¨”" Ì¨”# Ì¨œ” Ì©” Ì©” Ì©”% Ì©!”' Ì©#”( Ì©$”0 Ì©,”1 Ì©-”2 Ì©.”3 Ì©/”5 Ì©1”7 Ì©3—” Ìª” Ìª
+” Ìª” Ìª” Ìª” Ìª” Ìª™” Ì«”% Ì«”& Ì«”1 Ì«)”3 Ì«+”4 Ì«,”8 Ì«0”: Ì«2”; Ì«2—” Ì¬” Ì¬” Ì¬”# Ì¬”& Ì¬”= Ì¬5”> Ì¬5‘” Ì­Ü ” Ì­” Ì­” Ì­” Ì­”! Ì­”% Ì­!”& Ì­"”* Ì­&”+ Ì­'”1 Ì­-”5 Ì­1”6 Ì­2”: Ì­6”; Ì­7”ÌB Ì­>”ÌF Ì­ÌB”ÌG Ì­ÌC”ÌK Ì­ÌG”ÌL Ì­ÌH”ÌR Ì­ÌN”ÌT Ì­ÌP—” Ì®” Ì®” Ì®”# Ì®”& Ì®”7 Ì®/”8 Ì®/œ” Ì¯”% Ì¯”& Ì¯”1 Ì¯)”3 Ì¯+”4 Ì¯,”9 Ì¯1”: Ì¯2”; Ì¯3”< Ì¯ÌJ”> Ì¯ÌL”Ì@ Ì¯ÌN˜” Ì°
+” Ì°” Ì°”$ Ì°”% Ì°”& Ì°”' Ì°”( Ì°”” Ì±” Ì±	” Ì±
+” Ì±
+‘” Ì²”” Ì³”	 Ì³”
+ Ì³” Ì³’” Ì´” Ì´’” Ì¶
+” Ì¶—” Ì·” Ì·” Ì·	” Ì·” Ì·” Ì·” Ì·—” Ì¸” Ì¸” Ì¸	” Ì¸” Ì¸” Ì¸” Ì¸—” Ì¹” Ì¹” Ì¹	” Ì¹” Ì¹” Ì¹”  Ì¹—” Ìº” Ìº” Ìº	” Ìº” Ìº” Ìº” Ìº—” Ì»” Ì»” Ì»	” Ì»” Ì»” Ì»” Ì»—” Ì¼” Ì¼” Ì¼	” Ì¼” Ì¼” Ì¼” Ì¼š” Ì½” Ì½” Ì½	” Ì½” Ì½”" Ì½”# Ì½”& Ì½"”( Ì½$”) Ì½$š” Ì¾” Ì¾” Ì¾	” Ì¾” Ì¾” Ì¾” Ì¾”" Ì¾”$ Ì¾ ”% Ì¾ —” Ì¿” Ì¿” Ì¿	” Ì¿” Ì¿” Ì¿” Ì¿—” ÌÀ” ÌÀ” ÌÀ	” ÌÀ” ÌÀ” ÌÀ” ÌÀ—” ÌÁ” ÌÁ” ÌÁ	” ÌÁ” ÌÁ” ÌÁ” ÌÁ—” ÌÂ” ÌÂ” ÌÂ	” ÌÂ” ÌÂ” ÌÂ” ÌÂ—” ÌÃ” ÌÃ” ÌÃ	” ÌÃ” ÌÃ” ÌÃ” ÌÃ—” ÌÄ” ÌÄ” ÌÄ	” ÌÄ” ÌÄ” ÌÄ” ÌÄ—” ÌÅ” ÌÅ” ÌÅ	” ÌÅ” ÌÅ” ÌÅ” ÌÅ—” ÌÆ” ÌÆ” ÌÆ	” ÌÆ” ÌÆ” ÌÆ” ÌÆ’” ÌÇ” ÌÇ’” ÌÉ”) ÌÉ'’” ÌÊ
+” ÌÊ™” ÌË” ÌË
+” ÌË” ÌË” ÌË” ÌË” ÌË” ÌË” ÌË—” ÌÌ” ÌÌ” ÌÌ	” ÌÌ” ÌÌ” ÌÌ” ÌÌ—” ÌÍ” ÌÍ
+” ÌÍ” ÌÍ” ÌÍ”! ÌÍ”" ÌÍ’” ÌÎ” ÌÎ‘”	 ÌÏÜ ” ÌĞ” ÌĞ
+” ÌĞ” ÌĞ” ÌĞ” ÌĞ” ÌĞ” ÌĞ”! ÌĞ”$ ÌĞ ”( ÌĞ$”) ÌĞ%”3 ÌĞ/”5 ÌĞ1”Ì@ ÌĞ<”ÌA ÌĞ=”ÌR ÌĞÌN”ÌS ÌĞÌO”ÌT ÌĞÌO—” ÌÑ” ÌÑ” ÌÑ	” ÌÑ” ÌÑ” ÌÑ” ÌÑ˜” ÌÒ” ÌÒ
+” ÌÒ” ÌÒ” ÌÒ” ÌÒ” ÌÒ” ÌÒ’” ÌÓ”7 ÌÓ3—” ÌÔ” ÌÔ” ÌÔ	” ÌÔ” ÌÔ” ÌÔ” ÌÔ–” ÌÕ” ÌÕ” ÌÕ” ÌÕ” ÌÕ” ÌÕ—” ÌÖ” ÌÖ
+” ÌÖ” ÌÖ”  ÌÖ”" ÌÖ”# ÌÖ’” Ì×” Ì×‘”	 ÌØ–” ÌÙ” ÌÙ” ÌÙ” ÌÙ” ÌÙ” ÌÙ—” ÌÚ” ÌÚ
+” ÌÚ” ÌÚ” ÌÚ” ÌÚ”  ÌÚ–” ÌÛ” ÌÛ
+” ÌÛ” ÌÛ” ÌÛ” ÌÛ’” ÌÜ” ÌÜ‘”	 Ìİ–” ÌŞ” ÌŞ” ÌŞ” ÌŞ” ÌŞ” ÌŞ—” Ìß” Ìß
+” Ìß” Ìß” Ìß” Ìß” Ìß‘”	 Ìàš” Ìà” Ìà” Ìà” Ìà” Ìà”  Ìà”* Ìà(”+ Ìà)”2 Ìà0”4 Ìà2—” Ìá” Ìá
+” Ìá” Ìá” Ìá” Ìá”  Ìá‘”	 Ìâ‘” Ìâ—” Ìã” Ìã
+” Ìã” Ìã”# Ìã”% Ìã”& Ìã‘”	 Ìä—” Ìå” Ìå” Ìå	” Ìå” Ìå”" Ìå”# Ìå˜” Ìæ” Ìæ” Ìæ” Ìæ” Ìæ”" Ìæ”' Ìæ#”) Ìæ%—” Ìç” Ìç
+” Ìç” Ìç”! Ìç”" Ìç”# Ìç–” Ìè” Ìè
+” Ìè” Ìè”! Ìè”" Ìè‘”	 Ìé–” Ìê” Ìê” Ìê	” Ìê” Ìê” Ìê’” Ìë” Ìë’” Ìí”' Ìí%”” Ìî
+” Ìî” Ìî” Ìî-Ü ” Ìï” Ìï” Ìï	” Ìï” Ìï” Ìï” Ìï”! Ìï”" Ìï”( Ìï$”, Ìï(”0 Ìï,”1 Ìï-”8 Ìï4”< Ìï8”Ì@ Ìï<”ÌA Ìï=”ÌG ÌïÌC”ÌI ÌïÌE’” Ìğ” Ìğ‘”	 Ìñš” Ìò” Ìò” Ìò	” Ìò
+” Ìò” Ìò”& Ìò"”' Ìò#”7 Ìò3”9 Ìò5’” Ìó” ÌóÜ ” Ìô” Ìô
+” Ìô” Ìô” Ìô”! Ìô”" Ìô”* Ìô$”+ Ìô%”, Ìô&”- Ìô'”2 Ìô,”3 Ìô-”5 Ìô/”6 Ìô0”7 Ìô1”= Ìô7”? Ìô9”Ì@ Ìô:”ÌA Ìô;”ÌK ÌôÌE”ÌM ÌôÌG”Ì_ ÌôÌY”Ì` ÌôÌZ”Ìa ÌôÌZ’” Ìõ” Ìõ‘”	 Ìö” Ì÷” Ì÷
+” Ì÷” Ì÷” Ì÷” Ì÷”$ Ì÷ ”% Ì÷!”& Ì÷"”' Ì÷#”, Ì÷(”- Ì÷)”. Ì÷)˜” Ìø” Ìø” Ìø” Ìø” Ìø” Ìø”! Ìø”# ÌøÜ ” Ìù” Ìù
+” Ìù” Ìù” Ìù”# Ìù”% Ìù”& Ìù ”' Ìù!”- Ìù'”/ Ìù)”0 Ìù*”1 Ìù+”; Ìù5”= Ìù7”ÌI ÌùÌC”ÌJ ÌùÌD”ÌK ÌùÌD’” Ìú” Ìú‘”	 Ìû™” Ìü” Ìü
+” Ìü” Ìü” Ìü” Ìü” Ìü” Ìü” ÌüÜ ” Ìı” Ìı
+” Ìı” Ìı” Ìı” Ìı”" Ìı”# Ìı”1 Ìı-”5 Ìı1”9 Ìı5”: Ìı6”ÌB Ìı>”ÌC Ìı?”ÌI ÌıÌE”ÌJ ÌıÌF”ÌK ÌıÌF›” Ìş” Ìş
+” Ìş” Ìş” Ìş” Ìş”+ Ìş'”, Ìş(”2 Ìş.”3 Ìş/”4 Ìş/–” Ìÿ” Ìÿ” Ìÿ” Ìÿ” Ìÿ” ÌÿÜ ” Í ” Í 
+” Í ” Í ” Í ”$ Í ”& Í  ”' Í !”( Í "”2 Í ,”4 Í .”5 Í /”6 Í 0”< Í 6”> Í 8”? Í 9”Ì@ Í :”ÌF Í Ì@”ÌG Í ÌA”ÌH Í ÌA‘”	 Í‘” ÍÜ ” Í” Í
+” Í” Í” Í”# Í”% Í”& Í ”' Í!”- Í'”/ Í)”0 Í*”1 Í+”; Í5”= Í7”ÌH ÍÌB”ÌI ÍÌC”ÌJ ÍÌC‘”	 Í’” Í” Í”” Í
+” Í” Í” Í%˜” Í” Í” Í” Í”! Í”" Í”5 Í1”7 Í3–” Í” Í” Í” Í”7 Í1”8 Í1‘”	 Í	˜” Í
 ” Í
-” Í
-	” Í
-” Í
-” Í
-’” Í” Í’” Í” Í’” Í” Í” Í” Í” Í” Í” Í” Í” Í”  Í”' Í#”+ Í'”/ Í+”0 Í,”6 Í2”8 Í4’” Í” Í‘”	 Íš” Í” Í” Í” Í” Í” Í”% Í!”& Í"”- Í)”/ Í+” Í”! Í”" Í”- Í'”/ Í)”0 Í*”8 Í2”9 Í3”ÌC Í=”ÌD Í>”ÌW ÍÌQ”ÌX ÍÌR”ÌY ÍÌR‘”	 Íš” Í” Í” Í” Í” Í”  Í”* Í(”+ Í)”> Í<”Ì@ Í>” Í”! Í”" Í”- Í'”/ Í)”0 Í*”8 Í2”9 Í3”ÌC Í=”ÌD Í>”ÌN ÍÌH”ÌO ÍÌI”ÌP ÍÌI‘”	 Í‘” Í™” Í”! Í”" Í”- Í'”/ Í)”0 Í*”6 Í0”8 Í2”9 Í2‘”	 Í’” Í” Í’” Í” Í’” Í” Í
-˜” Í” Í” Í” Í” Í” Í” Í” Í˜” Í” Í” Í” Í” Í”% Í”& Í ”' Í ˜” Í” Í
-” Í” Í” Í” Í” Í” Í‘”	 Í ™” Í!” Í!” Í!”) Í!%”+ Í!'”, Í!(”0 Í!,”2 Í!.”3 Í!.—” Í"” Í"” Í"	” Í"” Í"” Í"” Í"œ” Í#” Í#” Í#	” Í#” Í#” Í#” Í#”# Í#”$ Í# ”' Í##”) Í#%”* Í#%›” Í$” Í$” Í$	” Í$” Í$”" Í$”% Í$!”) Í$%”* Í$&”2 Í$.”3 Í$.›” Í%” Í%” Í%	” Í%” Í%”" Í%”% Í%!”) Í%%”* Í%&”2 Í%.”3 Í%.›” Í&” Í&” Í&	” Í&” Í&”( Í&$”+ Í&'”/ Í&+”0 Í&,”> Í&:”? Í&:›” Í'” Í'” Í'	” Í'” Í'” Í'”" Í'”& Í'"”' Í'#”, Í'(”- Í'(›” Í(” Í(” Í(	” Í(” Í(”" Í(”% Í(!”) Í(%”* Í(&”2 Í(.”3 Í(.›” Í)” Í)” Í)	” Í)” Í)” Í)”  Í)”$ Í) ”% Í)!”- Í))”. Í))›” Í*” Í*” Í*	” Í*” Í*” Í*” Í*”" Í*”# Í*”) Í*%”* Í*%Ü #” Í+” Í+” Í+	” Í+” Í+”% Í+!”( Í+$”, Í+(”- Í+)”2 Í+.”3 Í+/”9 Í+5”: Í+6”; Í+7”< Í+>”> Í+ÌI”Ì@ Í+ÌK”ÌA Í+ÌL”ÌB Í+ÌM”ÌC Í+ÌN”ÌG Í+ÌR”ÌH Í+ÌS”ÌI Í+ÌT”ÌL Í+ÌW”ÌM Í+ÌX”ÌN Í+ÌY”ÌO Í+Ì`”ÌQ Í+Ìj”ÌS Í+Ìl”ÌT Í+Ìm”ÌU Í+Ìn”ÌV Í+Ìo”ÌX Í+Ìq”ÌY Í+Ìr”ÌZ Í+Ìr›” Í,” Í,” Í,	” Í,” Í,” Í,” Í,”+ Í,'”, Í,(”4 Í,0”5 Í,0–” Í-” Í-” Í-	” Í-” Í-” Í-–” Í.” Í.” Í.” Í.” Í.” Í.’” Í/” Í/’” Í1
-” Í1” Í2” Í2” Í2” Í2” Í2#”) Í2-”* Í2.”7 Í2;”9 Í2=”= Í2ÌA”> Í2ÌB”ÌF Í2ÌJ”ÌG Í2ÌK”ÌH Í2ÌK” Í3” Í3” Í3” Í3” Í3#”) Í3-”* Í3.”3 Í37”5 Í39”9 Í3=”: Í3>”ÌB Í3ÌF”ÌC Í3ÌG”ÌD Í3ÌG” Í4” Í4” Í4” Í4” Í4#”) Í4-”* Í4.”5 Í49”7 Í4;”; Í4?”< Í4Ì@”ÌA Í4ÌE”ÌB Í4ÌF”ÌC Í4ÌF” Í5” Í5” Í5” Í5” Í5#”) Í5-”* Í5.”: Í5>”< Í5Ì@”Ì@ Í5ÌD”ÌA Í5ÌE”ÌF Í5ÌJ”ÌG Í5ÌK”ÌH Í5ÌK’” Í6” Í6•”  ” ” 0” 4” 4ÔrG–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜ‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
+” Í
+” Í
+”! Í
+”" Í
+”, Í
+(”. Í
+*–” Í” Í” Í” Í”5 Í/”6 Í/‘”	 Í˜” Í” Í” Í” Í”! Í”" Í”) Í%”+ Í'–” Í” Í” Í” Í”7 Í1”8 Í1‘”	 Í–” Í” Í” Í” Í”' Í#”( Í#’” Í” Í”” Í
+” Í” Í” Í,™” Í” Í
+” Í” Í” Í” Í” Í” Í” Í˜” Í” Í” Í” Í”! Í”" Í”5 Í1”7 Í3œ” Í” Í” Í” Í” Í” Í”* Í$”. Í(”9 Í3”: Í4”ÌL ÍÌF”ÌM ÍÌF‘”	 Í˜” Í” Í” Í” Í”! Í”" Í”, Í(”. Í*œ” Í” Í” Í” Í” Í” Í”' Í!”+ Í%”6 Í0”7 Í1”ÌF ÍÌ@”ÌG ÍÌ@‘”	 Í”” Í” Í” Í” Í’” Í” Í”” Í
+” Í” Í” Í ˜” Í” Í” Í	” Í” Í” Í”0 Í,”2 Í.–” Í ” Í ” Í ” Í ”1 Í +”2 Í +‘”	 Í!˜” Í"” Í"” Í"	” Í"” Í"” Í"”' Í"#”) Í"%–” Í#” Í#” Í#” Í#”( Í#"”) Í#"‘”	 Í$–” Í%” Í%” Í%” Í%”! Í%”" Í%’” Í&” Í&š” Í(
+” Í(” Í(” Í()” Í(+”# Í(=”% Í(?”+ Í(ÌR”- Í(ÌT”3 Í(Ìb™” Í)” Í)
+” Í)” Í)” Í)” Í)” Í)” Í)” Í)—” Í*” Í*” Í*	” Í*” Í*” Í*” Í*—” Í+” Í+” Í+	” Í+” Í+”! Í+”" Í+˜” Í,” Í,” Í,” Í,”! Í,”" Í,”5 Í,1”7 Í,3—” Í-” Í-
+” Í-” Í-”  Í-”# Í-”$ Í-‘”	 Í.˜” Í.” Í.” Í.” Í.”& Í.$”' Í.%”1 Í./”3 Í.1—” Í/” Í/
+” Í/” Í/” Í/”  Í/”! Í/‘”	 Í0” Í1” Í1” Í1	” Í1” Í1” Í1”! Í1”' Í1#”) Í1%”3 Í1/”5 Í11”; Í17”< Í18”= Í18–” Í2” Í2” Í2	” Í2” Í2” Í2–” Í3” Í3” Í3	” Í3” Í3” Í3” Í4” Í4” Í4” Í4”! Í4”" Í4”5 Í41”9 Í45”? Í4;”ÌD Í4Ì@”ÌN Í4ÌJ”ÌO Í4ÌK”ÌY Í4ÌU”Ì[ Í4ÌW–” Í5” Í5
+” Í5”% Í5”' Í5!”( Í5!‘”	 Í6’” Í7” Í7š” Í9
+” Í9” Í9” Í9'” Í9)” Í9<” Í9>”) Í9ÌP”+ Í9ÌR”1 Í9Ì`˜” Í:” Í:
+” Í:” Í:” Í:”  Í:”" Í:”# Í:š” Í;”	 Í;”
+ Í;” Í;” Í;” Í;” Í;” Í;” Í;” Í;›” Í<”	 Í<”
+ Í<” Í<” Í<” Í<” Í<”" Í<”# Í<”% Í<!”& Í<!š” Í=”	 Í=”
+ Í=” Í=” Í=” Í=” Í=” Í=”  Í=”! Í=—” Í>”	 Í>”
+ Í>” Í>” Í>” Í>” Í>—” Í?”	 Í?”
+ Í?” Í?” Í?” Í?” Í?—” Í@”	 Í@”
+ Í@” Í@” Í@”! Í@”" Í@š” ÍA” ÍA” ÍA	” ÍA” ÍA” ÍA” ÍA” ÍA” ÍA” ÍA’” ÍB” ÍB’” ÍD
+” ÍD˜” ÍE” ÍE
+” ÍE” ÍE” ÍE”( ÍE$”* ÍE&”+ ÍE&Ü ” ÍF”	 ÍF”
+ ÍF” ÍF” ÍF” ÍF” ÍF” ÍF” ÍF”" ÍF”# ÍF”+ ÍF'”. ÍF*”0 ÍF,”1 ÍF-”2 ÍF-” ÍG”	 ÍG”
+ ÍG” ÍG” ÍG” ÍG” ÍG”$ ÍG ”% ÍG!”) ÍG%”* ÍG&”/ ÍG+”0 ÍG,”1 ÍG,™” ÍH”	 ÍH”
+ ÍH” ÍH” ÍH” ÍH” ÍH” ÍH” ÍHš” ÍI” ÍI” ÍI	” ÍI” ÍI” ÍI” ÍI” ÍI” ÍI” ÍI’” ÍJ” ÍJ”” ÍL
+” ÍL” ÍL” ÍL%˜” ÍM” ÍM” ÍM	” ÍM” ÍM” ÍM”$ ÍM ”& ÍM"Ü ” ÍN” ÍN” ÍN” ÍN” ÍN” ÍN”" ÍN”# ÍN”' ÍN!”( ÍN"”. ÍN(”0 ÍN*”3 ÍN-”4 ÍN.”5 ÍN/”6 ÍN/‘”	 ÍO˜” ÍP” ÍP” ÍP	” ÍP” ÍP” ÍP”0 ÍP,”2 ÍP.Ü ” ÍQ” ÍQ” ÍQ” ÍQ” ÍQ” ÍQ”" ÍQ”# ÍQ”' ÍQ!”( ÍQ"”. ÍQ(”0 ÍQ*”3 ÍQ-”5 ÍQ/”6 ÍQ0”7 ÍQ0‘”	 ÍRÜ ” ÍS” ÍS” ÍS” ÍS” ÍS” ÍS” ÍS” ÍS”# ÍS”$ ÍS ”* ÍS&”, ÍS(”/ ÍS+”1 ÍS-”2 ÍS.”3 ÍS.’” ÍT” ÍT’” ÍV”ÌC ÍVÌA’” ÍW
+” ÍW”” ÍX” ÍX
+” ÍX” ÍX)˜” ÍY” ÍY” ÍY” ÍY” ÍY”# ÍY”$ ÍY”& ÍY –” ÍZ” ÍZ” ÍZ” ÍZ” ÍZ” ÍZ›” Í[” Í[” Í[” Í[” Í[” Í[” Í[”" Í[”& Í[ ”' Í[!”5 Í[/š” Í\” Í\” Í\”# Í\”$ Í\”/ Í\)”1 Í\+”2 Í\,”Ì@ Í\:”ÌB Í\<” Í]” Í]” Í]”# Í]”$ Í]”' Í]!”( Í]*”2 Í]4”3 Í]5”ÌC Í]ÌE”ÌD Í]ÌF”ÌH Í]ÌJ”ÌP Í]ÌR–” Í^” Í^” Í^”  Í^”! Í^”/ Í^)š” Í_” Í_” Í_”& Í_ ”' Í_!”2 Í_,”4 Í_.”5 Í_/”> Í_8”Ì@ Í_:’”	 Í`”
+ Í`” Ía” Ía
+” Ía” Ía”& Ía"”' Ía#”2 Ía.”4 Ía0”5 Ía1”= Ía9”> Ía:”ÌA Ía=”ÌB Ía>”ÌC Ía>™” Íb” Íb” Íb	” Íb” Íb” Íb”  Íb”( Íb$”) Íb$˜” Íc” Íc” Íc” Íc” Íc” Íc” Íc”  Íc” Íd” Íd
+” Íd” Íd” Íd”& Íd ”' Íd!”+ Íd%”, Íd&”/ Íd)”0 Íd*”5 Íd/”6 Íd0”7 Íd0˜” Íe” Íe
+” Íe” Íe”# Íe”( Íe"”, Íe&”. Íe(” Íf” Íf” Íf”# Íf”$ Íf”' Íf”( Íf ”0 Íf(”2 Íf*”5 Íf-”6 Íf.”; ÍfÌH”< ÍfÌI”= ÍfÌI‘” Íg‘”	 Íh’” Íi” Íi’” Ík”. Ík,’” Íl” Íl	—” Ím” Ím” Ím	” Ím” Ím” Ím” Ím’” Ín” Ín‘”	 Ío—” Íp” Íp” Íp	” Íp” Íp” Íp” Íp™” Íq” Íq” Íq	” Íq” Íq” Íq”  Íq”' Íq#”( Íq#™” Ír” Ír” Ír”) Ír%”+ Ír'”, Ír(”0 Ír,”2 Ír.”3 Ír.–” Ís” Ís” Ís	” Ís” Ís” Ís’” Ít” Ít’” Ív”	 Ív—” Íw” Íw” Íw	” Íw” Íw” Íw” Íw™” Íx” Íx” Íx	” Íx” Íx” Íx”  Íx”' Íx#”( Íx#š” Íy” Íy” Íy	” Íy” Íy”" Íy”# Íy”& Íy"”( Íy$”) Íy$œ” Íz” Íz” Íz” Íz”) Íz%”+ Íz'”, Íz(”4 Íz0”6 Íz2”7 Íz3”= Íz9”? Íz;œ” Í{”! Í{”" Í{”- Í{'”/ Í{)”0 Í{*”5 Í{/”6 Í{0”7 Í{1”8 Í{ÌH”: Í{ÌJ”< Í{ÌL˜” Í|” Í|” Í|”  Í|”! Í|”" Í|”# Í|”$ Í|”” Í}” Í}” Í}” Í}‘”	 Í~–” Í” Í” Í	” Í” Í” Í’” Í€” Í€”” Í‚” Í‚” Í‚” Í‚š” Íƒ” Íƒ” Íƒ	” Íƒ” Íƒ” Íƒ” Íƒ” Íƒ” Íƒ” Íƒ’” Í„” Í„’” Í†” Í†’” Í‡”	 Í‡—” Íˆ” Íˆ” Íˆ	” Íˆ” Íˆ” Íˆ” Íˆ™” Í‰” Í‰” Í‰	” Í‰” Í‰” Í‰”  Í‰”& Í‰"”' Í‰"™” ÍŠ” ÍŠ” ÍŠ”) ÍŠ%”+ ÍŠ'”, ÍŠ(”0 ÍŠ,”2 ÍŠ.”3 ÍŠ.–” Í‹” Í‹” Í‹	” Í‹” Í‹” Í‹’” ÍŒ” ÍŒ’” Í”
+ Í—” Í” Í” Í	” Í” Í” Í” Í™” Í” Í” Í	” Í” Í” Í”  Í”' Í#”( Í#š” Í‘” Í‘” Í‘	” Í‘” Í‘”" Í‘”# Í‘”& Í‘"”( Í‘$”) Í‘$œ” Í’” Í’” Í’” Í’”) Í’%”+ Í’'”, Í’(”4 Í’0”6 Í’2”7 Í’3”= Í’9”? Í’;œ” Í“”! Í“”" Í“”- Í“'”/ Í“)”0 Í“*”5 Í“/”6 Í“0”7 Í“1”8 Í“ÌH”: Í“ÌJ”< Í“ÌL˜” Í”” Í”” Í””  Í””! Í””" Í””# Í””$ Í””” Í•” Í•” Í•” Í•‘”	 Í––” Í—” Í—” Í—	” Í—” Í—” Í—’” Í˜” Í˜’” Íš”$ Íš"’” Í›” Í›—” Íœ” Íœ” Íœ	” Íœ” Íœ” Íœ” Íœ™” Í” Í” Í	” Í” Í” Í”  Í”' Í#”( Í#™” Í” Í” Í”) Í%”+ Í'”, Í(”0 Í,”2 Í.”3 Í.–” ÍŸ” ÍŸ” ÍŸ	” ÍŸ” ÍŸ” ÍŸ’” Í ” Í ’” Í¢” Í¢
+—” Í£” Í£” Í£	” Í£” Í£” Í£” Í£™” Í¤” Í¤” Í¤	” Í¤” Í¤” Í¤”  Í¤”' Í¤#”( Í¤#š” Í¥” Í¥” Í¥	” Í¥” Í¥”" Í¥”# Í¥”& Í¥"”( Í¥$”) Í¥$œ” Í¦” Í¦” Í¦” Í¦”) Í¦%”+ Í¦'”, Í¦(”4 Í¦0”6 Í¦2”7 Í¦3”= Í¦9”? Í¦;œ” Í§”! Í§”" Í§”- Í§'”/ Í§)”0 Í§*”5 Í§/”6 Í§0”7 Í§1”8 Í§ÌH”: Í§ÌJ”< Í§ÌL˜” Í¨” Í¨” Í¨”  Í¨”! Í¨”" Í¨”# Í¨”$ Í¨”” Í©” Í©” Í©” Í©‘”	 Íª–” Í«” Í«” Í«	” Í«” Í«” Í«’” Í¬” Í¬’” Í®” Í®’” Í¯” Í¯” Í°” Í°” Í°” Í°” Í°” Í°” Í°”  Í°”' Í°#”+ Í°'”/ Í°+”0 Í°,”6 Í°2”8 Í°4’” Í±” Í±‘”	 Í²š” Í³” Í³” Í³” Í³” Í³” Í³”% Í³!”& Í³"”- Í³)”/ Í³+” Í´”! Í´”" Í´”- Í´'”/ Í´)”0 Í´*”8 Í´2”9 Í´3”ÌC Í´=”ÌD Í´>”ÌW Í´ÌQ”ÌX Í´ÌR”ÌY Í´ÌR‘”	 Íµš” Íµ” Íµ” Íµ” Íµ” Íµ”  Íµ”* Íµ(”+ Íµ)”> Íµ<”Ì@ Íµ>” Í¶”! Í¶”" Í¶”- Í¶'”/ Í¶)”0 Í¶*”8 Í¶2”9 Í¶3”ÌC Í¶=”ÌD Í¶>”ÌN Í¶ÌH”ÌO Í¶ÌI”ÌP Í¶ÌI‘”	 Í·‘” Í·™” Í¸”! Í¸”" Í¸”- Í¸'”/ Í¸)”0 Í¸*”6 Í¸0”8 Í¸2”9 Í¸2‘”	 Í¹’” Íº” Íº’” Í¼”. Í¼,–” Í½” Í½	” Í½
+” Í½” Í½!” Í½/–” Í¾” Í¾” Í¾” Í¾” Í¾”! Í¾—” Í¿” Í¿
+” Í¿” Í¿” Í¿” Í¿” Í¿‘”	 ÍÀ™” ÍÁ” ÍÁ” ÍÁ	” ÍÁ” ÍÁ” ÍÁ”' ÍÁ#”) ÍÁ%”* ÍÁ%›” ÍÂ” ÍÂ” ÍÂ	” ÍÂ” ÍÂ” ÍÂ” ÍÂ” ÍÂ” ÍÂ”( ÍÂ$”) ÍÂ$›” ÍÃ” ÍÃ” ÍÃ	” ÍÃ” ÍÃ” ÍÃ” ÍÃ”+ ÍÃ'”, ÍÃ(”3 ÍÃ/”4 ÍÃ/›” ÍÄ” ÍÄ” ÍÄ	” ÍÄ” ÍÄ”# ÍÄ”& ÍÄ"”* ÍÄ&”+ ÍÄ'”9 ÍÄ5”: ÍÄ5™” ÍÅ” ÍÅ” ÍÅ	” ÍÅ” ÍÅ”" ÍÅ”# ÍÅ”1 ÍÅ-”2 ÍÅ-™” ÍÆ” ÍÆ” ÍÆ	” ÍÆ” ÍÆ” ÍÆ” ÍÆ”% ÍÆ!”& ÍÆ!™” ÍÇ” ÍÇ” ÍÇ	” ÍÇ” ÍÇ” ÍÇ” ÍÇ”% ÍÇ!”& ÍÇ!™” ÍÈ” ÍÈ” ÍÈ	” ÍÈ” ÍÈ”" ÍÈ”# ÍÈ”1 ÍÈ-”2 ÍÈ-™” ÍÉ” ÍÉ” ÍÉ	” ÍÉ” ÍÉ” ÍÉ” ÍÉ” ÍÉ”  ÍÉ™” ÍÊ” ÍÊ” ÍÊ	” ÍÊ” ÍÊ” ÍÊ” ÍÊ”% ÍÊ!”& ÍÊ!™” ÍË” ÍË” ÍË	” ÍË” ÍË” ÍË” ÍË” ÍË+”  ÍË+š” ÍÌ” ÍÌ” ÍÌ	” ÍÌ” ÍÌ”" ÍÌ”# ÍÌ”& ÍÌ"”( ÍÌ$”) ÍÌ$—” ÍÍ” ÍÍ” ÍÍ	” ÍÍ” ÍÍ” ÍÍ” ÍÍš” ÍÎ” ÍÎ” ÍÎ	” ÍÎ” ÍÎ” ÍÎ” ÍÎ”" ÍÎ”$ ÍÎ ”% ÍÎ ™” ÍÏ” ÍÏ” ÍÏ	” ÍÏ” ÍÏ”! ÍÏ”" ÍÏ”% ÍÏ!”' ÍÏ#–” ÍĞ” ÍĞ
+” ÍĞ” ÍĞ”  ÍĞ”! ÍĞ˜” ÍÑ”	 ÍÑ” ÍÑ” ÍÑ” ÍÑ” ÍÑ” ÍÑ”  ÍÑ™” ÍÒ” ÍÒ” ÍÒ	” ÍÒ” ÍÒ”% ÍÒ!”& ÍÒ"”) ÍÒ%”+ ÍÒ'–” ÍÓ” ÍÓ
+” ÍÓ” ÍÓ”  ÍÓ”! ÍÓ˜” ÍÔ”	 ÍÔ” ÍÔ” ÍÔ” ÍÔ”+ ÍÔ'”, ÍÔ(”- ÍÔ(–” ÍÕ” ÍÕ” ÍÕ	” ÍÕ” ÍÕ” ÍÕœ” ÍÖ” ÍÖ” ÍÖ” ÍÖ”) ÍÖ%”+ ÍÖ'”, ÍÖ(”4 ÍÖ0”6 ÍÖ2”7 ÍÖ3”= ÍÖ9”? ÍÖ;œ” Í×”! Í×”" Í×”- Í×'”/ Í×)”0 Í×*”5 Í×/”6 Í×0”7 Í×1”8 Í×ÌH”: Í×ÌJ”< Í×ÌL˜” ÍØ” ÍØ” ÍØ”  ÍØ”! ÍØ”" ÍØ”# ÍØ”$ ÍØ”” ÍÙ” ÍÙ” ÍÙ” ÍÙ‘”	 ÍÚÜ ” ÍÛ” ÍÛ” ÍÛ”" ÍÛ”$ ÍÛ ”% ÍÛ!”+ ÍÛ'”, ÍÛ(”6 ÍÛ2”7 ÍÛ3”ÌH ÍÛÌD”ÌJ ÍÛÌF”ÌN ÍÛÌJ”ÌO ÍÛÌK”ÌV ÍÛÌR”ÌW ÍÛÌS”ÌY ÍÛÌU”ÌZ ÍÛÌV”Ì[ ÍÛÌW”Ì` ÍÛÌ\”Ìa ÍÛÌ]”Ìd ÍÛÌ`”Ìf ÍÛÌb”Ìi ÍÛÌd”Ìj ÍÛÌe”Ìk ÍÛÌf”Ìl ÍÛÌf’” ÍÜ” ÍÜ’” ÍŞ” ÍŞ’” Íß” Íß
+˜” Íà” Íà” Íà” Íà” Íà” Íà” Íà” Íà˜” Íá” Íá” Íá” Íá” Íá”% Íá”& Íá ”' Íá ˜” Íâ” Íâ
+” Íâ” Íâ” Íâ” Íâ” Íâ” Íâ‘”	 Íã˜” Íä” Íä” Íä” Íä” Íä” Íä”  Íä”" Íä˜” Íå” Íå” Íå” Íå” Íå”) Íå#”* Íå$”+ Íå$˜” Íæ” Íæ
+” Íæ” Íæ” Íæ” Íæ”  Íæ”! Íæ‘”	 Íç™” Íè” Íè” Íè”) Íè%”+ Íè'”, Íè(”0 Íè,”2 Íè.”3 Íè.—” Íé” Íé” Íé	” Íé” Íé” Íé” Íéœ” Íê” Íê” Íê	” Íê” Íê” Íê” Íê”# Íê”$ Íê ”' Íê#”) Íê%”* Íê%Ü ” Íë” Íë” Íë	” Íë” Íë”" Íë”% Íë!”) Íë%”* Íë&”/ Íë+”0 Íë,”4 Íë0”5 Íë1”= Íë9”> Íë:”? Íë:Ü ” Íì” Íì” Íì	” Íì” Íì”" Íì”% Íì!”) Íì%”* Íì&”/ Íì+”0 Íì,”4 Íì0”5 Íì1”= Íì9”> Íì:”? Íì:Ü ” Íí” Íí” Íí	” Íí” Íí”( Íí$”+ Íí'”/ Íí+”0 Íí,”5 Íí1”6 Íí2”: Íí6”; Íí7”ÌI ÍíÌE”ÌJ ÍíÌF”ÌK ÍíÌFÜ ” Íî” Íî” Íî	” Íî” Íî” Íî”" Íî”& Íî"”' Íî#”, Íî(”- Íî)”1 Íî-”2 Íî.”7 Íî3”8 Íî4”9 Íî4Ü ” Íï” Íï” Íï	” Íï” Íï”" Íï”% Íï!”) Íï%”* Íï&”/ Íï+”0 Íï,”4 Íï0”5 Íï1”= Íï9”> Íï:”? Íï:Ü ” Íğ” Íğ” Íğ	” Íğ” Íğ”# Íğ”& Íğ"”* Íğ&”+ Íğ'”0 Íğ,”1 Íğ-”5 Íğ1”6 Íğ2”ÌA Íğ=”ÌB Íğ>”ÌC Íğ>›” Íñ” Íñ” Íñ	” Íñ” Íñ” Íñ”  Íñ”$ Íñ ”% Íñ!”- Íñ)”. Íñ)›” Íò” Íò” Íò	” Íò” Íò” Íò” Íò”" Íò”# Íò”) Íò%”* Íò%Ü #” Íó” Íó” Íó	” Íó” Íó”% Íó!”( Íó$”, Íó(”- Íó)”2 Íó.”3 Íó/”9 Íó5”: Íó6”; Íó7”< Íó>”> ÍóÌI”Ì@ ÍóÌK”ÌA ÍóÌL”ÌB ÍóÌM”ÌC ÍóÌN”ÌG ÍóÌR”ÌH ÍóÌS”ÌI ÍóÌT”ÌL ÍóÌW”ÌM ÍóÌX”ÌN ÍóÌY”ÌO ÍóÌ`”ÌQ ÍóÌj”ÌS ÍóÌl”ÌT ÍóÌm”ÌU ÍóÌn”ÌV ÍóÌo”ÌX ÍóÌq”ÌY ÍóÌr”ÌZ ÍóÌr›” Íô” Íô” Íô	” Íô” Íô” Íô” Íô”+ Íô'”, Íô(”4 Íô0”5 Íô0œ” Íõ” Íõ” Íõ	” Íõ” Íõ” Íõ”! Íõ”% Íõ!”& Íõ"”) Íõ%”+ Íõ'”, Íõ'’” Íö”# Íö” Í÷” Í÷” Í÷	” Í÷” Í÷” Í÷”" Í÷”# Í÷”& Í÷"”( Í÷$”+ Í÷&”, Í÷'”- Í÷(”. Í÷(œ” Íø” Íø” Íø” Íø” Íø” Íø”& Íø"”' Íø#”- Íø)”0 Íø,”1 Íø-”3 Íø/Ü ” Íù” Íù” Íù”& Íù ”( Íù"”) Íù#”: Íù4”; Íù5”? Íù9”Ì@ Íù:”ÌG ÍùÌA”ÌH ÍùÌB”ÌU ÍùÌO”ÌV ÍùÌP”ÌW ÍùÌQ”Ì\ ÍùÌV”Ì] ÍùÌW”Ì` ÍùÌZ”Ìb ÍùÌ\”Ìe ÍùÌ^”Ìf ÍùÌ_”Ìg ÍùÌ`”Ìh ÍùÌ`‘”	 Íúœ” Íû” Íû” Íû” Íû” Íû” Íû”% Íû!”& Íû"”, Íû(”/ Íû+”0 Íû,”2 Íû.Ü ” Íü” Íü” Íü”& Íü ”( Íü"”) Íü#”9 Íü3”: Íü4”> Íü8”? Íü9”ÌF ÍüÌ@”ÌG ÍüÌA”ÌS ÍüÌM”ÌU ÍüÌO”ÌY ÍüÌS”ÌZ ÍüÌT”Ìa ÍüÌ[”Ìb ÍüÌ\”Ìd ÍüÌ^”Ìe ÍüÌ_”Ìf ÍüÌ`”Ìk ÍüÌe”Ìl ÍüÌf”Ìo ÍüÌi”Ìq ÍüÌk”Ìt ÍüÌm”Ìu ÍüÌn”Ìv ÍüÌo”Ìw ÍüÌo‘”	 ÍıÜ ” Íş” Íş” Íş”" Íş”$ Íş ”% Íş!”+ Íş'”, Íş(”6 Íş2”7 Íş3”ÌH ÍşÌD”ÌJ ÍşÌF”ÌL ÍşÌH”ÌM ÍşÌI”ÌN ÍşÌJ”ÌS ÍşÌO”ÌT ÍşÌP”ÌW ÍşÌS”ÌY ÍşÌU”Ì\ ÍşÌW”Ì] ÍşÌX”Ì^ ÍşÌY”Ì_ ÍşÌY–” Íÿ” Íÿ” Íÿ	” Íÿ” Íÿ” Íÿ–” Í ” Í ” Í ” Í ” Í ” Í ’” Í” Í”” Í
+”	 Í”
+ Í” Í—” Í” Í” Í	” Í” Í” Í” Í’” Í” Í‘”	 Í˜” Í” Í
+” Í” Í” Í”( Í$”* Í&”+ Í&›” Í” Í” Í	” Í” Í” Í” Í”% Í!”& Í"”( Í$”) Í$š” Í	” Í	” Í		” Í	” Í	” Í	” Í	” Í	” Í	” Í	” Í
+” Í
+” Í
+	” Í
+” Í
+” Í
+” Í
+”" Í
+”# Í
+”' Í
+#”( Í
+$”0 Í
+,”1 Í
+-”2 Í
+-” Í” Í” Í	” Í” Í” Í” Í”" Í”# Í”' Í#”( Í$”0 Í,”1 Í-”2 Í-” Í” Í” Í	” Í” Í”" Í”# Í”( Í$”) Í%”- Í)”. Í*”< Í8”= Í9”> Í9” Í” Í” Í	” Í” Í” Í” Í” Í”  Í”$ Í ”% Í!”* Í&”+ Í'”, Í'” Í” Í” Í	” Í” Í” Í” Í”" Í”# Í”' Í#”( Í$”0 Í,”1 Í-”2 Í-™” Í” Í” Í	” Í” Í”! Í”" Í”/ Í+”0 Í+™” Í” Í” Í	” Í” Í” Í” Í” Í”  Í™” Í” Í” Í	” Í” Í”" Í”# Í”1 Í-”2 Í-’” Í” Íœ” Í” Í”  Í”! Í”, Í&”. Í(”/ Í)”; Í5”< Í6”Ì@ Í:”ÌA Í;”ÌB Í;™” Í” Í
+” Í” Í” Í”' Í!”+ Í%”, Í&”- Í&›” Í” Í
+” Í” Í” Í”' Í!”* Í$”. Í(”/ Í)”1 Í+”2 Í+‘”	 Í”” Í” Í” Í” Í’” Í” Í‘”	 Í’” Í” Í’” Í
+” ÍÜ ” Í” Í” Í” Í” Í#”) Í-”* Í.”7 Í;”9 Í=”= ÍÌA”> ÍÌB”ÌC ÍÌG”ÌD ÍÌH”ÌH ÍÌL”ÌI ÍÌM”ÌQ ÍÌU”ÌR ÍÌV”ÌS ÍÌW”ÌT ÍÌWÜ ” Í” Í” Í” Í” Í#”) Í-”* Í.”3 Í7”5 Í9”9 Í=”: Í>”? ÍÌC”Ì@ ÍÌD”ÌD ÍÌH”ÌE ÍÌI”ÌM ÍÌQ”ÌN ÍÌR”ÌO ÍÌS”ÌP ÍÌS” Í” Í” Í” Í” Í#”) Í-”* Í.”5 Í9”7 Í;”; Í?”< ÍÌ@”ÌA ÍÌE”ÌB ÍÌF”ÌC ÍÌFÜ ” Í” Í” Í” Í” Í#”) Í-”* Í.”: Í>”< ÍÌ@”Ì@ ÍÌD”ÌA ÍÌE”ÌF ÍÌJ”ÌG ÍÌK”ÌK ÍÌO”ÌL ÍÌP”ÌQ ÍÌU”ÌR ÍÌV”ÌS ÍÌW”ÌT ÍÌW” Í ” Í ” Í ” Í ” Í #”) Í -”* Í .”9 Í =”; Í ?”? Í ÌC”Ì@ Í ÌD”ÌN Í ÌR”ÌO Í ÌS”ÌP Í ÌS’” Í!” Í!•”  ” ” 0” 4” 4ÔrG–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜû‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
  ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ‘”  ÌÎ ‘”  ÌÏ ‘”  ÌĞ ‘”  ÌÑ ‘”  ÌÒ ‘”  ÌÓ ‘”  ÌÔ ‘”  ÌÕ ‘”  ÌÖ ‘”  Ì× ‘”  ÌØ ‘”  ÌÙ ‘”  ÌÚ ‘”  ÌÛ ‘”  ÌÜ ‘”  Ìİ ‘”  ÌŞ ‘”  Ìß ‘”  Ìà ‘”  Ìá ‘”  Ìâ ‘”  Ìã ‘”  Ìä ‘”  Ìå ‘”  Ìæ ‘”  Ìç ‘”  Ìè ‘”  Ìé ‘”  Ìê ‘”  Ìë ‘”  Ìì ‘”  Ìí ‘”  Ìî ‘”  Ìï ‘”  Ìğ ‘”  Ìñ ‘”  Ìò ‘”  Ìó ‘”  Ìô ‘”  Ìõ ‘”  Ìö ‘”  Ì÷ ‘”  Ìø ‘”  Ìù ‘”  Ìú ‘”  Ìû ‘”  Ìü ‘”  Ìı ‘”  Ìş ‘”  Ìÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í	 ‘”  Í
- ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ÔrH’§missing¦pluginÃ¦genAbcÂÔ  ÔrI”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache‘ÔrJ–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÍÀÍ!¢ÔrK–¤type¥start£end¢idªsuperClass¤body°ClassDeclarationÍÇÍ!¢ÔrL”¤type¥start£end¤nameªIdentifierÍÍÍÜ¯FocusControllerÀÔrM”¤type¥start£end¤body©ClassBodyÍİÍ!¢Ü ÔrN˜¤type¥start£end¦static¨computed£key¤kind¥value°MethodDefinitionÍäÍ&ÂÂLªIdentifierÍäÍï«constructor«constructorÔrO™¤type¥start£end¢idªexpression©generator¥async¦params¤body²FunctionExpressionÍïÍ&ÀÂÂÂM®BlockStatementÍòÍ&Ü ÔrP”¤type¥start£endªexpression³ExpressionStatementÍıÍÔrQ–¤type¥start£end¨operator¤left¥right´AssignmentExpressionÍıÍ¡=ÔrR—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍıÍÔrS“¤type¥start£end®ThisExpressionÍıÍLªIdentifierÍÍ¦tickIdÂÂÔrT–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍÍ¡-ÃÔrU•¤type¥start£end¥value£raw§LiteralÍÍ¡1P³ExpressionStatementÍÍ:Q´AssignmentExpressionÍÍ9¡=R°MemberExpressionÍÍ$S®ThisExpressionÍÍLªIdentifierÍÍ$§sessionÂÂÔrV•¤type¥start£end¦callee©arguments­NewExpressionÍ'Í9LªIdentifierÍ+Í7¬FocusSessionP³ExpressionStatementÍDÍTQ´AssignmentExpressionÍDÍS¡=R°MemberExpressionÍDÍNS®ThisExpressionÍDÍHLªIdentifierÍIÍN¥tasksÂÂÔrW”¤type¥start£end¨elements¯ArrayExpressionÍQÍSP³ExpressionStatementÍ^ÍrQ´AssignmentExpressionÍ^Íq¡=R°MemberExpressionÍ^ÍlS®ThisExpressionÍ^ÍbLªIdentifierÍcÍl©questionsÂÂW¯ArrayExpressionÍoÍqP³ExpressionStatementÍ|Í‘Q´AssignmentExpressionÍ|Í¡=R°MemberExpressionÍ|ÍˆS®ThisExpressionÍ|Í€LªIdentifierÍÍˆ§runningÂÂU§LiteralÍ‹ÍÂ¥falseP³ExpressionStatementÍ›Í¯Q´AssignmentExpressionÍ›Í®¡=R°MemberExpressionÍ›Í¦S®ThisExpressionÍ›ÍŸLªIdentifierÍ Í¦¦qaModeÂÂU§LiteralÍ©Í®Â¥falseP³ExpressionStatementÍ¹ÍÎQ´AssignmentExpressionÍ¹ÍÍ¡=R°MemberExpressionÍ¹ÍÅS®ThisExpressionÍ¹Í½LªIdentifierÍ¾ÍÅ§restingÂÂU§LiteralÍÈÍÍÂ¥falseP³ExpressionStatementÍØÍìQ´AssignmentExpressionÍØÍë¡=R°MemberExpressionÍØÍãS®ThisExpressionÍØÍÜLªIdentifierÍİÍã¦pausedÂÂU§LiteralÍæÍëÂ¥falseP³ExpressionStatementÍöÍQ´AssignmentExpressionÍöÍ¡=R°MemberExpressionÍöÍS®ThisExpressionÍöÍúLªIdentifierÍûÍ¨totalSecÂÂU§LiteralÍÍ ¡0P³ExpressionStatementÍÍ$Q´AssignmentExpressionÍÍ#¡=R°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ¨focusSecÂÂU§LiteralÍ"Í# ¡0P³ExpressionStatementÍ.ÍFQ´AssignmentExpressionÍ.ÍE¡=R°MemberExpressionÍ.ÍAS®ThisExpressionÍ.Í2LªIdentifierÍ3ÍA®distractionSecÂÂU§LiteralÍDÍE ¡0P³ExpressionStatementÍPÍ_Q´AssignmentExpressionÍPÍ^¡=R°MemberExpressionÍPÍZS®ThisExpressionÍPÍTLªIdentifierÍUÍZ¥qaSecÂÂU§LiteralÍ]Í^ ¡0P³ExpressionStatementÍiÍ{Q´AssignmentExpressionÍiÍz¡=R°MemberExpressionÍiÍvS®ThisExpressionÍiÍmLªIdentifierÍnÍv¨breakSecÂÂU§LiteralÍyÍz ¡0P³ExpressionStatementÍ…Í¥Q´AssignmentExpressionÍ…Í¤¡=R°MemberExpressionÍ…ÍS®ThisExpressionÍ…Í‰LªIdentifierÍŠÍ¥stateÂÂR°MemberExpressionÍ’Í¤LªIdentifierÍ’ÍœªFocusStateLªIdentifierÍÍ¤§FOCUSEDÂÂP³ExpressionStatementÍ¯ÍÆQ´AssignmentExpressionÍ¯ÍÅ¡=R°MemberExpressionÍ¯ÍÁS®ThisExpressionÍ¯Í³LªIdentifierÍ´ÍÁ­stateSinceSecÂÂU§LiteralÍÄÍÅ ¡0P³ExpressionStatementÍĞÍçQ´AssignmentExpressionÍĞÍæ¡=R°MemberExpressionÍĞÍâS®ThisExpressionÍĞÍÔLªIdentifierÍÕÍâ­sampleCounterÂÂU§LiteralÍåÍæ ¡0P³ExpressionStatementÍñÍQ´AssignmentExpressionÍñÍ¡=R°MemberExpressionÍñÍşS®ThisExpressionÍñÍõLªIdentifierÍöÍş¨timelineÂÂW¯ArrayExpressionÍÍP³ExpressionStatementÍÍQ´AssignmentExpressionÍÍ¡=R°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ¦eventsÂÂW¯ArrayExpressionÍÍN°MethodDefinitionÍ,ÍãÃÂLªIdentifierÍ3Í>«getInstance¦methodO²FunctionExpressionÍ>ÍãÀÂÂÂM®BlockStatementÍAÍã’ÔrX–¤type¥start£end¤testªconsequent©alternate«IfStatementÍLÍ¶ÔrY–¤type¥start£end¤left¨operator¥right°BinaryExpressionÍPÍmR°MemberExpressionÍPÍdLªIdentifierÍPÍ_¯FocusControllerLªIdentifierÍ`Íd¤instÂÂ£===U§LiteralÍiÍmÀ¤nullM®BlockStatementÍoÍ¶‘P³ExpressionStatementÍ~Í«Q´AssignmentExpressionÍ~Íª¡=R°MemberExpressionÍ~Í’LªIdentifierÍ~Í¯FocusControllerLªIdentifierÍÍ’¤instÂÂV­NewExpressionÍ•ÍªLªIdentifierÍ™Í¨¯FocusControllerÀÔrZ”¤type¥start£end¨argument¯ReturnStatementÍÀÍÜR°MemberExpressionÍÇÍÛLªIdentifierÍÇÍÖ¯FocusControllerLªIdentifierÍ×ÍÛ¤instÂÂN°MethodDefinitionÍéÍÂÂLªIdentifierÍéÍóªgetSession¦methodO²FunctionExpressionÍóÍÀÂÂÂM®BlockStatementÍöÍ‘Z¯ReturnStatementÍÍR°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ§sessionÂÂN°MethodDefinitionÍ"ÍQÂÂLªIdentifierÍ"Í*¨getTasks¦methodO²FunctionExpressionÍ*ÍQÀÂÂÂM®BlockStatementÍ-ÍQ‘Z¯ReturnStatementÍ8ÍJR°MemberExpressionÍ?ÍIS®ThisExpressionÍ?ÍCLªIdentifierÍDÍI¥tasksÂÂN°MethodDefinitionÍWÍÂÂLªIdentifierÍWÍc¬getQuestions¦methodO²FunctionExpressionÍcÍÀÂÂÂM®BlockStatementÍfÍ‘Z¯ReturnStatementÍqÍ‡R°MemberExpressionÍxÍ†S®ThisExpressionÍxÍ|LªIdentifierÍ}Í†©questionsÂÂN°MethodDefinitionÍ”ÍÃÂÂLªIdentifierÍ”Íœ¨getState¦methodO²FunctionExpressionÍœÍÃÀÂÂÂM®BlockStatementÍŸÍÃ‘Z¯ReturnStatementÍªÍ¼R°MemberExpressionÍ±Í»S®ThisExpressionÍ±ÍµLªIdentifierÍ¶Í»¥stateÂÂN°MethodDefinitionÍÉÍşÂÂLªIdentifierÍÉÍÔ«getTotalSec¦methodO²FunctionExpressionÍÔÍşÀÂÂÂM®BlockStatementÍ×Íş‘Z¯ReturnStatementÍâÍ÷R°MemberExpressionÍéÍöS®ThisExpressionÍéÍíLªIdentifierÍîÍö¨totalSecÂÂN°MethodDefinitionÍÍ9ÂÂLªIdentifierÍÍ«getFocusSec¦methodO²FunctionExpressionÍÍ9ÀÂÂÂM®BlockStatementÍÍ9‘Z¯ReturnStatementÍÍ2R°MemberExpressionÍ$Í1S®ThisExpressionÍ$Í(LªIdentifierÍ)Í1¨focusSecÂÂN°MethodDefinitionÍ?ÍnÂÂLªIdentifierÍ?ÍG¨getQaSec¦methodO²FunctionExpressionÍGÍnÀÂÂÂM®BlockStatementÍJÍn‘Z¯ReturnStatementÍUÍgR°MemberExpressionÍ\ÍfS®ThisExpressionÍ\Í`LªIdentifierÍaÍf¥qaSecÂÂN°MethodDefinitionÍtÍ¤ÂÂLªIdentifierÍtÍ|¨isQaMode¦methodO²FunctionExpressionÍ|Í¤ÀÂÂÂM®BlockStatementÍÍ¤‘Z¯ReturnStatementÍŠÍR°MemberExpressionÍ‘ÍœS®ThisExpressionÍ‘Í•LªIdentifierÍ–Íœ¦qaModeÂÂN°MethodDefinitionÍªÍÜÂÂLªIdentifierÍªÍ³©isResting¦methodO²FunctionExpressionÍ³ÍÜÀÂÂÂM®BlockStatementÍ¶ÍÜ‘Z¯ReturnStatementÍÁÍÕR°MemberExpressionÍÈÍÔS®ThisExpressionÍÈÍÌLªIdentifierÍÍÍÔ§restingÂÂN°MethodDefinitionÍâÍÂÂLªIdentifierÍâÍê¨isPaused¦methodO²FunctionExpressionÍêÍÀÂÂÂM®BlockStatementÍíÍ‘Z¯ReturnStatementÍøÍR°MemberExpressionÍÿÍ
-S®ThisExpressionÍÿÍLªIdentifierÍÍ
-¦pausedÂÂN°MethodDefinitionÍÍJÂÂLªIdentifierÍÍ!©isRunning¦methodO²FunctionExpressionÍ!ÍJÀÂÂÂM®BlockStatementÍ$ÍJ‘Z¯ReturnStatementÍ/ÍCR°MemberExpressionÍ6ÍBS®ThisExpressionÍ6Í:LªIdentifierÍ;ÍB§runningÂÂN°MethodDefinitionÍeÍ
-¡ÂÂLªIdentifierÍeÍj¥start¦methodO²FunctionExpressionÍjÍ
-¡ÀÂÂÂ‘LªIdentifierÍkÍp¥tasksM®BlockStatementÍrÍ
-¡ŸP³ExpressionStatementÍ}ÍQ´AssignmentExpressionÍ}Í¡=R°MemberExpressionÍ}Í‡S®ThisExpressionÍ}ÍLªIdentifierÍ‚Í‡¥tasksÂÂLªIdentifierÍŠÍ¥tasksP³ExpressionStatementÍšÍ¼Q´AssignmentExpressionÍšÍ»¡=R°MemberExpressionÍšÍ¦S®ThisExpressionÍšÍLªIdentifierÍŸÍ¦§sessionÂÂV­NewExpressionÍ©Í»LªIdentifierÍ­Í¹¬FocusSessionP³ExpressionStatementÍÆÍçQ´AssignmentExpressionÍÆÍæ¡=R°MemberExpressionÍÆÍÕR°MemberExpressionÍÆÍÒS®ThisExpressionÍÆÍÊLªIdentifierÍËÍÒ§sessionÂÂLªIdentifierÍÓÍÕ¢idÂÂÔr[–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍØÍæR°MemberExpressionÍØÍäLªIdentifierÍØÍß§IdUtilsLªIdentifierÍàÍä¤uuidÂÂÂP³ExpressionStatementÍñÍ3Q´AssignmentExpressionÍñÍ2¡=R°MemberExpressionÍñÍR°MemberExpressionÍñÍıS®ThisExpressionÍñÍõLªIdentifierÍöÍı§sessionÂÂLªIdentifierÍşÍ¥titleÂÂXµConditionalExpressionÍÍ2Y°BinaryExpressionÍÍR°MemberExpressionÍÍLªIdentifierÍÍ¥tasksLªIdentifierÍÍ¦lengthÂÂ¡>U§LiteralÍÍ ¡0R°MemberExpressionÍÍ)R°MemberExpressionÍÍ!LªIdentifierÍÍ¥tasksU§LiteralÍÍ  ¡0ÃÂLªIdentifierÍ"Í)§subjectÂÂU§LiteralÍ,Í2¬ä¸“æ³¨å­¦ä¹ ®'ä¸“æ³¨å­¦ä¹ 'P³ExpressionStatementÍ=ÍaQ´AssignmentExpressionÍ=Í`¡=R°MemberExpressionÍ=ÍSR°MemberExpressionÍ=ÍIS®ThisExpressionÍ=ÍALªIdentifierÍBÍI§sessionÂÂLªIdentifierÍJÍS©startTimeÂÂ[®CallExpressionÍVÍ`R°MemberExpressionÍVÍ^LªIdentifierÍVÍZ¤DateLªIdentifierÍ[Í^£nowÂÂÂP³ExpressionStatementÍkÍ™Q´AssignmentExpressionÍkÍ˜¡=R°MemberExpressionÍkÍR°MemberExpressionÍkÍwS®ThisExpressionÍkÍoLªIdentifierÍpÍw§sessionÂÂLªIdentifierÍxÍ§taskIdsÂÂ[®CallExpressionÍ‚Í˜R°MemberExpressionÍ‚Í‹LªIdentifierÍ‚Í‡¥tasksLªIdentifierÍˆÍ‹£mapÂÂ‘O·ArrowFunctionExpressionÍŒÍ—ÀÃÂÂ‘LªIdentifierÍÍ¡tR°MemberExpressionÍ“Í—LªIdentifierÍ“Í”¡tLªIdentifierÍ•Í—¢idÂÂÂP³ExpressionStatementÍ£ÍùQ´AssignmentExpressionÍ£Íø¡=R°MemberExpressionÍ£Í¿R°MemberExpressionÍ£Í¯S®ThisExpressionÍ£Í§LªIdentifierÍ¨Í¯§sessionÂÂLªIdentifierÍ°Í¿¯plannedDurationÂÂ[®CallExpressionÍÂÍøR°MemberExpressionÍÂÍÎLªIdentifierÍÂÍÇ¥tasksLªIdentifierÍÈÍÎ¦reduceÂÂ’O·ArrowFunctionExpressionÍÏÍôÀÃÂÂ’LªIdentifierÍĞÍÓ£sumLªIdentifierÍÕÍÖ¡tY°BinaryExpressionÍÛÍôLªIdentifierÍÛÍŞ£sum¡+R°MemberExpressionÍáÍôLªIdentifierÍáÍâ¡tLªIdentifierÍãÍô±estimatedDurationÂÂU§LiteralÍöÍ÷ ¡0ÂP³ExpressionStatementÍ	Í	/Q´AssignmentExpressionÍ	Í	.¡=R°MemberExpressionÍ	Í	R°MemberExpressionÍ	Í	S®ThisExpressionÍ	Í	LªIdentifierÍ	Í	§sessionÂÂLªIdentifierÍ	Í	¦statusÂÂR°MemberExpressionÍ	Í	.LªIdentifierÍ	Í	&­SessionStatusLªIdentifierÍ	'Í	.§RUNNINGÂÂP³ExpressionStatementÍ	9Í	N[®CallExpressionÍ	9Í	MR°MemberExpressionÍ	9Í	KS®ThisExpressionÍ	9Í	=LªIdentifierÍ	>Í	K­resetCountersÂÂÂP³ExpressionStatementÍ	XÍ	lQ´AssignmentExpressionÍ	XÍ	k¡=R°MemberExpressionÍ	XÍ	dS®ThisExpressionÍ	XÍ	\LªIdentifierÍ	]Í	d§runningÂÂU§LiteralÍ	gÍ	kÃ¤trueP³ExpressionStatementÍ	vÍ	–Q´AssignmentExpressionÍ	vÍ	•¡=R°MemberExpressionÍ	vÍ	€S®ThisExpressionÍ	vÍ	zLªIdentifierÍ	{Í	€¥stateÂÂR°MemberExpressionÍ	ƒÍ	•LªIdentifierÍ	ƒÍ	ªFocusStateLªIdentifierÍ	Í	•§FOCUSEDÂÂP³ExpressionStatementÍ	 Í	´Q´AssignmentExpressionÍ	 Í	³¡=R°MemberExpressionÍ	 Í	®S®ThisExpressionÍ	 Í	¤LªIdentifierÍ	¥Í	®©questionsÂÂW¯ArrayExpressionÍ	±Í	³P³ExpressionStatementÍ	¾Í
-[®CallExpressionÍ	¾Í
-R°MemberExpressionÍ	¾Í	ç[®CallExpressionÍ	¾Í	áR°MemberExpressionÍ	¾Í	ßLªIdentifierÍ	¾Í	ÓµFocusDetectionServiceLªIdentifierÍ	ÔÍ	ß«getInstanceÂÂÂLªIdentifierÍ	âÍ	ç¥startÂÂ‘O·ArrowFunctionExpressionÍ	èÍ
-ÀÂÂÂ‘LªIdentifierÍ	éÍ	ê¡rM®BlockStatementÍ	ïÍ
-‘P³ExpressionStatementÍ	şÍ
-[®CallExpressionÍ	şÍ
-R°MemberExpressionÍ	şÍ
-S®ThisExpressionÍ	şÍ
-LªIdentifierÍ
-Í
-«onDetectionÂÂ‘LªIdentifierÍ
-Í
-¡rÂÂP³ExpressionStatementÍ
-)Í
-€Q´AssignmentExpressionÍ
-)Í
-¡=R°MemberExpressionÍ
-)Í
-4S®ThisExpressionÍ
-)Í
--LªIdentifierÍ
-.Í
-4¦tickIdÂÂ[®CallExpressionÍ
-7Í
-LªIdentifierÍ
-7Í
-B«setInterval’O·ArrowFunctionExpressionÍ
-CÍ
-oÀÂÂÂM®BlockStatementÍ
+ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í  ‘”  Í! ‘”  Í" ‘”  Í# ‘”  Í$ ‘”  Í% ‘”  Í& ‘”  Í' ‘”  Í( ‘”  Í) ‘”  Í* ‘”  Í+ ‘”  Í, ‘”  Í- ‘”  Í. ‘”  Í/ ‘”  Í0 ‘”  Í1 ‘”  Í2 ‘”  Í3 ‘”  Í4 ‘”  Í5 ‘”  Í6 ‘”  Í7 ‘”  Í8 ‘”  Í9 ‘”  Í: ‘”  Í; ‘”  Í< ‘”  Í= ‘”  Í> ‘”  Í? ‘”  Í@ ‘”  ÍA ‘”  ÍB ‘”  ÍC ‘”  ÍD ‘”  ÍE ‘”  ÍF ‘”  ÍG ‘”  ÍH ‘”  ÍI ‘”  ÍJ ‘”  ÍK ‘”  ÍL ‘”  ÍM ‘”  ÍN ‘”  ÍO ‘”  ÍP ‘”  ÍQ ‘”  ÍR ‘”  ÍS ‘”  ÍT ‘”  ÍU ‘”  ÍV ‘”  ÍW ‘”  ÍX ‘”  ÍY ‘”  ÍZ ‘”  Í[ ‘”  Í\ ‘”  Í] ‘”  Í^ ‘”  Í_ ‘”  Í` ‘”  Ía ‘”  Íb ‘”  Íc ‘”  Íd ‘”  Íe ‘”  Íf ‘”  Íg ‘”  Íh ‘”  Íi ‘”  Íj ‘”  Ík ‘”  Íl ‘”  Ím ‘”  Ín ‘”  Ío ‘”  Íp ‘”  Íq ‘”  Ír ‘”  Ís ‘”  Ít ‘”  Íu ‘”  Ív ‘”  Íw ‘”  Íx ‘”  Íy ‘”  Íz ‘”  Í{ ‘”  Í| ‘”  Í} ‘”  Í~ ‘”  Í ‘”  Í€ ‘”  Í ‘”  Í‚ ‘”  Íƒ ‘”  Í„ ‘”  Í… ‘”  Í† ‘”  Í‡ ‘”  Íˆ ‘”  Í‰ ‘”  ÍŠ ‘”  Í‹ ‘”  ÍŒ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í‘ ‘”  Í’ ‘”  Í“ ‘”  Í” ‘”  Í• ‘”  Í– ‘”  Í— ‘”  Í˜ ‘”  Í™ ‘”  Íš ‘”  Í› ‘”  Íœ ‘”  Í ‘”  Í ‘”  ÍŸ ‘”  Í  ‘”  Í¡ ‘”  Í¢ ‘”  Í£ ‘”  Í¤ ‘”  Í¥ ‘”  Í¦ ‘”  Í§ ‘”  Í¨ ‘”  Í© ‘”  Íª ‘”  Í« ‘”  Í¬ ‘”  Í­ ‘”  Í® ‘”  Í¯ ‘”  Í° ‘”  Í± ‘”  Í² ‘”  Í³ ‘”  Í´ ‘”  Íµ ‘”  Í¶ ‘”  Í· ‘”  Í¸ ‘”  Í¹ ‘”  Íº ‘”  Í» ‘”  Í¼ ‘”  Í½ ‘”  Í¾ ‘”  Í¿ ‘”  ÍÀ ‘”  ÍÁ ‘”  ÍÂ ‘”  ÍÃ ‘”  ÍÄ ‘”  ÍÅ ‘”  ÍÆ ‘”  ÍÇ ‘”  ÍÈ ‘”  ÍÉ ‘”  ÍÊ ‘”  ÍË ‘”  ÍÌ ‘”  ÍÍ ‘”  ÍÎ ‘”  ÍÏ ‘”  ÍĞ ‘”  ÍÑ ‘”  ÍÒ ‘”  ÍÓ ‘”  ÍÔ ‘”  ÍÕ ‘”  ÍÖ ‘”  Í× ‘”  ÍØ ‘”  ÍÙ ‘”  ÍÚ ‘”  ÍÛ ‘”  ÍÜ ‘”  Íİ ‘”  ÍŞ ‘”  Íß ‘”  Íà ‘”  Íá ‘”  Íâ ‘”  Íã ‘”  Íä ‘”  Íå ‘”  Íæ ‘”  Íç ‘”  Íè ‘”  Íé ‘”  Íê ‘”  Íë ‘”  Íì ‘”  Íí ‘”  Íî ‘”  Íï ‘”  Íğ ‘”  Íñ ‘”  Íò ‘”  Íó ‘”  Íô ‘”  Íõ ‘”  Íö ‘”  Í÷ ‘”  Íø ‘”  Íù ‘”  Íú ÔrH’§missing¦pluginÃ¦genAbcÂÔ  ÔrI”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache‘ÔrJ–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÍ0ÍGDÔrK–¤type¥start£end¢idªsuperClass¤body°ClassDeclarationÍ7ÍGDÔrL”¤type¥start£end¤nameªIdentifierÍ=ÍL¯FocusControllerÀÔrM”¤type¥start£end¤body©ClassBodyÍMÍGDÜ )ÔrN˜¤type¥start£end¦static¨computed£key¤kind¥value°MethodDefinitionÍTÍÂÂLªIdentifierÍTÍ_«constructor«constructorÔrO™¤type¥start£end¢idªexpression©generator¥async¦params¤body²FunctionExpressionÍ_ÍÀÂÂÂM®BlockStatementÍbÍÜ ÔrP”¤type¥start£endªexpression³ExpressionStatementÍmÍ~ÔrQ–¤type¥start£end¨operator¤left¥right´AssignmentExpressionÍmÍ}¡=ÔrR—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍmÍxÔrS“¤type¥start£end®ThisExpressionÍmÍqLªIdentifierÍrÍx¦tickIdÂÂÔrT–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍ{Í}¡-ÃÔrU•¤type¥start£end¥value£raw§LiteralÍ|Í}¡1P³ExpressionStatementÍˆÍQ´AssignmentExpressionÍˆÍœ¡=R°MemberExpressionÍˆÍ—S®ThisExpressionÍˆÍŒLªIdentifierÍÍ—ªsnapshotIdÂÂT¯UnaryExpressionÍšÍœ¡-ÃU§LiteralÍ›Íœ¡1P³ExpressionStatementÍ§ÍÉQ´AssignmentExpressionÍ§ÍÈ¡=R°MemberExpressionÍ§Í³S®ThisExpressionÍ§Í«LªIdentifierÍ¬Í³§sessionÂÂÔrV•¤type¥start£end¦callee©arguments­NewExpressionÍ¶ÍÈLªIdentifierÍºÍÆ¬FocusSessionP³ExpressionStatementÍÓÍãQ´AssignmentExpressionÍÓÍâ¡=R°MemberExpressionÍÓÍİS®ThisExpressionÍÓÍ×LªIdentifierÍØÍİ¥tasksÂÂÔrW”¤type¥start£end¨elements¯ArrayExpressionÍàÍâP³ExpressionStatementÍíÍQ´AssignmentExpressionÍíÍ ¡=R°MemberExpressionÍíÍûS®ThisExpressionÍíÍñLªIdentifierÍòÍû©questionsÂÂW¯ArrayExpressionÍşÍ P³ExpressionStatementÍÍ Q´AssignmentExpressionÍÍ¡=R°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ§runningÂÂU§LiteralÍÍÂ¥falseP³ExpressionStatementÍ*Í>Q´AssignmentExpressionÍ*Í=¡=R°MemberExpressionÍ*Í5S®ThisExpressionÍ*Í.LªIdentifierÍ/Í5¦qaModeÂÂU§LiteralÍ8Í=Â¥falseP³ExpressionStatementÍHÍ]Q´AssignmentExpressionÍHÍ\¡=R°MemberExpressionÍHÍTS®ThisExpressionÍHÍLLªIdentifierÍMÍT§restingÂÂU§LiteralÍWÍ\Â¥falseP³ExpressionStatementÍgÍ{Q´AssignmentExpressionÍgÍz¡=R°MemberExpressionÍgÍrS®ThisExpressionÍgÍkLªIdentifierÍlÍr¦pausedÂÂU§LiteralÍuÍzÂ¥falseP³ExpressionStatementÍ£ÍµQ´AssignmentExpressionÍ£Í´¡=R°MemberExpressionÍ£Í°S®ThisExpressionÍ£Í§LªIdentifierÍ¨Í°¨totalSecÂÂU§LiteralÍ³Í´ ¡0P³ExpressionStatementÍ¿ÍÑQ´AssignmentExpressionÍ¿ÍĞ¡=R°MemberExpressionÍ¿ÍÌS®ThisExpressionÍ¿ÍÃLªIdentifierÍÄÍÌ¨focusSecÂÂU§LiteralÍÏÍĞ ¡0P³ExpressionStatementÍÛÍóQ´AssignmentExpressionÍÛÍò¡=R°MemberExpressionÍÛÍîS®ThisExpressionÍÛÍßLªIdentifierÍàÍî®distractionSecÂÂU§LiteralÍñÍò ¡0P³ExpressionStatementÍıÍQ´AssignmentExpressionÍıÍ¡=R°MemberExpressionÍıÍS®ThisExpressionÍıÍLªIdentifierÍÍ¥qaSecÂÂU§LiteralÍ
+Í ¡0P³ExpressionStatementÍÍ(Q´AssignmentExpressionÍÍ'¡=R°MemberExpressionÍÍ#S®ThisExpressionÍÍLªIdentifierÍÍ#¨breakSecÂÂU§LiteralÍ&Í' ¡0P³ExpressionStatementÍ2ÍGQ´AssignmentExpressionÍ2ÍF¡=R°MemberExpressionÍ2ÍBS®ThisExpressionÍ2Í6LªIdentifierÍ7ÍB«pausedAccumÂÂU§LiteralÍEÍF ¡0P³ExpressionStatementÍQÍqQ´AssignmentExpressionÍQÍp¡=R°MemberExpressionÍQÍ[S®ThisExpressionÍQÍULªIdentifierÍVÍ[¥stateÂÂR°MemberExpressionÍ^ÍpLªIdentifierÍ^ÍhªFocusStateLªIdentifierÍiÍp§FOCUSEDÂÂP³ExpressionStatementÍ{Í“Q´AssignmentExpressionÍ{Í’¡=R°MemberExpressionÍ{ÍS®ThisExpressionÍ{ÍLªIdentifierÍ€Í®stateEnteredAtÂÂU§LiteralÍ‘Í’ ¡0P³ExpressionStatementÍÍ±Q´AssignmentExpressionÍÍ°¡=R°MemberExpressionÍÍ¬S®ThisExpressionÍÍ¡LªIdentifierÍ¢Í¬ªlastTickAtÂÂU§LiteralÍ¯Í° ¡0P³ExpressionStatementÍ»ÍÒQ´AssignmentExpressionÍ»ÍÑ¡=R°MemberExpressionÍ»ÍÍS®ThisExpressionÍ»Í¿LªIdentifierÍÀÍÍ­sampleAccumMsÂÂU§LiteralÍĞÍÑ ¡0P³ExpressionStatementÍÜÍòQ´AssignmentExpressionÍÜÍñ¡=R°MemberExpressionÍÜÍíS®ThisExpressionÍÜÍàLªIdentifierÍáÍí¬lastYellowAtÂÂU§LiteralÍğÍñ ¡0P³ExpressionStatementÍüÍQ´AssignmentExpressionÍüÍ¡=R°MemberExpressionÍüÍ
+S®ThisExpressionÍüÍ LªIdentifierÍÍ
+©lastRedAtÂÂU§LiteralÍÍ ¡0P³ExpressionStatementÍÍ,Q´AssignmentExpressionÍÍ+¡=R°MemberExpressionÍÍ&S®ThisExpressionÍÍLªIdentifierÍÍ&¨timelineÂÂW¯ArrayExpressionÍ)Í+P³ExpressionStatementÍ6ÍGQ´AssignmentExpressionÍ6ÍF¡=R°MemberExpressionÍ6ÍAS®ThisExpressionÍ6Í:LªIdentifierÍ;ÍA¦eventsÂÂW¯ArrayExpressionÍDÍFP³ExpressionStatementÍQÍiQ´AssignmentExpressionÍQÍh¡=R°MemberExpressionÍQÍcS®ThisExpressionÍQÍULªIdentifierÍVÍc­currentTaskIdÂÂU§LiteralÍfÍh ¢''P³ExpressionStatementÍsÍ›Q´AssignmentExpressionÍsÍš¡=R°MemberExpressionÍsÍ†S®ThisExpressionÍsÍwLªIdentifierÍxÍ†®perceptionModeÂÂU§LiteralÍ‰Íš¯PERCEPTION_FULL±'PERCEPTION_FULL'P³ExpressionStatementÍ¥ÍÀQ´AssignmentExpressionÍ¥Í¿¡=R°MemberExpressionÍ¥Í¸S®ThisExpressionÍ¥Í©LªIdentifierÍªÍ¸®onInterventionÂÂU§LiteralÍ»Í¿À¤nullP³ExpressionStatementÍÊÍãQ´AssignmentExpressionÍÊÍâ¡=R°MemberExpressionÍÊÍÛS®ThisExpressionÍÊÍÎLªIdentifierÍÏÍÛ¬lastDecisionÂÂU§LiteralÍŞÍâÀ¤nullP³ExpressionStatementÍíÍ	Q´AssignmentExpressionÍíÍ¡=R°MemberExpressionÍíÍ S®ThisExpressionÍíÍñLªIdentifierÍòÍ ®permSubscribedÂÂU§LiteralÍÍÂ¥falseN°MethodDefinitionÍÍÍÃÂLªIdentifierÍÍ(«getInstance¦methodO²FunctionExpressionÍ(ÍÍÀÂÂÂM®BlockStatementÍ+ÍÍ’ÔrX–¤type¥start£end¤testªconsequent©alternate«IfStatementÍ6Í ÔrY–¤type¥start£end¤left¨operator¥right°BinaryExpressionÍ:ÍWR°MemberExpressionÍ:ÍNLªIdentifierÍ:ÍI¯FocusControllerLªIdentifierÍJÍN¤instÂÂ£===U§LiteralÍSÍWÀ¤nullM®BlockStatementÍYÍ ‘P³ExpressionStatementÍhÍ•Q´AssignmentExpressionÍhÍ”¡=R°MemberExpressionÍhÍ|LªIdentifierÍhÍw¯FocusControllerLªIdentifierÍxÍ|¤instÂÂV­NewExpressionÍÍ”LªIdentifierÍƒÍ’¯FocusControllerÀÔrZ”¤type¥start£end¨argument¯ReturnStatementÍªÍÆR°MemberExpressionÍ±ÍÅLªIdentifierÍ±ÍÀ¯FocusControllerLªIdentifierÍÁÍÅ¤instÂÂN°MethodDefinitionÍÓÍ	ÂÂLªIdentifierÍÓÍİªgetSession¦methodO²FunctionExpressionÍİÍ	ÀÂÂÂM®BlockStatementÍàÍ	‘Z¯ReturnStatementÍëÍÿR°MemberExpressionÍòÍşS®ThisExpressionÍòÍöLªIdentifierÍ÷Íş§sessionÂÂN°MethodDefinitionÍ	Í	;ÂÂLªIdentifierÍ	Í	¨getTasks¦methodO²FunctionExpressionÍ	Í	;ÀÂÂÂM®BlockStatementÍ	Í	;‘Z¯ReturnStatementÍ	"Í	4R°MemberExpressionÍ	)Í	3S®ThisExpressionÍ	)Í	-LªIdentifierÍ	.Í	3¥tasksÂÂN°MethodDefinitionÍ	AÍ	xÂÂLªIdentifierÍ	AÍ	M¬getQuestions¦methodO²FunctionExpressionÍ	MÍ	xÀÂÂÂM®BlockStatementÍ	PÍ	x‘Z¯ReturnStatementÍ	[Í	qR°MemberExpressionÍ	bÍ	pS®ThisExpressionÍ	bÍ	fLªIdentifierÍ	gÍ	p©questionsÂÂN°MethodDefinitionÍ	~Í	­ÂÂLªIdentifierÍ	~Í	†¨getState¦methodO²FunctionExpressionÍ	†Í	­ÀÂÂÂM®BlockStatementÍ	‰Í	­‘Z¯ReturnStatementÍ	”Í	¦R°MemberExpressionÍ	›Í	¥S®ThisExpressionÍ	›Í	ŸLªIdentifierÍ	 Í	¥¥stateÂÂN°MethodDefinitionÍ	³Í	ôÂÂLªIdentifierÍ	³Í	¾«getTotalSec¦methodO²FunctionExpressionÍ	¾Í	ôÀÂÂÂM®BlockStatementÍ	ÁÍ	ô‘Z¯ReturnStatementÍ	ÌÍ	íÔr[–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍ	ÓÍ	ìR°MemberExpressionÍ	ÓÍ	İLªIdentifierÍ	ÓÍ	×¤MathLªIdentifierÍ	ØÍ	İ¥floorÂÂ‘R°MemberExpressionÍ	ŞÍ	ëS®ThisExpressionÍ	ŞÍ	âLªIdentifierÍ	ãÍ	ë¨totalSecÂÂÂN°MethodDefinitionÍ	úÍ
+;ÂÂLªIdentifierÍ	úÍ
+«getFocusSec¦methodO²FunctionExpressionÍ
+Í
+;ÀÂÂÂM®BlockStatementÍ
+Í
+;‘Z¯ReturnStatementÍ
+Í
+4[®CallExpressionÍ
+Í
+3R°MemberExpressionÍ
+Í
+$LªIdentifierÍ
+Í
+¤MathLªIdentifierÍ
+Í
+$¥floorÂÂ‘R°MemberExpressionÍ
+%Í
+2S®ThisExpressionÍ
+%Í
+)LªIdentifierÍ
+*Í
+2¨focusSecÂÂÂN°MethodDefinitionÍ
+AÍ
+|ÂÂLªIdentifierÍ
+AÍ
+I¨getQaSec¦methodO²FunctionExpressionÍ
 IÍ
-o‘P³ExpressionStatementÍ
-XÍ
-d[®CallExpressionÍ
-XÍ
-cR°MemberExpressionÍ
-XÍ
-aS®ThisExpressionÍ
-XÍ
-\LªIdentifierÍ
-]Í
-a¤tickÂÂÂR°MemberExpressionÍ
-qÍ
-~LªIdentifierÍ
-qÍ
-y¨DemoFlagLªIdentifierÍ
-zÍ
-~¤TICKÂÂÂP³ExpressionStatementÍ
+|ÀÂÂÂM®BlockStatementÍ
+LÍ
+|‘Z¯ReturnStatementÍ
+WÍ
+u[®CallExpressionÍ
+^Í
+tR°MemberExpressionÍ
+^Í
+hLªIdentifierÍ
+^Í
+b¤MathLªIdentifierÍ
+cÍ
+h¥floorÂÂ‘R°MemberExpressionÍ
+iÍ
+sS®ThisExpressionÍ
+iÍ
+mLªIdentifierÍ
+nÍ
+s¥qaSecÂÂÂN°MethodDefinitionÍ
+‚Í
+²ÂÂLªIdentifierÍ
+‚Í
+Š¨isQaMode¦methodO²FunctionExpressionÍ
 ŠÍ
-š[®CallExpressionÍ
-ŠÍ
-™R°MemberExpressionÍ
-ŠÍ
-—S®ThisExpressionÍ
-ŠÍ
-LªIdentifierÍ
-Í
-—¨pushLiveÂÂÂN°MethodDefinitionÍ
-§Í#ÂÂLªIdentifierÍ
-§Í
-´­resetCounters¦methodO²FunctionExpressionÍ
-´Í#ÀÂÂÂM®BlockStatementÍ
-·Í#œP³ExpressionStatementÍ
-ÂÍ
-ÔQ´AssignmentExpressionÍ
-ÂÍ
-Ó¡=R°MemberExpressionÍ
-ÂÍ
-ÏS®ThisExpressionÍ
-ÂÍ
-ÆLªIdentifierÍ
-ÇÍ
-Ï¨totalSecÂÂU§LiteralÍ
-ÒÍ
-Ó ¡0P³ExpressionStatementÍ
-ŞÍ
-ğQ´AssignmentExpressionÍ
-ŞÍ
-ï¡=R°MemberExpressionÍ
-ŞÍ
-ëS®ThisExpressionÍ
-ŞÍ
-âLªIdentifierÍ
-ãÍ
-ë¨focusSecÂÂU§LiteralÍ
-îÍ
-ï ¡0P³ExpressionStatementÍ
-úÍQ´AssignmentExpressionÍ
-úÍ¡=R°MemberExpressionÍ
-úÍS®ThisExpressionÍ
-úÍ
-şLªIdentifierÍ
-ÿÍ®distractionSecÂÂU§LiteralÍÍ ¡0P³ExpressionStatementÍÍ+Q´AssignmentExpressionÍÍ*¡=R°MemberExpressionÍÍ&S®ThisExpressionÍÍ LªIdentifierÍ!Í&¥qaSecÂÂU§LiteralÍ)Í* ¡0P³ExpressionStatementÍ5ÍGQ´AssignmentExpressionÍ5ÍF¡=R°MemberExpressionÍ5ÍBS®ThisExpressionÍ5Í9LªIdentifierÍ:ÍB¨breakSecÂÂU§LiteralÍEÍF ¡0P³ExpressionStatementÍQÍhQ´AssignmentExpressionÍQÍg¡=R°MemberExpressionÍQÍcS®ThisExpressionÍQÍULªIdentifierÍVÍc­stateSinceSecÂÂU§LiteralÍfÍg ¡0P³ExpressionStatementÍrÍ‰Q´AssignmentExpressionÍrÍˆ¡=R°MemberExpressionÍrÍ„S®ThisExpressionÍrÍvLªIdentifierÍwÍ„­sampleCounterÂÂU§LiteralÍ‡Íˆ ¡0P³ExpressionStatementÍ“Í¦Q´AssignmentExpressionÍ“Í¥¡=R°MemberExpressionÍ“Í S®ThisExpressionÍ“Í—LªIdentifierÍ˜Í ¨timelineÂÂW¯ArrayExpressionÍ£Í¥P³ExpressionStatementÍ°ÍÁQ´AssignmentExpressionÍ°ÍÀ¡=R°MemberExpressionÍ°Í»S®ThisExpressionÍ°Í´LªIdentifierÍµÍ»¦eventsÂÂW¯ArrayExpressionÍ¾ÍÀP³ExpressionStatementÍËÍßQ´AssignmentExpressionÍËÍŞ¡=R°MemberExpressionÍËÍÖS®ThisExpressionÍËÍÏLªIdentifierÍĞÍÖ¦qaModeÂÂU§LiteralÍÙÍŞÂ¥falseP³ExpressionStatementÍéÍşQ´AssignmentExpressionÍéÍı¡=R°MemberExpressionÍéÍõS®ThisExpressionÍéÍíLªIdentifierÍîÍõ§restingÂÂU§LiteralÍøÍıÂ¥falseP³ExpressionStatementÍÍQ´AssignmentExpressionÍÍ¡=R°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ¦pausedÂÂU§LiteralÍÍÂ¥falseN°MethodDefinitionÍ)ÍûÂÂLªIdentifierÍ)Í-¤tick¦methodO²FunctionExpressionÍ-ÍûÀÂÂÂM®BlockStatementÍ0Íû™X«IfStatementÍ;ÍoT¯UnaryExpressionÍ?ÍL¡!ÃR°MemberExpressionÍ@ÍLS®ThisExpressionÍ@ÍDLªIdentifierÍEÍL§runningÂÂM®BlockStatementÍNÍo‘Z¯ReturnStatementÍ]ÍdÀÀX«IfStatementÍyÍ«R°MemberExpressionÍ}ÍˆS®ThisExpressionÍ}ÍLªIdentifierÍ‚Íˆ¦pausedÂÂM®BlockStatementÍŠÍ«‘Z¯ReturnStatementÍ™Í ÀÀX«IfStatementÍµÍ$R°MemberExpressionÍ¹ÍÅS®ThisExpressionÍ¹Í½LªIdentifierÍ¾ÍÅ§restingÂÂM®BlockStatementÍÇÍ$“P³ExpressionStatementÍÖÍæT°UpdateExpressionÍÖÍå¢++ÂR°MemberExpressionÍÖÍãS®ThisExpressionÍÖÍÚLªIdentifierÍÛÍã¨breakSecÂÂP³ExpressionStatementÍôÍ[®CallExpressionÍôÍR°MemberExpressionÍôÍS®ThisExpressionÍôÍøLªIdentifierÍùÍ¨pushLiveÂÂÂZ¯ReturnStatementÍÍÀÀP³ExpressionStatementÍ.Í>T°UpdateExpressionÍ.Í=¢++ÂR°MemberExpressionÍ.Í;S®ThisExpressionÍ.Í2LªIdentifierÍ3Í;¨totalSecÂÂX«IfStatementÍHÍR°MemberExpressionÍLÍWS®ThisExpressionÍLÍPLªIdentifierÍQÍW¦qaModeÂÂM®BlockStatementÍYÍ€‘P³ExpressionStatementÍhÍuT°UpdateExpressionÍhÍt¢++ÂR°MemberExpressionÍhÍrS®ThisExpressionÍhÍlLªIdentifierÍmÍr¥qaSecÂÂX«IfStatementÍÍY°BinaryExpressionÍ“Í´R°MemberExpressionÍ“ÍS®ThisExpressionÍ“Í—LªIdentifierÍ˜Í¥stateÂÂ£===R°MemberExpressionÍ¢Í´LªIdentifierÍ¢Í¬ªFocusStateLªIdentifierÍ­Í´§FOCUSEDÂÂM®BlockStatementÍ¶Íà‘P³ExpressionStatementÍÅÍÕT°UpdateExpressionÍÅÍÔ¢++ÂR°MemberExpressionÍÅÍÒS®ThisExpressionÍÅÍÉLªIdentifierÍÊÍÒ¨focusSecÂÂM®BlockStatementÍïÍ‘P³ExpressionStatementÍşÍT°UpdateExpressionÍşÍ¢++ÂR°MemberExpressionÍşÍS®ThisExpressionÍşÍLªIdentifierÍÍ®distractionSecÂÂP³ExpressionStatementÍ)Í>T°UpdateExpressionÍ)Í=¢++ÂR°MemberExpressionÍ)Í;S®ThisExpressionÍ)Í-LªIdentifierÍ.Í;­stateSinceSecÂÂP³ExpressionStatementÍHÍ]T°UpdateExpressionÍHÍ\¢++ÂR°MemberExpressionÍHÍZS®ThisExpressionÍHÍLLªIdentifierÍMÍZ­sampleCounterÂÂX«IfStatementÍgÍÚY°BinaryExpressionÍkÍƒR°MemberExpressionÍkÍ}S®ThisExpressionÍkÍoLªIdentifierÍpÍ}­sampleCounterÂÂ¢>=U§LiteralÍÍƒ¢30M®BlockStatementÍ…ÍÚ’P³ExpressionStatementÍ”Í«Q´AssignmentExpressionÍ”Íª¡=R°MemberExpressionÍ”Í¦S®ThisExpressionÍ”Í˜LªIdentifierÍ™Í¦­sampleCounterÂÂU§LiteralÍ©Íª ¡0P³ExpressionStatementÍ¹ÍÏ[®CallExpressionÍ¹ÍÎR°MemberExpressionÍ¹ÍÌS®ThisExpressionÍ¹Í½LªIdentifierÍ¾ÍÌ®sampleTimelineÂÂÂÀP³ExpressionStatementÍäÍô[®CallExpressionÍäÍóR°MemberExpressionÍäÍñS®ThisExpressionÍäÍèLªIdentifierÍéÍñ¨pushLiveÂÂÂN°MethodDefinitionÍÍÑÂÂLªIdentifierÍÍ&«onDetection¦methodO²FunctionExpressionÍ&ÍÑÀÂÂÂ‘LªIdentifierÍ'Í(¡rM®BlockStatementÍ*ÍÑ“X«IfStatementÍ5Í—Y±LogicalExpressionÍ9ÍtY±LogicalExpressionÍ9ÍeY±LogicalExpressionÍ9ÍUT¯UnaryExpressionÍ9ÍF¡!ÃR°MemberExpressionÍ:ÍFS®ThisExpressionÍ:Í>LªIdentifierÍ?ÍF§runningÂÂ¢||R°MemberExpressionÍJÍUS®ThisExpressionÍJÍNLªIdentifierÍOÍU¦qaModeÂÂ¢||R°MemberExpressionÍYÍeS®ThisExpressionÍYÍ]LªIdentifierÍ^Íe§restingÂÂ¢||R°MemberExpressionÍiÍtS®ThisExpressionÍiÍmLªIdentifierÍnÍt¦pausedÂÂM®BlockStatementÍvÍ—‘Z¯ReturnStatementÍ…ÍŒÀÀÔr\•¤type¥start£end¬declarations¤kind³VariableDeclarationÍ¡ÍÇ‘Ôr]•¤type¥start£end¢id¤init²VariableDeclaratorÍ§ÍÆLªIdentifierÍ§Í­¦target[®CallExpressionÍ°ÍÆR°MemberExpressionÍ°Í½S®ThisExpressionÍ°Í´LªIdentifierÍµÍ½¨mapStateÂÂ‘R°MemberExpressionÍ¾ÍÅLªIdentifierÍ¾Í¿¡rLªIdentifierÍÀÍÅ¥stateÂÂÂ¥constX«IfStatementÍÑÍÊY°BinaryExpressionÍÕÍêLªIdentifierÍÕÍÛ¦target£!==R°MemberExpressionÍàÍêS®ThisExpressionÍàÍäLªIdentifierÍåÍê¥stateÂÂM®BlockStatementÍìÍÊ•P³ExpressionStatementÍûÍQ´AssignmentExpressionÍûÍ¡=R°MemberExpressionÍûÍS®ThisExpressionÍûÍÿLªIdentifierÍ Í¥stateÂÂLªIdentifierÍÍ¦targetP³ExpressionStatementÍÍ4Q´AssignmentExpressionÍÍ3¡=R°MemberExpressionÍÍ/S®ThisExpressionÍÍ!LªIdentifierÍ"Í/­stateSinceSecÂÂU§LiteralÍ2Í3 ¡0P³ExpressionStatementÍBÍ}[®CallExpressionÍBÍ|R°MemberExpressionÍBÍRS®ThisExpressionÍBÍFLªIdentifierÍGÍR«recordEventÂÂ”LªIdentifierÍSÍY¦targetR°MemberExpressionÍ[ÍcLªIdentifierÍ[Í\¡rLªIdentifierÍ]Íc¦sourceÂÂR°MemberExpressionÍeÍqLªIdentifierÍeÍf¡rLªIdentifierÍgÍqªconfidenceÂÂR°MemberExpressionÍsÍ{LªIdentifierÍsÍt¡rLªIdentifierÍuÍ{¦detailÂÂÂP³ExpressionStatementÍ‹Í¡[®CallExpressionÍ‹Í R°MemberExpressionÍ‹ÍS®ThisExpressionÍ‹ÍLªIdentifierÍÍ®sampleTimelineÂÂÂP³ExpressionStatementÍ¯Í¿[®CallExpressionÍ¯Í¾R°MemberExpressionÍ¯Í¼S®ThisExpressionÍ¯Í³LªIdentifierÍ´Í¼¨pushLiveÂÂÂÀN°MethodDefinitionÍ×ÍåÂÂLªIdentifierÍ×Íß¨mapState¦methodO²FunctionExpressionÍßÍåÀÂÂÂ‘LªIdentifierÍàÍá¡sM®BlockStatementÍãÍå“X«IfStatementÍîÍXY°BinaryExpressionÍòÍLªIdentifierÍòÍó¡s£===R°MemberExpressionÍøÍLªIdentifierÍøÍªFocusStateLªIdentifierÍÍ³SLIGHTLY_DISTRACTEDÂÂM®BlockStatementÍÍX‘Z¯ReturnStatementÍ'ÍMR°MemberExpressionÍ.ÍLLªIdentifierÍ.Í8ªFocusStateLªIdentifierÍ9ÍL³SLIGHTLY_DISTRACTEDÂÂÀX«IfStatementÍbÍºY°BinaryExpressionÍfÍLªIdentifierÍfÍg¡s£===R°MemberExpressionÍlÍLªIdentifierÍlÍvªFocusStateLªIdentifierÍwÍªDISTRACTEDÂÂM®BlockStatementÍƒÍº‘Z¯ReturnStatementÍ’Í¯R°MemberExpressionÍ™Í®LªIdentifierÍ™Í£ªFocusStateLªIdentifierÍ¤Í®ªDISTRACTEDÂÂÀZ¯ReturnStatementÍÄÍŞR°MemberExpressionÍËÍİLªIdentifierÍËÍÕªFocusStateLªIdentifierÍÖÍİ§FOCUSEDÂÂN°MethodDefinitionÍëÍ*ÂÂLªIdentifierÍëÍö«recordEvent¦methodO²FunctionExpressionÍöÍ*ÀÂÂÂ”LªIdentifierÍ÷Íü¥stateLªIdentifierÍşÍ¦sourceLªIdentifierÍÍªconfidenceLªIdentifierÍÍ¦detailM®BlockStatementÍÍ*˜\³VariableDeclarationÍ%Í@‘]²VariableDeclaratorÍ+Í?LªIdentifierÍ+Í,¡eV­NewExpressionÍ/Í?LªIdentifierÍ3Í=ªFocusEvent¥constP³ExpressionStatementÍJÍ`Q´AssignmentExpressionÍJÍ_¡=R°MemberExpressionÍJÍNLªIdentifierÍJÍK¡eLªIdentifierÍLÍN¢idÂÂ[®CallExpressionÍQÍ_R°MemberExpressionÍQÍ]LªIdentifierÍQÍX§IdUtilsLªIdentifierÍYÍ]¤uuidÂÂÂP³ExpressionStatementÍjÍˆQ´AssignmentExpressionÍjÍ‡¡=R°MemberExpressionÍjÍuLªIdentifierÍjÍk¡eLªIdentifierÍlÍu©sessionIdÂÂR°MemberExpressionÍxÍ‡R°MemberExpressionÍxÍ„S®ThisExpressionÍxÍ|LªIdentifierÍ}Í„§sessionÂÂLªIdentifierÍ…Í‡¢idÂÂP³ExpressionStatementÍ’Í«Q´AssignmentExpressionÍ’Íª¡=R°MemberExpressionÍ’ÍLªIdentifierÍ’Í“¡eLªIdentifierÍ”Í©timestampÂÂ[®CallExpressionÍ ÍªR°MemberExpressionÍ Í¨LªIdentifierÍ Í¤¤DateLªIdentifierÍ¥Í¨£nowÂÂÂP³ExpressionStatementÍµÍÅQ´AssignmentExpressionÍµÍÄ¡=R°MemberExpressionÍµÍ¼LªIdentifierÍµÍ¶¡eLªIdentifierÍ·Í¼¥stateÂÂLªIdentifierÍ¿ÍÄ¥stateP³ExpressionStatementÍÏÍáQ´AssignmentExpressionÍÏÍà¡=R°MemberExpressionÍÏÍ×LªIdentifierÍÏÍĞ¡eLªIdentifierÍÑÍ×¦sourceÂÂLªIdentifierÍÚÍà¦sourceP³ExpressionStatementÍëÍQ´AssignmentExpressionÍëÍ¡=R°MemberExpressionÍëÍ÷LªIdentifierÍëÍì¡eLªIdentifierÍíÍ÷ªconfidenceÂÂLªIdentifierÍúÍªconfidenceP³ExpressionStatementÍÍ#[®CallExpressionÍÍ"R°MemberExpressionÍÍR°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ¦eventsÂÂLªIdentifierÍÍ¤pushÂÂ‘LªIdentifierÍ Í!¡eÂN°MethodDefinitionÍ0ÍÂÂLªIdentifierÍ0Í>®sampleTimeline¦methodO²FunctionExpressionÍ>ÍÀÂÂÂM®BlockStatementÍAÍ•\³VariableDeclarationÍLÍo‘]²VariableDeclaratorÍRÍnLªIdentifierÍRÍS¡pV­NewExpressionÍVÍnLªIdentifierÍZÍl²FocusTimelinePoint¥constP³ExpressionStatementÍyÍ£Q´AssignmentExpressionÍyÍ¢¡=R°MemberExpressionÍyÍLªIdentifierÍyÍz¡pLªIdentifierÍ{Í¦minuteÂÂ[®CallExpressionÍ„Í¢R°MemberExpressionÍ„ÍLªIdentifierÍ„Íˆ¤MathLªIdentifierÍ‰Í¥floorÂÂ‘Y°BinaryExpressionÍÍ¡R°MemberExpressionÍÍœS®ThisExpressionÍÍ“LªIdentifierÍ”Íœ¨totalSecÂÂ¡/U§LiteralÍŸÍ¡<¢60ÂP³ExpressionStatementÍ­ÍÖQ´AssignmentExpressionÍ­ÍÕ¡=R°MemberExpressionÍ­Í´LªIdentifierÍ­Í®¡pLªIdentifierÍ¯Í´¥levelÂÂ[®CallExpressionÍ·ÍÕR°MemberExpressionÍ·ÍÉS®ThisExpressionÍ·Í»LªIdentifierÍ¼ÍÉ­levelForStateÂÂ‘R°MemberExpressionÍÊÍÔS®ThisExpressionÍÊÍÎLªIdentifierÍÏÍÔ¥stateÂÂÂP³ExpressionStatementÍàÍõQ´AssignmentExpressionÍàÍô¡=R°MemberExpressionÍàÍçLªIdentifierÍàÍá¡pLªIdentifierÍâÍç¥stateÂÂR°MemberExpressionÍêÍôS®ThisExpressionÍêÍîLªIdentifierÍïÍô¥stateÂÂP³ExpressionStatementÍÿÍ[®CallExpressionÍÿÍR°MemberExpressionÍÿÍR°MemberExpressionÍÿÍS®ThisExpressionÍÿÍLªIdentifierÍÍ¨timelineÂÂLªIdentifierÍÍ¤pushÂÂ‘LªIdentifierÍÍ¡pÂN°MethodDefinitionÍ"ÍUÂÂLªIdentifierÍ"Í/­levelForState¦methodO²FunctionExpressionÍ/ÍUÀÂÂÂ‘LªIdentifierÍ0Í1¡sM®BlockStatementÍ3ÍU“X«IfStatementÍ>Í Y°BinaryExpressionÍBÍZLªIdentifierÍBÍC¡s£===R°MemberExpressionÍHÍZLªIdentifierÍHÍRªFocusStateLªIdentifierÍSÍZ§FOCUSEDÂÂM®BlockStatementÍ\Í ‘Z¯ReturnStatementÍkÍ•Y°BinaryExpressionÍrÍ”U§LiteralÍrÍtÌZ¢90¡+[®CallExpressionÍwÍ”R°MemberExpressionÍwÍLªIdentifierÍwÍ{¤MathLªIdentifierÍ|Í¥roundÂÂ‘Y°BinaryExpressionÍ‚Í“[®CallExpressionÍ‚ÍR°MemberExpressionÍ‚ÍLªIdentifierÍ‚Í†¤MathLªIdentifierÍ‡Í¦randomÂÂÂ¡*U§LiteralÍ’Í“¡8ÂÀX«IfStatementÍªÍY°BinaryExpressionÍ®ÍÒLªIdentifierÍ®Í¯¡s£===R°MemberExpressionÍ´ÍÒLªIdentifierÍ´Í¾ªFocusStateLªIdentifierÍ¿ÍÒ³SLIGHTLY_DISTRACTEDÂÂM®BlockStatementÍÔÍ‘Z¯ReturnStatementÍãÍY°BinaryExpressionÍêÍU§LiteralÍêÍì7¢55¡+[®CallExpressionÍïÍR°MemberExpressionÍïÍùLªIdentifierÍïÍó¤MathLªIdentifierÍôÍù¥roundÂÂ‘Y°BinaryExpressionÍúÍ[®CallExpressionÍúÍR°MemberExpressionÍúÍLªIdentifierÍúÍş¤MathLªIdentifierÍÿÍ¦randomÂÂÂ¡*U§LiteralÍ
-Í¢15ÂÀZ¯ReturnStatementÍ#ÍNY°BinaryExpressionÍ*ÍMU§LiteralÍ*Í,¢25¡+[®CallExpressionÍ/ÍMR°MemberExpressionÍ/Í9LªIdentifierÍ/Í3¤MathLªIdentifierÍ4Í9¥roundÂÂ‘Y°BinaryExpressionÍ:ÍL[®CallExpressionÍ:ÍGR°MemberExpressionÍ:ÍELªIdentifierÍ:Í>¤MathLªIdentifierÍ?ÍE¦randomÂÂÂ¡*U§LiteralÍJÍL¢15ÂN°MethodDefinitionÍ‹ÍqÂÂLªIdentifierÍ‹Í’§startQA¦methodO²FunctionExpressionÍ’ÍqÀÂÂÂM®BlockStatementÍ•Íq•X«IfStatementÍ ÍÔT¯UnaryExpressionÍ¤Í±¡!ÃR°MemberExpressionÍ¥Í±S®ThisExpressionÍ¥Í©LªIdentifierÍªÍ±§runningÂÂM®BlockStatementÍ³ÍÔ‘Z¯ReturnStatementÍÂÍÉÀÀP³ExpressionStatementÍŞÍñQ´AssignmentExpressionÍŞÍğ¡=R°MemberExpressionÍŞÍéS®ThisExpressionÍŞÍâLªIdentifierÍãÍé¦qaModeÂÂU§LiteralÍìÍğÃ¤trueP³ExpressionStatementÍûÍQ´AssignmentExpressionÍûÍ¡=R°MemberExpressionÍûÍS®ThisExpressionÍûÍÿLªIdentifierÍ Í¥stateÂÂR°MemberExpressionÍÍLªIdentifierÍÍªFocusStateLªIdentifierÍÍ§QA_MODEÂÂP³ExpressionStatementÍ%ÍP[®CallExpressionÍ%ÍOR°MemberExpressionÍ%ÍM[®CallExpressionÍ%ÍHR°MemberExpressionÍ%ÍFLªIdentifierÍ%Í:µFocusDetectionServiceLªIdentifierÍ;ÍF«getInstanceÂÂÂLªIdentifierÍIÍM¤stopÂÂÂP³ExpressionStatementÍZÍj[®CallExpressionÍZÍiR°MemberExpressionÍZÍgS®ThisExpressionÍZÍ^LªIdentifierÍ_Íg¨pushLiveÂÂÂN°MethodDefinitionÍwÍTÂÂLªIdentifierÍwÍ|¥endQA¦methodO²FunctionExpressionÍ|ÍTÀÂÂÂM®BlockStatementÍÍT”P³ExpressionStatementÍŠÍQ´AssignmentExpressionÍŠÍ¡=R°MemberExpressionÍŠÍ•S®ThisExpressionÍŠÍLªIdentifierÍÍ•¦qaModeÂÂU§LiteralÍ˜ÍÂ¥falseP³ExpressionStatementÍ¨ÍÈQ´AssignmentExpressionÍ¨ÍÇ¡=R°MemberExpressionÍ¨Í²S®ThisExpressionÍ¨Í¬LªIdentifierÍ­Í²¥stateÂÂR°MemberExpressionÍµÍÇLªIdentifierÍµÍ¿ªFocusStateLªIdentifierÍÀÍÇ§FOCUSEDÂÂP³ExpressionStatementÍÒÍ3[®CallExpressionÍÒÍ2R°MemberExpressionÍÒÍû[®CallExpressionÍÒÍõR°MemberExpressionÍÒÍóLªIdentifierÍÒÍçµFocusDetectionServiceLªIdentifierÍèÍó«getInstanceÂÂÂLªIdentifierÍöÍû¥startÂÂ‘O·ArrowFunctionExpressionÍüÍ1ÀÂÂÂ‘LªIdentifierÍıÍş¡rM®BlockStatementÍÍ1‘P³ExpressionStatementÍÍ&[®CallExpressionÍÍ%R°MemberExpressionÍÍ"S®ThisExpressionÍÍLªIdentifierÍÍ"«onDetectionÂÂ‘LªIdentifierÍ#Í$¡rÂÂP³ExpressionStatementÍ=ÍM[®CallExpressionÍ=ÍLR°MemberExpressionÍ=ÍJS®ThisExpressionÍ=ÍALªIdentifierÍBÍJ¨pushLiveÂÂÂN°MethodDefinitionÍZÍ’ÂÂLªIdentifierÍZÍe«addQuestion¦methodO²FunctionExpressionÍeÍ’ÀÂÂÂ‘LªIdentifierÍfÍg¡qM®BlockStatementÍiÍ’‘P³ExpressionStatementÍtÍ‹[®CallExpressionÍtÍŠR°MemberExpressionÍtÍ‡R°MemberExpressionÍtÍ‚S®ThisExpressionÍtÍxLªIdentifierÍyÍ‚©questionsÂÂLªIdentifierÍƒÍ‡¤pushÂÂ‘LªIdentifierÍˆÍ‰¡qÂN°MethodDefinitionÍ§ÍLÂÂLªIdentifierÍ§Í¬¥pause¦methodO²FunctionExpressionÍ¬ÍLÀÂÂÂM®BlockStatementÍ¯ÍL”P³ExpressionStatementÍºÍÍQ´AssignmentExpressionÍºÍÌ¡=R°MemberExpressionÍºÍÅS®ThisExpressionÍºÍ¾LªIdentifierÍ¿ÍÅ¦pausedÂÂU§LiteralÍÈÍÌÃ¤trueP³ExpressionStatementÍ×ÍöQ´AssignmentExpressionÍ×Íõ¡=R°MemberExpressionÍ×ÍáS®ThisExpressionÍ×ÍÛLªIdentifierÍÜÍá¥stateÂÂR°MemberExpressionÍäÍõLªIdentifierÍäÍîªFocusStateLªIdentifierÍïÍõ¦PAUSEDÂÂP³ExpressionStatementÍ Í+[®CallExpressionÍ Í*R°MemberExpressionÍ Í([®CallExpressionÍ Í#R°MemberExpressionÍ Í!LªIdentifierÍ ÍµFocusDetectionServiceLªIdentifierÍÍ!«getInstanceÂÂÂLªIdentifierÍ$Í(¤stopÂÂÂP³ExpressionStatementÍ5ÍE[®CallExpressionÍ5ÍDR°MemberExpressionÍ5ÍBS®ThisExpressionÍ5Í9LªIdentifierÍ:ÍB¨pushLiveÂÂÂN°MethodDefinitionÍRÍ0ÂÂLªIdentifierÍRÍX¦resume¦methodO²FunctionExpressionÍXÍ0ÀÂÂÂM®BlockStatementÍ[Í0”P³ExpressionStatementÍfÍzQ´AssignmentExpressionÍfÍy¡=R°MemberExpressionÍfÍqS®ThisExpressionÍfÍjLªIdentifierÍkÍq¦pausedÂÂU§LiteralÍtÍyÂ¥falseP³ExpressionStatementÍ„Í¤Q´AssignmentExpressionÍ„Í£¡=R°MemberExpressionÍ„ÍS®ThisExpressionÍ„ÍˆLªIdentifierÍ‰Í¥stateÂÂR°MemberExpressionÍ‘Í£LªIdentifierÍ‘Í›ªFocusStateLªIdentifierÍœÍ£§FOCUSEDÂÂP³ExpressionStatementÍ®Í[®CallExpressionÍ®ÍR°MemberExpressionÍ®Í×[®CallExpressionÍ®ÍÑR°MemberExpressionÍ®ÍÏLªIdentifierÍ®ÍÃµFocusDetectionServiceLªIdentifierÍÄÍÏ«getInstanceÂÂÂLªIdentifierÍÒÍ×¥startÂÂ‘O·ArrowFunctionExpressionÍØÍÀÂÂÂ‘LªIdentifierÍÙÍÚ¡rM®BlockStatementÍßÍ‘P³ExpressionStatementÍîÍ[®CallExpressionÍîÍR°MemberExpressionÍîÍşS®ThisExpressionÍîÍòLªIdentifierÍóÍş«onDetectionÂÂ‘LªIdentifierÍÿÍ ¡rÂÂP³ExpressionStatementÍÍ)[®CallExpressionÍÍ(R°MemberExpressionÍÍ&S®ThisExpressionÍÍLªIdentifierÍÍ&¨pushLiveÂÂÂN°MethodDefinitionÍQÍıÂÂLªIdentifierÍQÍ[ªstartBreak¦methodO²FunctionExpressionÍ[ÍıÀÂÂÂM®BlockStatementÍ^Íı”P³ExpressionStatementÍiÍ}Q´AssignmentExpressionÍiÍ|¡=R°MemberExpressionÍiÍuS®ThisExpressionÍiÍmLªIdentifierÍnÍu§restingÂÂU§LiteralÍxÍ|Ã¤trueP³ExpressionStatementÍ‡Í§Q´AssignmentExpressionÍ‡Í¦¡=R°MemberExpressionÍ‡Í‘S®ThisExpressionÍ‡Í‹LªIdentifierÍŒÍ‘¥stateÂÂR°MemberExpressionÍ”Í¦LªIdentifierÍ”ÍªFocusStateLªIdentifierÍŸÍ¦§RESTINGÂÂP³ExpressionStatementÍ±ÍÜ[®CallExpressionÍ±ÍÛR°MemberExpressionÍ±ÍÙ[®CallExpressionÍ±ÍÔR°MemberExpressionÍ±ÍÒLªIdentifierÍ±ÍÆµFocusDetectionServiceLªIdentifierÍÇÍÒ«getInstanceÂÂÂLªIdentifierÍÕÍÙ¤stopÂÂÂP³ExpressionStatementÍæÍö[®CallExpressionÍæÍõR°MemberExpressionÍæÍóS®ThisExpressionÍæÍêLªIdentifierÍëÍó¨pushLiveÂÂÂN°MethodDefinitionÍÍäÂÂLªIdentifierÍÍ¨endBreak¦methodO²FunctionExpressionÍÍäÀÂÂÂM®BlockStatementÍÍä”P³ExpressionStatementÍÍ.Q´AssignmentExpressionÍÍ-¡=R°MemberExpressionÍÍ%S®ThisExpressionÍÍLªIdentifierÍÍ%§restingÂÂU§LiteralÍ(Í-Â¥falseP³ExpressionStatementÍ8ÍXQ´AssignmentExpressionÍ8ÍW¡=R°MemberExpressionÍ8ÍBS®ThisExpressionÍ8Í<LªIdentifierÍ=ÍB¥stateÂÂR°MemberExpressionÍEÍWLªIdentifierÍEÍOªFocusStateLªIdentifierÍPÍW§FOCUSEDÂÂP³ExpressionStatementÍbÍÃ[®CallExpressionÍbÍÂR°MemberExpressionÍbÍ‹[®CallExpressionÍbÍ…R°MemberExpressionÍbÍƒLªIdentifierÍbÍwµFocusDetectionServiceLªIdentifierÍxÍƒ«getInstanceÂÂÂLªIdentifierÍ†Í‹¥startÂÂ‘O·ArrowFunctionExpressionÍŒÍÁÀÂÂÂ‘LªIdentifierÍÍ¡rM®BlockStatementÍ“ÍÁ‘P³ExpressionStatementÍ¢Í¶[®CallExpressionÍ¢ÍµR°MemberExpressionÍ¢Í²S®ThisExpressionÍ¢Í¦LªIdentifierÍ§Í²«onDetectionÂÂ‘LªIdentifierÍ³Í´¡rÂÂP³ExpressionStatementÍÍÍİ[®CallExpressionÍÍÍÜR°MemberExpressionÍÍÍÚS®ThisExpressionÍÍÍÑLªIdentifierÍÒÍÚ¨pushLiveÂÂÂN°MethodDefinitionÍ
-ÍÂÂLªIdentifierÍ
-Í®demoCycleState¦methodO²FunctionExpressionÍÍÀÂÂÂM®BlockStatementÍÍ’X«IfStatementÍ&ÍwY±LogicalExpressionÍ*ÍTY±LogicalExpressionÍ*ÍER°MemberExpressionÍ*Í5S®ThisExpressionÍ*Í.LªIdentifierÍ/Í5¦qaModeÂÂ¢||R°MemberExpressionÍ9ÍES®ThisExpressionÍ9Í=LªIdentifierÍ>ÍE§restingÂÂ¢||R°MemberExpressionÍIÍTS®ThisExpressionÍIÍMLªIdentifierÍNÍT¦pausedÂÂM®BlockStatementÍVÍw‘Z¯ReturnStatementÍeÍlÀÀX«IfStatementÍÍY°BinaryExpressionÍ…Í¦R°MemberExpressionÍ…ÍS®ThisExpressionÍ…Í‰LªIdentifierÍŠÍ¥stateÂÂ£===R°MemberExpressionÍ”Í¦LªIdentifierÍ”ÍªFocusStateLªIdentifierÍŸÍ¦§FOCUSEDÂÂM®BlockStatementÍ¨Í‘P³ExpressionStatementÍ·Í[®CallExpressionÍ·ÍR°MemberExpressionÍ·Íã[®CallExpressionÍ·ÍÚR°MemberExpressionÍ·ÍØLªIdentifierÍ·ÍÌµFocusDetectionServiceLªIdentifierÍÍÍØ«getInstanceÂÂÂLªIdentifierÍÛÍã¨simulateÂÂ‘R°MemberExpressionÍäÍLªIdentifierÍäÍîªFocusStateLªIdentifierÍïÍ³SLIGHTLY_DISTRACTEDÂÂÂX«IfStatementÍÍY°BinaryExpressionÍ"ÍOR°MemberExpressionÍ"Í,S®ThisExpressionÍ"Í&LªIdentifierÍ'Í,¥stateÂÂ£===R°MemberExpressionÍ1ÍOLªIdentifierÍ1Í;ªFocusStateLªIdentifierÍ<ÍO³SLIGHTLY_DISTRACTEDÂÂM®BlockStatementÍQÍ¯‘P³ExpressionStatementÍ`Í¤[®CallExpressionÍ`Í£R°MemberExpressionÍ`ÍŒ[®CallExpressionÍ`ÍƒR°MemberExpressionÍ`ÍLªIdentifierÍ`ÍuµFocusDetectionServiceLªIdentifierÍvÍ«getInstanceÂÂÂLªIdentifierÍ„ÍŒ¨simulateÂÂ‘R°MemberExpressionÍÍ¢LªIdentifierÍÍ—ªFocusStateLªIdentifierÍ˜Í¢ªDISTRACTEDÂÂÂM®BlockStatementÍ¾Í‘P³ExpressionStatementÍÍÍú[®CallExpressionÍÍÍùR°MemberExpressionÍÍÍ÷[®CallExpressionÍÍÍğR°MemberExpressionÍÍÍîLªIdentifierÍÍÍâµFocusDetectionServiceLªIdentifierÍãÍî«getInstanceÂÂÂLªIdentifierÍñÍ÷¦resumeÂÂÂN°MethodDefinitionÍ*Í gÂÂLªIdentifierÍ*Í2¨finalize¦methodO²FunctionExpressionÍ2Í gÀÂÂÂM®BlockStatementÍ5Í gŸX«IfStatementÍ@ÍªY°BinaryExpressionÍDÍTR°MemberExpressionÍDÍOS®ThisExpressionÍDÍHLªIdentifierÍIÍO¦tickIdÂÂ¢>=U§LiteralÍSÍT ¡0M®BlockStatementÍVÍª’P³ExpressionStatementÍeÍ€[®CallExpressionÍeÍLªIdentifierÍeÍr­clearInterval‘R°MemberExpressionÍsÍ~S®ThisExpressionÍsÍwLªIdentifierÍxÍ~¦tickIdÂÂÂP³ExpressionStatementÍÍŸQ´AssignmentExpressionÍÍ¡=R°MemberExpressionÍÍ™S®ThisExpressionÍÍ’LªIdentifierÍ“Í™¦tickIdÂÂT¯UnaryExpressionÍœÍ¡-ÃU§LiteralÍÍ¡1ÀP³ExpressionStatementÍ´Íß[®CallExpressionÍ´ÍŞR°MemberExpressionÍ´ÍÜ[®CallExpressionÍ´Í×R°MemberExpressionÍ´ÍÕLªIdentifierÍ´ÍÉµFocusDetectionServiceLªIdentifierÍÊÍÕ«getInstanceÂÂÂLªIdentifierÍØÍÜ¤stopÂÂÂP³ExpressionStatementÍéÍşQ´AssignmentExpressionÍéÍı¡=R°MemberExpressionÍéÍõS®ThisExpressionÍéÍíLªIdentifierÍîÍõ§runningÂÂU§LiteralÍøÍıÂ¥falseP³ExpressionStatementÍÍ*Q´AssignmentExpressionÍÍ)¡=R°MemberExpressionÍÍR°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ§sessionÂÂLªIdentifierÍÍ§endTimeÂÂ[®CallExpressionÍÍ)R°MemberExpressionÍÍ'LªIdentifierÍÍ#¤DateLªIdentifierÍ$Í'£nowÂÂÂP³ExpressionStatementÍ4Í_Q´AssignmentExpressionÍ4Í^¡=R°MemberExpressionÍ4ÍNR°MemberExpressionÍ4Í@S®ThisExpressionÍ4Í8LªIdentifierÍ9Í@§sessionÂÂLªIdentifierÍAÍN­totalDurationÂÂR°MemberExpressionÍQÍ^S®ThisExpressionÍQÍULªIdentifierÍVÍ^¨totalSecÂÂP³ExpressionStatementÍiÍ”Q´AssignmentExpressionÍiÍ“¡=R°MemberExpressionÍiÍƒR°MemberExpressionÍiÍuS®ThisExpressionÍiÍmLªIdentifierÍnÍu§sessionÂÂLªIdentifierÍvÍƒ­focusDurationÂÂR°MemberExpressionÍ†Í“S®ThisExpressionÍ†ÍŠLªIdentifierÍ‹Í“¨focusSecÂÂP³ExpressionStatementÍÍÕQ´AssignmentExpressionÍÍÔ¡=R°MemberExpressionÍÍ¾R°MemberExpressionÍÍªS®ThisExpressionÍÍ¢LªIdentifierÍ£Íª§sessionÂÂLªIdentifierÍ«Í¾³distractionDurationÂÂR°MemberExpressionÍÁÍÔS®ThisExpressionÍÁÍÅLªIdentifierÍÆÍÔ®distractionSecÂÂP³ExpressionStatementÍßÍQ´AssignmentExpressionÍßÍ¡=R°MemberExpressionÍßÍöR°MemberExpressionÍßÍëS®ThisExpressionÍßÍãLªIdentifierÍäÍë§sessionÂÂLªIdentifierÍìÍöªqaDurationÂÂR°MemberExpressionÍùÍS®ThisExpressionÍùÍıLªIdentifierÍşÍ¥qaSecÂÂP³ExpressionStatementÍÍ9Q´AssignmentExpressionÍÍ8¡=R°MemberExpressionÍÍ(R°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ§sessionÂÂLªIdentifierÍÍ(­breakDurationÂÂR°MemberExpressionÍ+Í8S®ThisExpressionÍ+Í/LªIdentifierÍ0Í8¨breakSecÂÂP³ExpressionStatementÍCÍiQ´AssignmentExpressionÍCÍh¡=R°MemberExpressionÍCÍXR°MemberExpressionÍCÍOS®ThisExpressionÍCÍGLªIdentifierÍHÍO§sessionÂÂLªIdentifierÍPÍX¨timelineÂÂR°MemberExpressionÍ[ÍhS®ThisExpressionÍ[Í_LªIdentifierÍ`Íh¨timelineÂÂP³ExpressionStatementÍsÍ•Q´AssignmentExpressionÍsÍ”¡=R°MemberExpressionÍsÍ†R°MemberExpressionÍsÍS®ThisExpressionÍsÍwLªIdentifierÍxÍ§sessionÂÂLªIdentifierÍ€Í†¦eventsÂÂR°MemberExpressionÍ‰Í”S®ThisExpressionÍ‰ÍLªIdentifierÍÍ”¦eventsÂÂP³ExpressionStatementÍŸÍñQ´AssignmentExpressionÍŸÍğ¡=R°MemberExpressionÍŸÍ¼R°MemberExpressionÍŸÍ«S®ThisExpressionÍŸÍ£LªIdentifierÍ¤Í«§sessionÂÂLªIdentifierÍ¬Í¼°completedTaskIdsÂÂ[®CallExpressionÍ¿ÍğR°MemberExpressionÍ¿Íã[®CallExpressionÍ¿ÍßR°MemberExpressionÍ¿ÍĞR°MemberExpressionÍ¿ÍÉS®ThisExpressionÍ¿ÍÃLªIdentifierÍÄÍÉ¥tasksÂÂLªIdentifierÍÊÍĞ¦filterÂÂ‘O·ArrowFunctionExpressionÍÑÍŞÀÃÂÂ‘LªIdentifierÍÒÍÓ¡tR°MemberExpressionÍØÍŞLªIdentifierÍØÍÙ¡tLªIdentifierÍÚÍŞ¤doneÂÂÂLªIdentifierÍàÍã£mapÂÂ‘O·ArrowFunctionExpressionÍäÍïÀÃÂÂ‘LªIdentifierÍåÍæ¡tR°MemberExpressionÍëÍïLªIdentifierÍëÍì¡tLªIdentifierÍíÍï¢idÂÂÂP³ExpressionStatementÍûÍ (Q´AssignmentExpressionÍûÍ '¡=R°MemberExpressionÍûÍ R°MemberExpressionÍûÍ S®ThisExpressionÍûÍÿLªIdentifierÍ  Í §sessionÂÂLªIdentifierÍ Í ¦statusÂÂR°MemberExpressionÍ Í 'LªIdentifierÍ Í ­SessionStatusLªIdentifierÍ Í '¨FINISHEDÂÂP³ExpressionStatementÍ 2Í B[®CallExpressionÍ 2Í AR°MemberExpressionÍ 2Í ?S®ThisExpressionÍ 2Í 6LªIdentifierÍ 7Í ?¨pushLiveÂÂÂZ¯ReturnStatementÍ LÍ `R°MemberExpressionÍ SÍ _S®ThisExpressionÍ SÍ WLªIdentifierÍ XÍ _§sessionÂÂN°MethodDefinitionÍ mÍ!ŸÂÂLªIdentifierÍ mÍ u¨pushLive¦methodO²FunctionExpressionÍ uÍ!ŸÀÂÂÂM®BlockStatementÍ xÍ!Ÿ”P³ExpressionStatementÍ ƒÍ Ã[®CallExpressionÍ ƒÍ ÂR°MemberExpressionÍ ƒÍ ™LªIdentifierÍ ƒÍ ªAppStorageLªIdentifierÍ Í ™«setOrCreateÂÂ’R°MemberExpressionÍ šÍ ²LªIdentifierÍ šÍ ¤ªStorageKeyLªIdentifierÍ ¥Í ²­FOCUS_ELAPSEDÂÂR°MemberExpressionÍ ´Í ÁS®ThisExpressionÍ ´Í ¸LªIdentifierÍ ¹Í Á¨totalSecÂÂÂP³ExpressionStatementÍ ÍÍ!	[®CallExpressionÍ ÍÍ!R°MemberExpressionÍ ÍÍ ãLªIdentifierÍ ÍÍ ×ªAppStorageLªIdentifierÍ ØÍ ã«setOrCreateÂÂ’R°MemberExpressionÍ äÍ øLªIdentifierÍ äÍ îªStorageKeyLªIdentifierÍ ïÍ ø©FOCUS_NETÂÂR°MemberExpressionÍ úÍ!S®ThisExpressionÍ úÍ şLªIdentifierÍ ÿÍ!¨focusSecÂÂÂP³ExpressionStatementÍ!Í!N[®CallExpressionÍ!Í!MR°MemberExpressionÍ!Í!)LªIdentifierÍ!Í!ªAppStorageLªIdentifierÍ!Í!)«setOrCreateÂÂ’R°MemberExpressionÍ!*Í!@LªIdentifierÍ!*Í!4ªStorageKeyLªIdentifierÍ!5Í!@«FOCUS_STATEÂÂR°MemberExpressionÍ!BÍ!LS®ThisExpressionÍ!BÍ!FLªIdentifierÍ!GÍ!L¥stateÂÂÂP³ExpressionStatementÍ!XÍ!˜[®CallExpressionÍ!XÍ!—R°MemberExpressionÍ!XÍ!nLªIdentifierÍ!XÍ!bªAppStorageLªIdentifierÍ!cÍ!n«setOrCreateÂÂ’R°MemberExpressionÍ!oÍ!ŠLªIdentifierÍ!oÍ!yªStorageKeyLªIdentifierÍ!zÍ!Š°FOCUS_QA_ELAPSEDÂÂR°MemberExpressionÍ!ŒÍ!–S®ThisExpressionÍ!ŒÍ!LªIdentifierÍ!‘Í!–¥qaSecÂÂÂÀ•Ôr^•¤type¥start£endªspecifiers¦source±ImportDeclaration <’Ôr_•¤type¥start£end¨imported¥local¯ImportSpecifier	LªIdentifier	ªFocusStateLªIdentifier	ªFocusState_¯ImportSpecifier"LªIdentifier"­SessionStatusLªIdentifier"­SessionStatusU§Literal*;¯../models/Enums±'../models/Enums'^±ImportDeclaration>Ì”“_¯ImportSpecifierÌGÌSLªIdentifierÌGÌS¬FocusSessionLªIdentifierÌGÌS¬FocusSession_¯ImportSpecifierÌUÌ_LªIdentifierÌUÌ_ªFocusEventLªIdentifierÌUÌ_ªFocusEvent_¯ImportSpecifierÌaÌsLªIdentifierÌaÌs²FocusTimelinePointLªIdentifierÌaÌs²FocusTimelinePointU§LiteralÌ{Ì“¶../models/FocusSession¸'../models/FocusSession'^±ImportDeclarationÌ–ÌÖ‘_¯ImportSpecifierÌŸÌ´LªIdentifierÌŸÌ´µFocusDetectionServiceLªIdentifierÌŸÌ´µFocusDetectionServiceU§LiteralÌ¼ÌÕ·./FocusDetectionService¹'./FocusDetectionService'^±ImportDeclarationÌØÍ’_¯ImportSpecifierÌáÌëLªIdentifierÌáÌëªStorageKeyLªIdentifierÌáÌëªStorageKey_¯ImportSpecifierÌíÌõLªIdentifierÌíÌõ¨DemoFlagLªIdentifierÌíÌõ¨DemoFlagU§LiteralÌıÍ³../common/Constantsµ'../common/Constants'^±ImportDeclarationÍÍ@‘_¯ImportSpecifierÍÍ%LªIdentifierÍÍ%§IdUtilsLªIdentifierÍÍ%§IdUtilsU§LiteralÍ-Í?°../utils/IdUtils²'../utils/IdUtils'
+²ÀÂÂÂM®BlockStatementÍ
+Í
+²‘Z¯ReturnStatementÍ
+˜Í
+«R°MemberExpressionÍ
+ŸÍ
+ªS®ThisExpressionÍ
+ŸÍ
+£LªIdentifierÍ
+¤Í
+ª¦qaModeÂÂN°MethodDefinitionÍ
+¸Í
+êÂÂLªIdentifierÍ
+¸Í
+Á©isResting¦methodO²FunctionExpressionÍ
+ÁÍ
+êÀÂÂÂM®BlockStatementÍ
+ÄÍ
+ê‘Z¯ReturnStatementÍ
+ÏÍ
+ãR°MemberExpressionÍ
+ÖÍ
+âS®ThisExpressionÍ
+ÖÍ
+ÚLªIdentifierÍ
+ÛÍ
+â§restingÂÂN°MethodDefinitionÍ
+ğÍ ÂÂLªIdentifierÍ
+ğÍ
+ø¨isPaused¦methodO²FunctionExpressionÍ
+øÍ ÀÂÂÂM®BlockStatementÍ
+ûÍ ‘Z¯ReturnStatementÍÍR°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ¦pausedÂÂN°MethodDefinitionÍ&ÍXÂÂLªIdentifierÍ&Í/©isRunning¦methodO²FunctionExpressionÍ/ÍXÀÂÂÂM®BlockStatementÍ2ÍX‘Z¯ReturnStatementÍ=ÍQR°MemberExpressionÍDÍPS®ThisExpressionÍDÍHLªIdentifierÍIÍP§runningÂÂN°MethodDefinitionÍ^ÍŸÂÂLªIdentifierÍ^Ío±getPerceptionMode¦methodO²FunctionExpressionÍoÍŸÀÂÂÂM®BlockStatementÍrÍŸ‘Z¯ReturnStatementÍ}Í˜R°MemberExpressionÍ„Í—S®ThisExpressionÍ„ÍˆLªIdentifierÍ‰Í—®perceptionModeÂÂN°MethodDefinitionÍ¥ÍâÂÂLªIdentifierÍ¥Í´¯getLastDecision¦methodO²FunctionExpressionÍ´ÍâÀÂÂÂM®BlockStatementÍ·Íâ‘Z¯ReturnStatementÍÂÍÛR°MemberExpressionÍÉÍÚS®ThisExpressionÍÉÍÍLªIdentifierÍÎÍÚ¬lastDecisionÂÂN°MethodDefinitionÍÍRÂÂLªIdentifierÍÍ"±setOnIntervention¦methodO²FunctionExpressionÍ"ÍRÀÂÂÂ‘LªIdentifierÍ#Í%¢cbM®BlockStatementÍ'ÍR‘P³ExpressionStatementÍ2ÍKQ´AssignmentExpressionÍ2ÍJ¡=R°MemberExpressionÍ2ÍES®ThisExpressionÍ2Í6LªIdentifierÍ7ÍE®onInterventionÂÂLªIdentifierÍHÍJ¢cbN°MethodDefinitionÍmÍ ÂÂLªIdentifierÍmÍr¥start¦methodO²FunctionExpressionÍrÍ ÀÂÂÂ‘LªIdentifierÍsÍx¥tasksM®BlockStatementÍzÍ Ü P³ExpressionStatementÍ…Í˜Q´AssignmentExpressionÍ…Í—¡=R°MemberExpressionÍ…ÍS®ThisExpressionÍ…Í‰LªIdentifierÍŠÍ¥tasksÂÂLªIdentifierÍ’Í—¥tasksP³ExpressionStatementÍ¢ÍÄQ´AssignmentExpressionÍ¢ÍÃ¡=R°MemberExpressionÍ¢Í®S®ThisExpressionÍ¢Í¦LªIdentifierÍ§Í®§sessionÂÂV­NewExpressionÍ±ÍÃLªIdentifierÍµÍÁ¬FocusSessionP³ExpressionStatementÍÎÍïQ´AssignmentExpressionÍÎÍî¡=R°MemberExpressionÍÎÍİR°MemberExpressionÍÎÍÚS®ThisExpressionÍÎÍÒLªIdentifierÍÓÍÚ§sessionÂÂLªIdentifierÍÛÍİ¢idÂÂ[®CallExpressionÍàÍîR°MemberExpressionÍàÍìLªIdentifierÍàÍç§IdUtilsLªIdentifierÍèÍì¤uuidÂÂÂP³ExpressionStatementÍùÍ;Q´AssignmentExpressionÍùÍ:¡=R°MemberExpressionÍùÍR°MemberExpressionÍùÍS®ThisExpressionÍùÍıLªIdentifierÍşÍ§sessionÂÂLªIdentifierÍÍ¥titleÂÂXµConditionalExpressionÍÍ:Y°BinaryExpressionÍÍR°MemberExpressionÍÍLªIdentifierÍÍ¥tasksLªIdentifierÍÍ¦lengthÂÂ¡>U§LiteralÍÍ ¡0R°MemberExpressionÍ!Í1R°MemberExpressionÍ!Í)LªIdentifierÍ!Í&¥tasksU§LiteralÍ'Í( ¡0ÃÂLªIdentifierÍ*Í1§subjectÂÂU§LiteralÍ4Í:¬ä¸“æ³¨å­¦ä¹ ®'ä¸“æ³¨å­¦ä¹ 'P³ExpressionStatementÍEÍiQ´AssignmentExpressionÍEÍh¡=R°MemberExpressionÍEÍ[R°MemberExpressionÍEÍQS®ThisExpressionÍEÍILªIdentifierÍJÍQ§sessionÂÂLªIdentifierÍRÍ[©startTimeÂÂ[®CallExpressionÍ^ÍhR°MemberExpressionÍ^ÍfLªIdentifierÍ^Íb¤DateLªIdentifierÍcÍf£nowÂÂÂP³ExpressionStatementÍsÍ¡Q´AssignmentExpressionÍsÍ ¡=R°MemberExpressionÍsÍ‡R°MemberExpressionÍsÍS®ThisExpressionÍsÍwLªIdentifierÍxÍ§sessionÂÂLªIdentifierÍ€Í‡§taskIdsÂÂ[®CallExpressionÍŠÍ R°MemberExpressionÍŠÍ“LªIdentifierÍŠÍ¥tasksLªIdentifierÍÍ“£mapÂÂ‘O·ArrowFunctionExpressionÍ”ÍŸÀÃÂÂ‘LªIdentifierÍ•Í–¡tR°MemberExpressionÍ›ÍŸLªIdentifierÍ›Íœ¡tLªIdentifierÍÍŸ¢idÂÂÂP³ExpressionStatementÍ«ÍQ´AssignmentExpressionÍ«Í ¡=R°MemberExpressionÍ«ÍÇR°MemberExpressionÍ«Í·S®ThisExpressionÍ«Í¯LªIdentifierÍ°Í·§sessionÂÂLªIdentifierÍ¸ÍÇ¯plannedDurationÂÂ[®CallExpressionÍÊÍ R°MemberExpressionÍÊÍÖLªIdentifierÍÊÍÏ¥tasksLªIdentifierÍĞÍÖ¦reduceÂÂ’O·ArrowFunctionExpressionÍ×ÍüÀÃÂÂ’LªIdentifierÍØÍÛ£sumLªIdentifierÍİÍŞ¡tY°BinaryExpressionÍãÍüLªIdentifierÍãÍæ£sum¡+R°MemberExpressionÍéÍüLªIdentifierÍéÍê¡tLªIdentifierÍëÍü±estimatedDurationÂÂU§LiteralÍşÍÿ ¡0ÂP³ExpressionStatementÍÍ7Q´AssignmentExpressionÍÍ6¡=R°MemberExpressionÍÍR°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ§sessionÂÂLªIdentifierÍÍ¦statusÂÂR°MemberExpressionÍ!Í6LªIdentifierÍ!Í.­SessionStatusLªIdentifierÍ/Í6§RUNNINGÂÂP³ExpressionStatementÍAÍ¿Q´AssignmentExpressionÍAÍ¾¡=R°MemberExpressionÍAÍ\R°MemberExpressionÍAÍMS®ThisExpressionÍAÍELªIdentifierÍFÍM§sessionÂÂLªIdentifierÍNÍ\®perceptionModeÂÂXµConditionalExpressionÍ_Í¾R°MemberExpressionÍ_Í[®CallExpressionÍ_Í‰R°MemberExpressionÍ_Í‡[®CallExpressionÍ_Í~R°MemberExpressionÍ_Í|LªIdentifierÍ_Íp±PermissionServiceLªIdentifierÍqÍ|«getInstanceÂÂÂLªIdentifierÍÍ‡¨snapshotÂÂÂLªIdentifierÍŠÍ¦cameraÂÂU§LiteralÍ“Í¤¯PERCEPTION_FULL±'PERCEPTION_FULL'U§LiteralÍ§Í¾µPERCEPTION_TIMER_ONLY·'PERCEPTION_TIMER_ONLY'P³ExpressionStatementÍÉÍûQ´AssignmentExpressionÍÉÍú¡=R°MemberExpressionÍÉÍÜS®ThisExpressionÍÉÍÍLªIdentifierÍÎÍÜ®perceptionModeÂÂR°MemberExpressionÍßÍúR°MemberExpressionÍßÍëS®ThisExpressionÍßÍãLªIdentifierÍäÍë§sessionÂÂLªIdentifierÍìÍú®perceptionModeÂÂP³ExpressionStatementÍÍ>Q´AssignmentExpressionÍÍ=¡=R°MemberExpressionÍÍS®ThisExpressionÍÍ	LªIdentifierÍ
+Í­currentTaskIdÂÂXµConditionalExpressionÍÍ=Y°BinaryExpressionÍÍ*R°MemberExpressionÍÍ&LªIdentifierÍÍ¥tasksLªIdentifierÍ Í&¦lengthÂÂ¡>U§LiteralÍ)Í* ¡0R°MemberExpressionÍ-Í8R°MemberExpressionÍ-Í5LªIdentifierÍ-Í2¥tasksU§LiteralÍ3Í4 ¡0ÃÂLªIdentifierÍ6Í8¢idÂÂU§LiteralÍ;Í= ¢''P³ExpressionStatementÍHÍ][®CallExpressionÍHÍ\R°MemberExpressionÍHÍZS®ThisExpressionÍHÍLLªIdentifierÍMÍZ­resetCountersÂÂÂP³ExpressionStatementÍgÍ{Q´AssignmentExpressionÍgÍz¡=R°MemberExpressionÍgÍsS®ThisExpressionÍgÍkLªIdentifierÍlÍs§runningÂÂU§LiteralÍvÍzÃ¤trueP³ExpressionStatementÍ…Í¥Q´AssignmentExpressionÍ…Í¤¡=R°MemberExpressionÍ…ÍS®ThisExpressionÍ…Í‰LªIdentifierÍŠÍ¥stateÂÂR°MemberExpressionÍ’Í¤LªIdentifierÍ’ÍœªFocusStateLªIdentifierÍÍ¤§FOCUSEDÂÂP³ExpressionStatementÍ¯ÍĞQ´AssignmentExpressionÍ¯ÍÏ¡=R°MemberExpressionÍ¯ÍÂS®ThisExpressionÍ¯Í³LªIdentifierÍ´ÍÂ®stateEnteredAtÂÂ[®CallExpressionÍÅÍÏR°MemberExpressionÍÅÍÍLªIdentifierÍÅÍÉ¤DateLªIdentifierÍÊÍÍ£nowÂÂÂP³ExpressionStatementÍÚÍîQ´AssignmentExpressionÍÚÍí¡=R°MemberExpressionÍÚÍèS®ThisExpressionÍÚÍŞLªIdentifierÍßÍè©questionsÂÂW¯ArrayExpressionÍëÍíP³ExpressionStatementÍøÍ7[®CallExpressionÍøÍ6R°MemberExpressionÍøÍ%[®CallExpressionÍøÍR°MemberExpressionÍøÍLªIdentifierÍøÍ
+²InterventionEngineLªIdentifierÍÍ«getInstanceÂÂÂLªIdentifierÍÍ%¬setSessionIdÂÂ‘R°MemberExpressionÍ&Í5R°MemberExpressionÍ&Í2S®ThisExpressionÍ&Í*LªIdentifierÍ+Í2§sessionÂÂLªIdentifierÍ3Í5¢idÂÂÂP³ExpressionStatementÍAÍ\[®CallExpressionÍAÍ[R°MemberExpressionÍAÍYS®ThisExpressionÍAÍELªIdentifierÍFÍY³subscribePermissionÂÂÂX«IfStatementÍfÍ R°MemberExpressionÍjÍ›[®CallExpressionÍjÍ”R°MemberExpressionÍjÍ’[®CallExpressionÍjÍ‰R°MemberExpressionÍjÍ‡LªIdentifierÍjÍ{±PermissionServiceLªIdentifierÍ|Í‡«getInstanceÂÂÂLªIdentifierÍŠÍ’¨snapshotÂÂÂLªIdentifierÍ•Í›¦cameraÂÂM®BlockStatementÍÍ ‘P³ExpressionStatementÍ¬Í[®CallExpressionÍ¬ÍR°MemberExpressionÍ¬ÍÕ[®CallExpressionÍ¬ÍÏR°MemberExpressionÍ¬ÍÍLªIdentifierÍ¬ÍÁµFocusDetectionServiceLªIdentifierÍÂÍÍ«getInstanceÂÂÂLªIdentifierÍĞÍÕ¥startÂÂ‘O·ArrowFunctionExpressionÍÖÍÀÂÂÂ‘LªIdentifierÍ×ÍØ¡rM®BlockStatementÍİÍ‘P³ExpressionStatementÍğÍ[®CallExpressionÍğÍR°MemberExpressionÍğÍ S®ThisExpressionÍğÍôLªIdentifierÍõÍ «onDetectionÂÂ‘LªIdentifierÍÍ¡rÂÂÀP³ExpressionStatementÍ*ÍQ´AssignmentExpressionÍ*Í¡=R°MemberExpressionÍ*Í5S®ThisExpressionÍ*Í.LªIdentifierÍ/Í5¦tickIdÂÂ[®CallExpressionÍ8ÍLªIdentifierÍ8ÍC«setInterval’O·ArrowFunctionExpressionÍDÍyÀÂÂÂM®BlockStatementÍJÍy‘P³ExpressionStatementÍYÍn[®CallExpressionÍYÍmR°MemberExpressionÍYÍkS®ThisExpressionÍYÍ]LªIdentifierÍ^Ík­recomputeTickÂÂÂR°MemberExpressionÍ{ÍLªIdentifierÍ{Í†«FocusTuningLªIdentifierÍ‡Í§TICK_MSÂÂÂP³ExpressionStatementÍšÍQ´AssignmentExpressionÍšÍ¡=R°MemberExpressionÍšÍ©S®ThisExpressionÍšÍLªIdentifierÍŸÍ©ªsnapshotIdÂÂ[®CallExpressionÍ¬ÍLªIdentifierÍ¬Í·«setInterval’O·ArrowFunctionExpressionÍ¸ÍíÀÂÂÂM®BlockStatementÍ¾Íí‘P³ExpressionStatementÍÍÍâ[®CallExpressionÍÍÍáR°MemberExpressionÍÍÍßS®ThisExpressionÍÍÍÑLªIdentifierÍÒÍß­writeSnapshotÂÂÂR°MemberExpressionÍïÍLªIdentifierÍïÍú«FocusTuningLªIdentifierÍûÍ´SNAPSHOT_INTERVAL_MSÂÂÂP³ExpressionStatementÍÍ+[®CallExpressionÍÍ*R°MemberExpressionÍÍ(S®ThisExpressionÍÍLªIdentifierÍ Í(¨pushLiveÂÂÂP³ExpressionStatementÍ5Í™[®CallExpressionÍ5Í˜R°MemberExpressionÍ5Í[®CallExpressionÍ5Í‡R°MemberExpressionÍ5ÍX[®CallExpressionÍ5ÍQR°MemberExpressionÍ5ÍOLªIdentifierÍ5ÍC®StorageServiceLªIdentifierÍDÍO«getInstanceÂÂÂLªIdentifierÍRÍX¦saveKvÂÂ’R°MemberExpressionÍYÍuLªIdentifierÍYÍcªStorageKeyLªIdentifierÍdÍu±ACTIVE_SESSION_IDÂÂR°MemberExpressionÍwÍ†R°MemberExpressionÍwÍƒS®ThisExpressionÍwÍ{LªIdentifierÍ|Íƒ§sessionÂÂLªIdentifierÍ„Í†¢idÂÂÂLªIdentifierÍˆÍ¥catchÂÂ‘O·ArrowFunctionExpressionÍÍ—ÀÂÂÂM®BlockStatementÍ”Í—ÂN°MethodDefinitionÍ¦ÍBÂÂLªIdentifierÍ¦Í¹³subscribePermission¦methodO²FunctionExpressionÍ¹ÍBÀÂÂÂM®BlockStatementÍ¼ÍB“X«IfStatementÍÇÍR°MemberExpressionÍËÍŞS®ThisExpressionÍËÍÏLªIdentifierÍĞÍŞ®permSubscribedÂÂM®BlockStatementÍàÍ‘Z¯ReturnStatementÍïÍöÀÀP³ExpressionStatementÍÍ&Q´AssignmentExpressionÍÍ%¡=R°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ®permSubscribedÂÂU§LiteralÍ!Í%Ã¤trueP³ExpressionStatementÍ0Í;[®CallExpressionÍ0Í:R°MemberExpressionÍ0ÍX[®CallExpressionÍ0ÍOR°MemberExpressionÍ0ÍMLªIdentifierÍ0ÍA±PermissionServiceLªIdentifierÍBÍM«getInstanceÂÂÂLªIdentifierÍPÍX¨onChangeÂÂ‘O·ArrowFunctionExpressionÍYÍ9ÀÂÂÂ‘LªIdentifierÍZÍ[¡aM®BlockStatementÍ`Í9‘X«IfStatementÍoÍ.T¯UnaryExpressionÍsÍ|¡!ÃR°MemberExpressionÍtÍ|LªIdentifierÍtÍu¡aLªIdentifierÍvÍ|¦cameraÂÂM®BlockStatementÍ~Í’P³ExpressionStatementÍ‘Í¼[®CallExpressionÍ‘Í»R°MemberExpressionÍ‘Í¹[®CallExpressionÍ‘Í´R°MemberExpressionÍ‘Í²LªIdentifierÍ‘Í¦µFocusDetectionServiceLªIdentifierÍ§Í²«getInstanceÂÂÂLªIdentifierÍµÍ¹¤stopÂÂÂP³ExpressionStatementÍÎÍüQ´AssignmentExpressionÍÎÍû¡=R°MemberExpressionÍÎÍáS®ThisExpressionÍÎÍÒLªIdentifierÍÓÍá®perceptionModeÂÂU§LiteralÍäÍûµPERCEPTION_TIMER_ONLY·'PERCEPTION_TIMER_ONLY'X«IfStatementÍÍ.Y±LogicalExpressionÍ"Í_Y±LogicalExpressionÍ"ÍOY±LogicalExpressionÍ"Í>R°MemberExpressionÍ"Í.S®ThisExpressionÍ"Í&LªIdentifierÍ'Í.§runningÂÂ¢&&T¯UnaryExpressionÍ2Í>¡!ÃR°MemberExpressionÍ3Í>S®ThisExpressionÍ3Í7LªIdentifierÍ8Í>¦qaModeÂÂ¢&&T¯UnaryExpressionÍBÍO¡!ÃR°MemberExpressionÍCÍOS®ThisExpressionÍCÍGLªIdentifierÍHÍO§restingÂÂ¢&&T¯UnaryExpressionÍSÍ_¡!ÃR°MemberExpressionÍTÍ_S®ThisExpressionÍTÍXLªIdentifierÍYÍ_¦pausedÂÂM®BlockStatementÍaÍ.’P³ExpressionStatementÍtÍœQ´AssignmentExpressionÍtÍ›¡=R°MemberExpressionÍtÍ‡S®ThisExpressionÍtÍxLªIdentifierÍyÍ‡®perceptionModeÂÂU§LiteralÍŠÍ›¯PERCEPTION_FULL±'PERCEPTION_FULL'P³ExpressionStatementÍ®Í[®CallExpressionÍ®ÍR°MemberExpressionÍ®Í×[®CallExpressionÍ®ÍÑR°MemberExpressionÍ®ÍÏLªIdentifierÍ®ÍÃµFocusDetectionServiceLªIdentifierÍÄÍÏ«getInstanceÂÂÂLªIdentifierÍÒÍ×¥startÂÂ‘O·ArrowFunctionExpressionÍØÍÀÂÂÂ‘LªIdentifierÍÙÍÚ¡rM®BlockStatementÍßÍ‘P³ExpressionStatementÍöÍ
+[®CallExpressionÍöÍ	R°MemberExpressionÍöÍS®ThisExpressionÍöÍúLªIdentifierÍûÍ«onDetectionÂÂ‘LªIdentifierÍÍ¡rÂÂÀÂN°MethodDefinitionÍHÍQÂÂLªIdentifierÍHÍU­resetCounters¦methodO²FunctionExpressionÍUÍQÀÂÂÂM®BlockStatementÍXÍQÜ P³ExpressionStatementÍcÍuQ´AssignmentExpressionÍcÍt¡=R°MemberExpressionÍcÍpS®ThisExpressionÍcÍgLªIdentifierÍhÍp¨totalSecÂÂU§LiteralÍsÍt ¡0P³ExpressionStatementÍÍ‘Q´AssignmentExpressionÍÍ¡=R°MemberExpressionÍÍŒS®ThisExpressionÍÍƒLªIdentifierÍ„ÍŒ¨focusSecÂÂU§LiteralÍÍ ¡0P³ExpressionStatementÍ›Í³Q´AssignmentExpressionÍ›Í²¡=R°MemberExpressionÍ›Í®S®ThisExpressionÍ›ÍŸLªIdentifierÍ Í®®distractionSecÂÂU§LiteralÍ±Í² ¡0P³ExpressionStatementÍ½ÍÌQ´AssignmentExpressionÍ½ÍË¡=R°MemberExpressionÍ½ÍÇS®ThisExpressionÍ½ÍÁLªIdentifierÍÂÍÇ¥qaSecÂÂU§LiteralÍÊÍË ¡0P³ExpressionStatementÍÖÍèQ´AssignmentExpressionÍÖÍç¡=R°MemberExpressionÍÖÍãS®ThisExpressionÍÖÍÚLªIdentifierÍÛÍã¨breakSecÂÂU§LiteralÍæÍç ¡0P³ExpressionStatementÍòÍQ´AssignmentExpressionÍòÍ¡=R°MemberExpressionÍòÍS®ThisExpressionÍòÍöLªIdentifierÍ÷Í«pausedAccumÂÂU§LiteralÍÍ ¡0P³ExpressionStatementÍÍ2Q´AssignmentExpressionÍÍ1¡=R°MemberExpressionÍÍ$S®ThisExpressionÍÍLªIdentifierÍÍ$®stateEnteredAtÂÂ[®CallExpressionÍ'Í1R°MemberExpressionÍ'Í/LªIdentifierÍ'Í+¤DateLªIdentifierÍ,Í/£nowÂÂÂP³ExpressionStatementÍ<ÍYQ´AssignmentExpressionÍ<ÍX¡=R°MemberExpressionÍ<ÍKS®ThisExpressionÍ<Í@LªIdentifierÍAÍKªlastTickAtÂÂ[®CallExpressionÍNÍXR°MemberExpressionÍNÍVLªIdentifierÍNÍR¤DateLªIdentifierÍSÍV£nowÂÂÂP³ExpressionStatementÍcÍzQ´AssignmentExpressionÍcÍy¡=R°MemberExpressionÍcÍuS®ThisExpressionÍcÍgLªIdentifierÍhÍu­sampleAccumMsÂÂU§LiteralÍxÍy ¡0P³ExpressionStatementÍ„ÍšQ´AssignmentExpressionÍ„Í™¡=R°MemberExpressionÍ„Í•S®ThisExpressionÍ„ÍˆLªIdentifierÍ‰Í•¬lastYellowAtÂÂU§LiteralÍ˜Í™ ¡0P³ExpressionStatementÍ¤Í·Q´AssignmentExpressionÍ¤Í¶¡=R°MemberExpressionÍ¤Í²S®ThisExpressionÍ¤Í¨LªIdentifierÍ©Í²©lastRedAtÂÂU§LiteralÍµÍ¶ ¡0P³ExpressionStatementÍÁÍÔQ´AssignmentExpressionÍÁÍÓ¡=R°MemberExpressionÍÁÍÎS®ThisExpressionÍÁÍÅLªIdentifierÍÆÍÎ¨timelineÂÂW¯ArrayExpressionÍÑÍÓP³ExpressionStatementÍŞÍïQ´AssignmentExpressionÍŞÍî¡=R°MemberExpressionÍŞÍéS®ThisExpressionÍŞÍâLªIdentifierÍãÍé¦eventsÂÂW¯ArrayExpressionÍìÍîP³ExpressionStatementÍùÍQ´AssignmentExpressionÍùÍ¡=R°MemberExpressionÍùÍS®ThisExpressionÍùÍıLªIdentifierÍşÍ¦qaModeÂÂU§LiteralÍÍÂ¥falseP³ExpressionStatementÍÍ,Q´AssignmentExpressionÍÍ+¡=R°MemberExpressionÍÍ#S®ThisExpressionÍÍLªIdentifierÍÍ#§restingÂÂU§LiteralÍ&Í+Â¥falseP³ExpressionStatementÍ6ÍJQ´AssignmentExpressionÍ6ÍI¡=R°MemberExpressionÍ6ÍAS®ThisExpressionÍ6Í:LªIdentifierÍ;ÍA¦pausedÂÂU§LiteralÍDÍIÂ¥falseN°MethodDefinitionÍ‚Í•ÂÂLªIdentifierÍ‚Í­recomputeTick¦methodO²FunctionExpressionÍÍ•ÀÂÂÂM®BlockStatementÍ’Í•œÔr\•¤type¥start£end¬declarations¤kind³VariableDeclarationÍÍ´‘Ôr]•¤type¥start£end¢id¤init²VariableDeclaratorÍ£Í³LªIdentifierÍ£Í¦£now[®CallExpressionÍ©Í³R°MemberExpressionÍ©Í±LªIdentifierÍ©Í­¤DateLªIdentifierÍ®Í±£nowÂÂÂ¥constX«IfStatementÍ¾ÍT¯UnaryExpressionÍÂÍÏ¡!ÃR°MemberExpressionÍÃÍÏS®ThisExpressionÍÃÍÇLªIdentifierÍÈÍÏ§runningÂÂM®BlockStatementÍÑÍ’P³ExpressionStatementÍàÍöQ´AssignmentExpressionÍàÍõ¡=R°MemberExpressionÍàÍïS®ThisExpressionÍàÍäLªIdentifierÍåÍïªlastTickAtÂÂLªIdentifierÍòÍõ£nowZ¯ReturnStatementÍÍÀÀ\³VariableDeclarationÍ Íl‘]²VariableDeclaratorÍ&ÍkLªIdentifierÍ&Í*¤dtMs[®CallExpressionÍ-ÍkR°MemberExpressionÍ-Í5LªIdentifierÍ-Í1¤MathLªIdentifierÍ2Í5£minÂÂ’Y°BinaryExpressionÍ6ÍKLªIdentifierÍ6Í9£now¡-R°MemberExpressionÍ<ÍKS®ThisExpressionÍ<Í@LªIdentifierÍAÍKªlastTickAtÂÂR°MemberExpressionÍMÍjLªIdentifierÍMÍX«FocusTuningLªIdentifierÍYÍj±MAX_TICK_DELTA_MSÂÂÂ¥constP³ExpressionStatementÍvÍŒQ´AssignmentExpressionÍvÍ‹¡=R°MemberExpressionÍvÍ…S®ThisExpressionÍvÍzLªIdentifierÍ{Í…ªlastTickAtÂÂLªIdentifierÍˆÍ‹£now\³VariableDeclarationÍ–Í­‘]²VariableDeclaratorÍœÍ¬LªIdentifierÍœÍ¢dtY°BinaryExpressionÍ¡Í¬LªIdentifierÍ¡Í¥¤dtMs¡/U§LiteralÍ¨Í¬Íè¤1000¥constP³ExpressionStatementÍğÍQ´AssignmentExpressionÍğÍ¢+=R°MemberExpressionÍğÍıS®ThisExpressionÍğÍôLªIdentifierÍõÍı¨totalSecÂÂLªIdentifierÍÍ¢dtX«IfStatementÍÍeR°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ¦pausedÂÂM®BlockStatementÍÍe’P³ExpressionStatementÍ.ÍEQ´AssignmentExpressionÍ.ÍD¢+=R°MemberExpressionÍ.Í>S®ThisExpressionÍ.Í2LªIdentifierÍ3Í>«pausedAccumÂÂLªIdentifierÍBÍD¢dtZ¯ReturnStatementÍSÍZÀÀX«IfStatementÍoÍâR°MemberExpressionÍsÍS®ThisExpressionÍsÍwLªIdentifierÍxÍ§restingÂÂM®BlockStatementÍÍâ“P³ExpressionStatementÍÍ¤Q´AssignmentExpressionÍÍ£¢+=R°MemberExpressionÍÍS®ThisExpressionÍÍ”LªIdentifierÍ•Í¨breakSecÂÂLªIdentifierÍ¡Í£¢dtP³ExpressionStatementÍ²ÍÂ[®CallExpressionÍ²ÍÁR°MemberExpressionÍ²Í¿S®ThisExpressionÍ²Í¶LªIdentifierÍ·Í¿¨pushLiveÂÂÂZ¯ReturnStatementÍĞÍ×ÀÀX«IfStatementÍìÍÏR°MemberExpressionÍğÍûS®ThisExpressionÍğÍôLªIdentifierÍõÍû¦qaModeÂÂM®BlockStatementÍıÍ(‘P³ExpressionStatementÍÍQ´AssignmentExpressionÍÍ¢+=R°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ¥qaSecÂÂLªIdentifierÍÍ¢dtX«IfStatementÍ7ÍÏY°BinaryExpressionÍ;Í\R°MemberExpressionÍ;ÍES®ThisExpressionÍ;Í?LªIdentifierÍ@ÍE¥stateÂÂ£===R°MemberExpressionÍJÍ\LªIdentifierÍJÍTªFocusStateLªIdentifierÍUÍ\§FOCUSEDÂÂM®BlockStatementÍ^ÍŒ‘P³ExpressionStatementÍmÍQ´AssignmentExpressionÍmÍ€¢+=R°MemberExpressionÍmÍzS®ThisExpressionÍmÍqLªIdentifierÍrÍz¨focusSecÂÂLªIdentifierÍ~Í€¢dtM®BlockStatementÍ›ÍÏ‘P³ExpressionStatementÍªÍÄQ´AssignmentExpressionÍªÍÃ¢+=R°MemberExpressionÍªÍ½S®ThisExpressionÍªÍ®LªIdentifierÍ¯Í½®distractionSecÂÂLªIdentifierÍÁÍÃ¢dtP³ExpressionStatementÍÙÍôQ´AssignmentExpressionÍÙÍó¢+=R°MemberExpressionÍÙÍëS®ThisExpressionÍÙÍİLªIdentifierÍŞÍë­sampleAccumMsÂÂLªIdentifierÍïÍó¤dtMsX«IfStatementÍşÍtY°BinaryExpressionÍÍR°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ­sampleAccumMsÂÂ¢>=U§LiteralÍÍÍu0¥30000M®BlockStatementÍÍt’P³ExpressionStatementÍ.ÍEQ´AssignmentExpressionÍ.ÍD¡=R°MemberExpressionÍ.Í@S®ThisExpressionÍ.Í2LªIdentifierÍ3Í@­sampleAccumMsÂÂU§LiteralÍCÍD ¡0P³ExpressionStatementÍSÍi[®CallExpressionÍSÍhR°MemberExpressionÍSÍfS®ThisExpressionÍSÍWLªIdentifierÍXÍf®sampleTimelineÂÂÂÀP³ExpressionStatementÍ~Í[®CallExpressionÍ~ÍR°MemberExpressionÍ~Í‹S®ThisExpressionÍ~Í‚LªIdentifierÍƒÍ‹¨pushLiveÂÂÂN°MethodDefinitionÍÄÍhÂÂLªIdentifierÍÄÍÏ«onDetection¦methodO²FunctionExpressionÍÏÍhÀÂÂÂ‘LªIdentifierÍĞÍÑ¡rM®BlockStatementÍÓÍh˜X«IfStatementÍŞÍ@Y±LogicalExpressionÍâÍY±LogicalExpressionÍâÍY±LogicalExpressionÍâÍşT¯UnaryExpressionÍâÍï¡!ÃR°MemberExpressionÍãÍïS®ThisExpressionÍãÍçLªIdentifierÍèÍï§runningÂÂ¢||R°MemberExpressionÍóÍşS®ThisExpressionÍóÍ÷LªIdentifierÍøÍş¦qaModeÂÂ¢||R°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ§restingÂÂ¢||R°MemberExpressionÍÍS®ThisExpressionÍÍLªIdentifierÍÍ¦pausedÂÂM®BlockStatementÍÍ@‘Z¯ReturnStatementÍ.Í5ÀÀX«IfStatementÍJÍY°BinaryExpressionÍNÍyR°MemberExpressionÍNÍZLªIdentifierÍNÍO¡rLªIdentifierÍPÍZªconfidenceÂÂ¡<R°MemberExpressionÍ]ÍyLªIdentifierÍ]Íh«FocusTuningLªIdentifierÍiÍy°CONFIDENCE_FLOORÂÂM®BlockStatementÍ{Í’P³ExpressionStatementÍ§Íü[®CallExpressionÍ§ÍûR°MemberExpressionÍ§Í·S®ThisExpressionÍ§Í«LªIdentifierÍ¬Í·«recordEventÂÂ”[®CallExpressionÍ¸ÍÎR°MemberExpressionÍ¸ÍÅS®ThisExpressionÍ¸Í¼LªIdentifierÍ½ÍÅ¨mapStateÂÂ‘R°MemberExpressionÍÆÍÍLªIdentifierÍÆÍÇ¡rLªIdentifierÍÈÍÍ¥stateÂÂÂR°MemberExpressionÍĞÍØLªIdentifierÍĞÍÑ¡rLªIdentifierÍÒÍØ¦sourceÂÂR°MemberExpressionÍÚÍæLªIdentifierÍÚÍÛ¡rLªIdentifierÍÜÍæªconfidenceÂÂU§LiteralÍèÍú°below-confidence²'below-confidence'ÂZ¯ReturnStatementÍ
+ÍÀÀ\³VariableDeclarationÍ&ÍL‘]²VariableDeclaratorÍ,ÍKLªIdentifierÍ,Í2¦target[®CallExpressionÍ5ÍKR°MemberExpressionÍ5ÍBS®ThisExpressionÍ5Í9LªIdentifierÍ:ÍB¨mapStateÂÂ‘R°MemberExpressionÍCÍJLªIdentifierÍCÍD¡rLªIdentifierÍEÍJ¥stateÂÂÂ¥constX«IfStatementÍVÍßY°BinaryExpressionÍZÍoLªIdentifierÍZÍ`¦target£===R°MemberExpressionÍeÍoS®ThisExpressionÍeÍiLªIdentifierÍjÍo¥stateÂÂM®BlockStatementÍqÍß’P³ExpressionStatementÍ€Í¿[®CallExpressionÍ€Í¾R°MemberExpressionÍ€ÍS®ThisExpressionÍ€Í„LªIdentifierÍ…Í«recordEventÂÂ”LªIdentifierÍ‘Í—¦targetR°MemberExpressionÍ™Í¡LªIdentifierÍ™Íš¡rLªIdentifierÍ›Í¡¦sourceÂÂR°MemberExpressionÍ£Í¯LªIdentifierÍ£Í¤¡rLªIdentifierÍ¥Í¯ªconfidenceÂÂU§LiteralÍ±Í½ªno-transit¬'no-transit'ÂZ¯ReturnStatementÍÍÍÔÀÀ\³VariableDeclarationÍéÍ ‘]²VariableDeclaratorÍïÍÿLªIdentifierÍïÍò£now[®CallExpressionÍõÍÿR°MemberExpressionÍõÍıLªIdentifierÍõÍù¤DateLªIdentifierÍúÍı£nowÂÂÂ¥const\³VariableDeclarationÍ
+ÍM‘]²VariableDeclaratorÍÍLLªIdentifierÍÍ§dwellOkY°BinaryExpressionÍÍLY°BinaryExpressionÍÍ3LªIdentifierÍÍ£now¡-R°MemberExpressionÍ Í3S®ThisExpressionÍ Í$LªIdentifierÍ%Í3®stateEnteredAtÂÂ¢>=[®CallExpressionÍ7ÍLR°MemberExpressionÍ7ÍDS®ThisExpressionÍ7Í;LªIdentifierÍ<ÍD¨dwellForÂÂ‘LªIdentifierÍEÍK¦targetÂ¥const\³VariableDeclarationÍWÍƒ‘]²VariableDeclaratorÍ]Í‚LªIdentifierÍ]Íc¦coolOk[®CallExpressionÍfÍ‚R°MemberExpressionÍfÍzS®ThisExpressionÍfÍjLªIdentifierÍkÍz¯cooldownElapsedÂÂ‘LªIdentifierÍ{Í¦targetÂ¥constX«IfStatementÍÍaY±LogicalExpressionÍ‘Í¢LªIdentifierÍ‘Í˜§dwellOk¢&&LªIdentifierÍœÍ¢¦coolOkM®BlockStatementÍ¤Íú‘P³ExpressionStatementÍ³Íï[®CallExpressionÍ³ÍîR°MemberExpressionÍ³ÍÄS®ThisExpressionÍ³Í·LªIdentifierÍ¸ÍÄ¬transitionToÂÂ”LªIdentifierÍÅÍË¦targetR°MemberExpressionÍÍÍÙLªIdentifierÍÍÍÎ¡rLªIdentifierÍÏÍÙªconfidenceÂÂR°MemberExpressionÍÛÍãLªIdentifierÍÛÍÜ¡rLªIdentifierÍİÍã¦sourceÂÂR°MemberExpressionÍåÍíLªIdentifierÍåÍæ¡rLªIdentifierÍçÍí¦detailÂÂÂM®BlockStatementÍ	Ía‘P³ExpressionStatementÍÍV[®CallExpressionÍÍUR°MemberExpressionÍÍ(S®ThisExpressionÍÍLªIdentifierÍÍ(«recordEventÂÂ”LªIdentifierÍ)Í/¦targetR°MemberExpressionÍ1Í9LªIdentifierÍ1Í2¡rLªIdentifierÍ3Í9¦sourceÂÂR°MemberExpressionÍ;ÍGLªIdentifierÍ;Í<¡rLªIdentifierÍ=ÍGªconfidenceÂÂU§LiteralÍIÍT©debounced«'debounced'ÂN°MethodDefinitionÍnÍ!ÂÂLªIdentifierÍnÍv¨dwellFor¦methodO²FunctionExpressionÍvÍ!ÀÂÂÂ‘LªIdentifierÍwÍ}¦targetM®BlockStatementÍÍ!”X«IfStatementÍŠÍÿY°BinaryExpressionÍÍ·LªIdentifierÍÍ”¦target£===R°MemberExpressionÍ™Í·LªIdentifierÍ™Í£ªFocusStateLªIdentifierÍ¤Í·³SLIGHTLY_DISTRACTEDÂÂM®BlockStatementÍ¹Íÿ‘Z¯ReturnStatementÍÈÍôR°MemberExpressionÍÏÍóLªIdentifierÍÏÍÚ«FocusTuningLªIdentifierÍÛÍó¸DWELL_GREEN_TO_YELLOW_MSÂÂÀX«IfStatementÍ 	Í sY°BinaryExpressionÍ Í -LªIdentifierÍ Í ¦target£===R°MemberExpressionÍ Í -LªIdentifierÍ Í "ªFocusStateLªIdentifierÍ #Í -ªDISTRACTEDÂÂM®BlockStatementÍ /Í s‘Z¯ReturnStatementÍ >Í hR°MemberExpressionÍ EÍ gLªIdentifierÍ EÍ P«FocusTuningLªIdentifierÍ QÍ g¶DWELL_RED_TO_YELLOW_MSÂÂÀX«IfStatementÍ }Í æY°BinaryExpressionÍ Í LªIdentifierÍ Í ‡¦target£===R°MemberExpressionÍ ŒÍ LªIdentifierÍ ŒÍ –ªFocusStateLªIdentifierÍ —Í §FOCUSEDÂÂM®BlockStatementÍ  Í æ‘Z¯ReturnStatementÍ ¯Í ÛR°MemberExpressionÍ ¶Í ÚLªIdentifierÍ ¶Í Á«FocusTuningLªIdentifierÍ ÂÍ Ú¸DWELL_YELLOW_TO_GREEN_MSÂÂÀZ¯ReturnStatementÍ ğÍ!R°MemberExpressionÍ ÷Í!LªIdentifierÍ ÷Í!«FocusTuningLªIdentifierÍ!Í!¬MIN_DWELL_MSÂÂN°MethodDefinitionÍ!Í"ÂÂLªIdentifierÍ!Í!,¯cooldownElapsed¦methodO²FunctionExpressionÍ!,Í"ÀÂÂÂ‘LªIdentifierÍ!-Í!3¦targetM®BlockStatementÍ!5Í"”\³VariableDeclarationÍ!@Í!W‘]²VariableDeclaratorÍ!FÍ!VLªIdentifierÍ!FÍ!I£now[®CallExpressionÍ!LÍ!VR°MemberExpressionÍ!LÍ!TLªIdentifierÍ!LÍ!P¤DateLªIdentifierÍ!QÍ!T£nowÂÂÂ¥constX«IfStatementÍ!aÍ!ëY°BinaryExpressionÍ!eÍ!LªIdentifierÍ!eÍ!k¦target£===R°MemberExpressionÍ!pÍ!LªIdentifierÍ!pÍ!zªFocusStateLªIdentifierÍ!{Í!³SLIGHTLY_DISTRACTEDÂÂM®BlockStatementÍ!Í!ë‘Z¯ReturnStatementÍ!ŸÍ!àY°BinaryExpressionÍ!¦Í!ßY°BinaryExpressionÍ!¦Í!½LªIdentifierÍ!¦Í!©£now¡-R°MemberExpressionÍ!¬Í!½S®ThisExpressionÍ!¬Í!°LªIdentifierÍ!±Í!½¬lastYellowAtÂÂ¢>=R°MemberExpressionÍ!ÁÍ!ßLªIdentifierÍ!ÁÍ!Ì«FocusTuningLªIdentifierÍ!ÍÍ!ß²YELLOW_COOLDOWN_MSÂÂÀX«IfStatementÍ!õÍ"pY°BinaryExpressionÍ!ùÍ"LªIdentifierÍ!ùÍ!ÿ¦target£===R°MemberExpressionÍ"Í"LªIdentifierÍ"Í"ªFocusStateLªIdentifierÍ"Í"ªDISTRACTEDÂÂM®BlockStatementÍ"Í"p‘Z¯ReturnStatementÍ"*Í"eY°BinaryExpressionÍ"1Í"dY°BinaryExpressionÍ"1Í"ELªIdentifierÍ"1Í"4£now¡-R°MemberExpressionÍ"7Í"ES®ThisExpressionÍ"7Í";LªIdentifierÍ"<Í"E©lastRedAtÂÂ¢>=R°MemberExpressionÍ"IÍ"dLªIdentifierÍ"IÍ"T«FocusTuningLªIdentifierÍ"UÍ"d¯RED_COOLDOWN_MSÂÂÀZ¯ReturnStatementÍ"zÍ"†U§LiteralÍ"Í"…Ã¤trueN°MethodDefinitionÍ"“Í#¡ÂÂLªIdentifierÍ"“Í"›¨mapState¦methodO²FunctionExpressionÍ"›Í#¡ÀÂÂÂ‘LªIdentifierÍ"œÍ"¡sM®BlockStatementÍ"ŸÍ#¡“X«IfStatementÍ"ªÍ#Y°BinaryExpressionÍ"®Í"ÒLªIdentifierÍ"®Í"¯¡s£===R°MemberExpressionÍ"´Í"ÒLªIdentifierÍ"´Í"¾ªFocusStateLªIdentifierÍ"¿Í"Ò³SLIGHTLY_DISTRACTEDÂÂM®BlockStatementÍ"ÔÍ#‘Z¯ReturnStatementÍ"ãÍ#	R°MemberExpressionÍ"êÍ#LªIdentifierÍ"êÍ"ôªFocusStateLªIdentifierÍ"õÍ#³SLIGHTLY_DISTRACTEDÂÂÀX«IfStatementÍ#Í#vY°BinaryExpressionÍ#"Í#=LªIdentifierÍ#"Í##¡s£===R°MemberExpressionÍ#(Í#=LªIdentifierÍ#(Í#2ªFocusStateLªIdentifierÍ#3Í#=ªDISTRACTEDÂÂM®BlockStatementÍ#?Í#v‘Z¯ReturnStatementÍ#NÍ#kR°MemberExpressionÍ#UÍ#jLªIdentifierÍ#UÍ#_ªFocusStateLªIdentifierÍ#`Í#jªDISTRACTEDÂÂÀZ¯ReturnStatementÍ#€Í#šR°MemberExpressionÍ#‡Í#™LªIdentifierÍ#‡Í#‘ªFocusStateLªIdentifierÍ#’Í#™§FOCUSEDÂÂN°MethodDefinitionÍ#§Í&ÂÂLªIdentifierÍ#§Í#³¬transitionTo¦methodO²FunctionExpressionÍ#³Í&ÀÂÂÂ”LªIdentifierÍ#´Í#º¦targetLªIdentifierÍ#¼Í#ÆªconfidenceLªIdentifierÍ#ÈÍ#Î¦sourceLªIdentifierÍ#ĞÍ#Ö¦detailM®BlockStatementÍ#ØÍ&˜\³VariableDeclarationÍ#ãÍ#ú‘]²VariableDeclaratorÍ#éÍ#ùLªIdentifierÍ#éÍ#ì£now[®CallExpressionÍ#ïÍ#ùR°MemberExpressionÍ#ïÍ#÷LªIdentifierÍ#ïÍ#ó¤DateLªIdentifierÍ#ôÍ#÷£nowÂÂÂ¥constP³ExpressionStatementÍ$Í$Q´AssignmentExpressionÍ$Í$¡=R°MemberExpressionÍ$Í$S®ThisExpressionÍ$Í$LªIdentifierÍ$	Í$¥stateÂÂLªIdentifierÍ$Í$¦targetP³ExpressionStatementÍ$"Í$<Q´AssignmentExpressionÍ$"Í$;¡=R°MemberExpressionÍ$"Í$5S®ThisExpressionÍ$"Í$&LªIdentifierÍ$'Í$5®stateEnteredAtÂÂLªIdentifierÍ$8Í$;£nowX«IfStatementÍ$FÍ%Y°BinaryExpressionÍ$JÍ$sLªIdentifierÍ$JÍ$P¦target£===R°MemberExpressionÍ$UÍ$sLªIdentifierÍ$UÍ$_ªFocusStateLªIdentifierÍ$`Í$s³SLIGHTLY_DISTRACTEDÂÂM®BlockStatementÍ$uÍ$§‘P³ExpressionStatementÍ$„Í$œQ´AssignmentExpressionÍ$„Í$›¡=R°MemberExpressionÍ$„Í$•S®ThisExpressionÍ$„Í$ˆLªIdentifierÍ$‰Í$•¬lastYellowAtÂÂLªIdentifierÍ$˜Í$›£nowX«IfStatementÍ$¶Í%Y°BinaryExpressionÍ$ºÍ$ÚLªIdentifierÍ$ºÍ$À¦target£===R°MemberExpressionÍ$ÅÍ$ÚLªIdentifierÍ$ÅÍ$ÏªFocusStateLªIdentifierÍ$ĞÍ$ÚªDISTRACTEDÂÂM®BlockStatementÍ$ÜÍ%‘P³ExpressionStatementÍ$ëÍ% Q´AssignmentExpressionÍ$ëÍ$ÿ¡=R°MemberExpressionÍ$ëÍ$ùS®ThisExpressionÍ$ëÍ$ïLªIdentifierÍ$ğÍ$ù©lastRedAtÂÂLªIdentifierÍ$üÍ$ÿ£nowÀP³ExpressionStatementÍ%Í%J[®CallExpressionÍ%Í%IR°MemberExpressionÍ%Í%%S®ThisExpressionÍ%Í%LªIdentifierÍ%Í%%«recordEventÂÂ”LªIdentifierÍ%&Í%,¦targetLªIdentifierÍ%.Í%4¦sourceLªIdentifierÍ%6Í%@ªconfidenceLªIdentifierÍ%BÍ%H¦detailÂP³ExpressionStatementÍ%TÍ%j[®CallExpressionÍ%TÍ%iR°MemberExpressionÍ%TÍ%gS®ThisExpressionÍ%TÍ%XLªIdentifierÍ%YÍ%g®sampleTimelineÂÂÂP³ExpressionStatementÍ%tÍ%„[®CallExpressionÍ%tÍ%ƒR°MemberExpressionÍ%tÍ%S®ThisExpressionÍ%tÍ%xLªIdentifierÍ%yÍ%¨pushLiveÂÂÂX«IfStatementÍ%Í&Y±LogicalExpressionÍ%’Í%ßY°BinaryExpressionÍ%’Í%»LªIdentifierÍ%’Í%˜¦target£===R°MemberExpressionÍ%Í%»LªIdentifierÍ%Í%§ªFocusStateLªIdentifierÍ%¨Í%»³SLIGHTLY_DISTRACTEDÂÂ¢||Y°BinaryExpressionÍ%¿Í%ßLªIdentifierÍ%¿Í%Å¦target£===R°MemberExpressionÍ%ÊÍ%ßLªIdentifierÍ%ÊÍ%ÔªFocusStateLªIdentifierÍ%ÕÍ%ßªDISTRACTEDÂÂM®BlockStatementÍ%áÍ&‘P³ExpressionStatementÍ%ğÍ&[®CallExpressionÍ%ğÍ&R°MemberExpressionÍ%ğÍ&	S®ThisExpressionÍ%ğÍ%ôLªIdentifierÍ%õÍ&	´evaluateInterventionÂÂÂÀN°MethodDefinitionÍ&$Í'cÂÂLªIdentifierÍ&$Í&/«recordEvent¦methodO²FunctionExpressionÍ&/Í'cÀÂÂÂ”LªIdentifierÍ&0Í&5¥stateLªIdentifierÍ&7Í&=¦sourceLªIdentifierÍ&?Í&IªconfidenceLªIdentifierÍ&KÍ&Q¦detailM®BlockStatementÍ&SÍ'c˜\³VariableDeclarationÍ&^Í&y‘]²VariableDeclaratorÍ&dÍ&xLªIdentifierÍ&dÍ&e¡eV­NewExpressionÍ&hÍ&xLªIdentifierÍ&lÍ&vªFocusEvent¥constP³ExpressionStatementÍ&ƒÍ&™Q´AssignmentExpressionÍ&ƒÍ&˜¡=R°MemberExpressionÍ&ƒÍ&‡LªIdentifierÍ&ƒÍ&„¡eLªIdentifierÍ&…Í&‡¢idÂÂ[®CallExpressionÍ&ŠÍ&˜R°MemberExpressionÍ&ŠÍ&–LªIdentifierÍ&ŠÍ&‘§IdUtilsLªIdentifierÍ&’Í&–¤uuidÂÂÂP³ExpressionStatementÍ&£Í&ÁQ´AssignmentExpressionÍ&£Í&À¡=R°MemberExpressionÍ&£Í&®LªIdentifierÍ&£Í&¤¡eLªIdentifierÍ&¥Í&®©sessionIdÂÂR°MemberExpressionÍ&±Í&ÀR°MemberExpressionÍ&±Í&½S®ThisExpressionÍ&±Í&µLªIdentifierÍ&¶Í&½§sessionÂÂLªIdentifierÍ&¾Í&À¢idÂÂP³ExpressionStatementÍ&ËÍ&äQ´AssignmentExpressionÍ&ËÍ&ã¡=R°MemberExpressionÍ&ËÍ&ÖLªIdentifierÍ&ËÍ&Ì¡eLªIdentifierÍ&ÍÍ&Ö©timestampÂÂ[®CallExpressionÍ&ÙÍ&ãR°MemberExpressionÍ&ÙÍ&áLªIdentifierÍ&ÙÍ&İ¤DateLªIdentifierÍ&ŞÍ&á£nowÂÂÂP³ExpressionStatementÍ&îÍ&şQ´AssignmentExpressionÍ&îÍ&ı¡=R°MemberExpressionÍ&îÍ&õLªIdentifierÍ&îÍ&ï¡eLªIdentifierÍ&ğÍ&õ¥stateÂÂLªIdentifierÍ&øÍ&ı¥stateP³ExpressionStatementÍ'Í'Q´AssignmentExpressionÍ'Í'¡=R°MemberExpressionÍ'Í'LªIdentifierÍ'Í'	¡eLªIdentifierÍ'
+Í'¦sourceÂÂLªIdentifierÍ'Í'¦sourceP³ExpressionStatementÍ'$Í'>Q´AssignmentExpressionÍ'$Í'=¡=R°MemberExpressionÍ'$Í'0LªIdentifierÍ'$Í'%¡eLªIdentifierÍ'&Í'0ªconfidenceÂÂLªIdentifierÍ'3Í'=ªconfidenceP³ExpressionStatementÍ'HÍ'\[®CallExpressionÍ'HÍ'[R°MemberExpressionÍ'HÍ'XR°MemberExpressionÍ'HÍ'SS®ThisExpressionÍ'HÍ'LLªIdentifierÍ'MÍ'S¦eventsÂÂLªIdentifierÍ'TÍ'X¤pushÂÂ‘LªIdentifierÍ'YÍ'Z¡eÂN°MethodDefinitionÍ'iÍ(UÂÂLªIdentifierÍ'iÍ'w®sampleTimeline¦methodO²FunctionExpressionÍ'wÍ(UÀÂÂÂM®BlockStatementÍ'zÍ(U•\³VariableDeclarationÍ'…Í'¨‘]²VariableDeclaratorÍ'‹Í'§LªIdentifierÍ'‹Í'Œ¡pV­NewExpressionÍ'Í'§LªIdentifierÍ'“Í'¥²FocusTimelinePoint¥constP³ExpressionStatementÍ'²Í'ÜQ´AssignmentExpressionÍ'²Í'Û¡=R°MemberExpressionÍ'²Í'ºLªIdentifierÍ'²Í'³¡pLªIdentifierÍ'´Í'º¦minuteÂÂ[®CallExpressionÍ'½Í'ÛR°MemberExpressionÍ'½Í'ÇLªIdentifierÍ'½Í'Á¤MathLªIdentifierÍ'ÂÍ'Ç¥floorÂÂ‘Y°BinaryExpressionÍ'ÈÍ'ÚR°MemberExpressionÍ'ÈÍ'ÕS®ThisExpressionÍ'ÈÍ'ÌLªIdentifierÍ'ÍÍ'Õ¨totalSecÂÂ¡/U§LiteralÍ'ØÍ'Ú<¢60ÂP³ExpressionStatementÍ'æÍ(Q´AssignmentExpressionÍ'æÍ(¡=R°MemberExpressionÍ'æÍ'íLªIdentifierÍ'æÍ'ç¡pLªIdentifierÍ'èÍ'í¥levelÂÂ[®CallExpressionÍ'ğÍ(R°MemberExpressionÍ'ğÍ(S®ThisExpressionÍ'ğÍ'ôLªIdentifierÍ'õÍ(­levelForStateÂÂ‘R°MemberExpressionÍ(Í(S®ThisExpressionÍ(Í(LªIdentifierÍ(Í(¥stateÂÂÂP³ExpressionStatementÍ(Í(.Q´AssignmentExpressionÍ(Í(-¡=R°MemberExpressionÍ(Í( LªIdentifierÍ(Í(¡pLªIdentifierÍ(Í( ¥stateÂÂR°MemberExpressionÍ(#Í(-S®ThisExpressionÍ(#Í('LªIdentifierÍ((Í(-¥stateÂÂP³ExpressionStatementÍ(8Í(N[®CallExpressionÍ(8Í(MR°MemberExpressionÍ(8Í(JR°MemberExpressionÍ(8Í(ES®ThisExpressionÍ(8Í(<LªIdentifierÍ(=Í(E¨timelineÂÂLªIdentifierÍ(FÍ(J¤pushÂÂ‘LªIdentifierÍ(KÍ(L¡pÂN°MethodDefinitionÍ([Í)ÂÂLªIdentifierÍ([Í(h­levelForState¦methodO²FunctionExpressionÍ(hÍ)ÀÂÂÂ‘LªIdentifierÍ(iÍ(j¡sM®BlockStatementÍ(lÍ)“X«IfStatementÍ(wÍ(ÙY°BinaryExpressionÍ({Í(“LªIdentifierÍ({Í(|¡s£===R°MemberExpressionÍ(Í(“LªIdentifierÍ(Í(‹ªFocusStateLªIdentifierÍ(ŒÍ(“§FOCUSEDÂÂM®BlockStatementÍ(•Í(Ù‘Z¯ReturnStatementÍ(¤Í(ÎY°BinaryExpressionÍ(«Í(ÍU§LiteralÍ(«Í(­ÌZ¢90¡+[®CallExpressionÍ(°Í(ÍR°MemberExpressionÍ(°Í(ºLªIdentifierÍ(°Í(´¤MathLªIdentifierÍ(µÍ(º¥roundÂÂ‘Y°BinaryExpressionÍ(»Í(Ì[®CallExpressionÍ(»Í(ÈR°MemberExpressionÍ(»Í(ÆLªIdentifierÍ(»Í(¿¤MathLªIdentifierÍ(ÀÍ(Æ¦randomÂÂÂ¡*U§LiteralÍ(ËÍ(Ì¡8ÂÀX«IfStatementÍ(ãÍ)RY°BinaryExpressionÍ(çÍ)LªIdentifierÍ(çÍ(è¡s£===R°MemberExpressionÍ(íÍ)LªIdentifierÍ(íÍ(÷ªFocusStateLªIdentifierÍ(øÍ)³SLIGHTLY_DISTRACTEDÂÂM®BlockStatementÍ)Í)R‘Z¯ReturnStatementÍ)Í)GY°BinaryExpressionÍ)#Í)FU§LiteralÍ)#Í)%7¢55¡+[®CallExpressionÍ)(Í)FR°MemberExpressionÍ)(Í)2LªIdentifierÍ)(Í),¤MathLªIdentifierÍ)-Í)2¥roundÂÂ‘Y°BinaryExpressionÍ)3Í)E[®CallExpressionÍ)3Í)@R°MemberExpressionÍ)3Í)>LªIdentifierÍ)3Í)7¤MathLªIdentifierÍ)8Í)>¦randomÂÂÂ¡*U§LiteralÍ)CÍ)E¢15ÂÀZ¯ReturnStatementÍ)\Í)‡Y°BinaryExpressionÍ)cÍ)†U§LiteralÍ)cÍ)e¢25¡+[®CallExpressionÍ)hÍ)†R°MemberExpressionÍ)hÍ)rLªIdentifierÍ)hÍ)l¤MathLªIdentifierÍ)mÍ)r¥roundÂÂ‘Y°BinaryExpressionÍ)sÍ)…[®CallExpressionÍ)sÍ)€R°MemberExpressionÍ)sÍ)~LªIdentifierÍ)sÍ)w¤MathLªIdentifierÍ)xÍ)~¦randomÂÂÂ¡*U§LiteralÍ)ƒÍ)…¢15ÂN°MethodDefinitionÍ)ÙÍ,şÂÂLªIdentifierÍ)ÙÍ)í´evaluateIntervention¦methodO²FunctionExpressionÍ)íÍ,şÀÂÂÂM®BlockStatementÍ)ğÍ,ş”\³VariableDeclarationÍ)ûÍ+¡‘]²VariableDeclaratorÍ*Í+ LªIdentifierÍ*Í*£ctxÔr^”¤type¥start£endªproperties°ObjectExpressionÍ*Í+ —Ôr_™¤type¥start£end¦method©shorthand¨computed£key¥value¤kind¨PropertyÍ*Í*0ÂÂÂLªIdentifierÍ*Í*©sessionIdR°MemberExpressionÍ*!Í*0R°MemberExpressionÍ*!Í*-S®ThisExpressionÍ*!Í*%LªIdentifierÍ*&Í*-§sessionÂÂLªIdentifierÍ*.Í*0¢idÂÂ¤init_¨PropertyÍ*?Í*PÂÂÂLªIdentifierÍ*?Í*D¥stateR°MemberExpressionÍ*FÍ*PS®ThisExpressionÍ*FÍ*JLªIdentifierÍ*KÍ*P¥stateÂÂ¤init_¨PropertyÍ*_Í*ˆÂÂÂLªIdentifierÍ*_Í*f§sinceMsY°BinaryExpressionÍ*hÍ*ˆ[®CallExpressionÍ*hÍ*rR°MemberExpressionÍ*hÍ*pLªIdentifierÍ*hÍ*l¤DateLªIdentifierÍ*mÍ*p£nowÂÂÂ¡-R°MemberExpressionÍ*uÍ*ˆS®ThisExpressionÍ*uÍ*yLªIdentifierÍ*zÍ*ˆ®stateEnteredAtÂÂ¤init_¨PropertyÍ*—Í*ÍÂÂÂLªIdentifierÍ*—Í*Ÿ¨hasWatch[®CallExpressionÍ*¡Í*ÍR°MemberExpressionÍ*¡Í*Ë[®CallExpressionÍ*¡Í*¼R°MemberExpressionÍ*¡Í*ºLªIdentifierÍ*¡Í*®­SensorServiceLªIdentifierÍ*¯Í*º«getInstanceÂÂÂLªIdentifierÍ*½Í*Ë®isWristPresentÂÂÂ¤init_¨PropertyÍ*ÜÍ+ ÂÂÂLªIdentifierÍ*ÜÍ*ç«personalityY±LogicalExpressionÍ*éÍ+ [®CallExpressionÍ*éÍ+R°MemberExpressionÍ*éÍ*÷LªIdentifierÍ*éÍ*óªAppStorageLªIdentifierÍ*ôÍ*÷£getÂÂ‘R°MemberExpressionÍ*øÍ+LªIdentifierÍ*øÍ+ªStorageKeyLªIdentifierÍ+Í+°USER_PERSONALITYÂÂÂ¢??U§LiteralÍ+Í+ ¦GENTLE¨'GENTLE'¤init_¨PropertyÍ+/Í+RÂÂÂLªIdentifierÍ+/Í+=®perceptionModeR°MemberExpressionÍ+?Í+RS®ThisExpressionÍ+?Í+CLªIdentifierÍ+DÍ+R®perceptionModeÂÂ¤init_¨PropertyÍ+aÍ+•ÂÂÂLªIdentifierÍ+aÍ+g¦recent[®CallExpressionÍ+iÍ+•R°MemberExpressionÍ+iÍ+“[®CallExpressionÍ+iÍ+‰R°MemberExpressionÍ+iÍ+‡LªIdentifierÍ+iÍ+{²InterventionEngineLªIdentifierÍ+|Í+‡«getInstanceÂÂÂLªIdentifierÍ+ŠÍ+“©getRecentÂÂÂ¤init¥const\³VariableDeclarationÍ+«Í+æ‘]²VariableDeclaratorÍ+±Í+åLªIdentifierÍ+±Í+´£res[®CallExpressionÍ+·Í+åR°MemberExpressionÍ+·Í+à[®CallExpressionÍ+·Í+×R°MemberExpressionÍ+·Í+ÕLªIdentifierÍ+·Í+É²InterventionEngineLªIdentifierÍ+ÊÍ+Õ«getInstanceÂÂÂLªIdentifierÍ+ØÍ+à¨evaluateÂÂ‘LªIdentifierÍ+áÍ+ä£ctxÂ¥constP³ExpressionStatementÍ+ğÍ,Q´AssignmentExpressionÍ+ğÍ,¡=R°MemberExpressionÍ+ğÍ,S®ThisExpressionÍ+ğÍ+ôLªIdentifierÍ+õÍ,¬lastDecisionÂÂR°MemberExpressionÍ,Í,LªIdentifierÍ,Í,£resLªIdentifierÍ,Í,¨decisionÂÂX«IfStatementÍ,Í,÷Y°BinaryExpressionÍ,Í,1R°MemberExpressionÍ,Í,(LªIdentifierÍ,Í,"£resLªIdentifierÍ,#Í,(¥eventÂÂ£!==U§LiteralÍ,-Í,1À¤nullM®BlockStatementÍ,3Í,÷’P³ExpressionStatementÍ,BÍ,m[®CallExpressionÍ,BÍ,lR°MemberExpressionÍ,BÍ,aR°MemberExpressionÍ,BÍ,\R°MemberExpressionÍ,BÍ,NS®ThisExpressionÍ,BÍ,FLªIdentifierÍ,GÍ,N§sessionÂÂLªIdentifierÍ,OÍ,\­interventionsÂÂLªIdentifierÍ,]Í,a¤pushÂÂ‘R°MemberExpressionÍ,bÍ,kLªIdentifierÍ,bÍ,e£resLªIdentifierÍ,fÍ,k¥eventÂÂÂX«IfStatementÍ,{Í,ìY°BinaryExpressionÍ,Í,›R°MemberExpressionÍ,Í,’S®ThisExpressionÍ,Í,ƒLªIdentifierÍ,„Í,’®onInterventionÂÂ£!==U§LiteralÍ,—Í,›À¤nullM®BlockStatementÍ,Í,ì‘P³ExpressionStatementÍ,°Í,İ[®CallExpressionÍ,°Í,ÜR°MemberExpressionÍ,°Í,ÃS®ThisExpressionÍ,°Í,´LªIdentifierÍ,µÍ,Ã®onInterventionÂÂ’R°MemberExpressionÍ,ÄÍ,ĞLªIdentifierÍ,ÄÍ,Ç£resLªIdentifierÍ,ÈÍ,Ğ¨decisionÂÂR°MemberExpressionÍ,ÒÍ,ÛLªIdentifierÍ,ÒÍ,Õ£resLªIdentifierÍ,ÖÍ,Û¥eventÂÂÂÀÀN°MethodDefinitionÍ-4Í.ÂÂLªIdentifierÍ-4Í-;§startQA¦methodO²FunctionExpressionÍ-;Í.ÀÂÂÂM®BlockStatementÍ->Í.•X«IfStatementÍ-IÍ-}T¯UnaryExpressionÍ-MÍ-Z¡!ÃR°MemberExpressionÍ-NÍ-ZS®ThisExpressionÍ-NÍ-RLªIdentifierÍ-SÍ-Z§runningÂÂM®BlockStatementÍ-\Í-}‘Z¯ReturnStatementÍ-kÍ-rÀÀP³ExpressionStatementÍ-‡Í-šQ´AssignmentExpressionÍ-‡Í-™¡=R°MemberExpressionÍ-‡Í-’S®ThisExpressionÍ-‡Í-‹LªIdentifierÍ-ŒÍ-’¦qaModeÂÂU§LiteralÍ-•Í-™Ã¤trueP³ExpressionStatementÍ-¤Í-ÄQ´AssignmentExpressionÍ-¤Í-Ã¡=R°MemberExpressionÍ-¤Í-®S®ThisExpressionÍ-¤Í-¨LªIdentifierÍ-©Í-®¥stateÂÂR°MemberExpressionÍ-±Í-ÃLªIdentifierÍ-±Í-»ªFocusStateLªIdentifierÍ-¼Í-Ã§QA_MODEÂÂP³ExpressionStatementÍ-ÎÍ-ù[®CallExpressionÍ-ÎÍ-øR°MemberExpressionÍ-ÎÍ-ö[®CallExpressionÍ-ÎÍ-ñR°MemberExpressionÍ-ÎÍ-ïLªIdentifierÍ-ÎÍ-ãµFocusDetectionServiceLªIdentifierÍ-äÍ-ï«getInstanceÂÂÂLªIdentifierÍ-òÍ-ö¤stopÂÂÂP³ExpressionStatementÍ.Í.[®CallExpressionÍ.Í.R°MemberExpressionÍ.Í.S®ThisExpressionÍ.Í.LªIdentifierÍ.Í.¨pushLiveÂÂÂN°MethodDefinitionÍ. Í/ÂÂLªIdentifierÍ. Í.%¥endQA¦methodO²FunctionExpressionÍ.%Í/ÀÂÂÂM®BlockStatementÍ.(Í/•P³ExpressionStatementÍ.3Í.GQ´AssignmentExpressionÍ.3Í.F¡=R°MemberExpressionÍ.3Í.>S®ThisExpressionÍ.3Í.7LªIdentifierÍ.8Í.>¦qaModeÂÂU§LiteralÍ.AÍ.FÂ¥falseP³ExpressionStatementÍ.QÍ.qQ´AssignmentExpressionÍ.QÍ.p¡=R°MemberExpressionÍ.QÍ.[S®ThisExpressionÍ.QÍ.ULªIdentifierÍ.VÍ.[¥stateÂÂR°MemberExpressionÍ.^Í.pLªIdentifierÍ.^Í.hªFocusStateLªIdentifierÍ.iÍ.p§FOCUSEDÂÂP³ExpressionStatementÍ.{Í.œQ´AssignmentExpressionÍ.{Í.›¡=R°MemberExpressionÍ.{Í.S®ThisExpressionÍ.{Í.LªIdentifierÍ.€Í.®stateEnteredAtÂÂ[®CallExpressionÍ.‘Í.›R°MemberExpressionÍ.‘Í.™LªIdentifierÍ.‘Í.•¤DateLªIdentifierÍ.–Í.™£nowÂÂÂX«IfStatementÍ.¦Í/`R°MemberExpressionÍ.ªÍ.Û[®CallExpressionÍ.ªÍ.ÔR°MemberExpressionÍ.ªÍ.Ò[®CallExpressionÍ.ªÍ.ÉR°MemberExpressionÍ.ªÍ.ÇLªIdentifierÍ.ªÍ.»±PermissionServiceLªIdentifierÍ.¼Í.Ç«getInstanceÂÂÂLªIdentifierÍ.ÊÍ.Ò¨snapshotÂÂÂLªIdentifierÍ.ÕÍ.Û¦cameraÂÂM®BlockStatementÍ.İÍ/`‘P³ExpressionStatementÍ.ìÍ/U[®CallExpressionÍ.ìÍ/TR°MemberExpressionÍ.ìÍ/[®CallExpressionÍ.ìÍ/R°MemberExpressionÍ.ìÍ/LªIdentifierÍ.ìÍ/µFocusDetectionServiceLªIdentifierÍ/Í/«getInstanceÂÂÂLªIdentifierÍ/Í/¥startÂÂ‘O·ArrowFunctionExpressionÍ/Í/SÀÂÂÂ‘LªIdentifierÍ/Í/¡rM®BlockStatementÍ/Í/S‘P³ExpressionStatementÍ/0Í/D[®CallExpressionÍ/0Í/CR°MemberExpressionÍ/0Í/@S®ThisExpressionÍ/0Í/4LªIdentifierÍ/5Í/@«onDetectionÂÂ‘LªIdentifierÍ/AÍ/B¡rÂÂÀP³ExpressionStatementÍ/jÍ/z[®CallExpressionÍ/jÍ/yR°MemberExpressionÍ/jÍ/wS®ThisExpressionÍ/jÍ/nLªIdentifierÍ/oÍ/w¨pushLiveÂÂÂN°MethodDefinitionÍ/‡Í/¿ÂÂLªIdentifierÍ/‡Í/’«addQuestion¦methodO²FunctionExpressionÍ/’Í/¿ÀÂÂÂ‘LªIdentifierÍ/“Í/”¡qM®BlockStatementÍ/–Í/¿‘P³ExpressionStatementÍ/¡Í/¸[®CallExpressionÍ/¡Í/·R°MemberExpressionÍ/¡Í/´R°MemberExpressionÍ/¡Í/¯S®ThisExpressionÍ/¡Í/¥LªIdentifierÍ/¦Í/¯©questionsÂÂLªIdentifierÍ/°Í/´¤pushÂÂ‘LªIdentifierÍ/µÍ/¶¡qÂN°MethodDefinitionÍ/ÔÍ0yÂÂLªIdentifierÍ/ÔÍ/Ù¥pause¦methodO²FunctionExpressionÍ/ÙÍ0yÀÂÂÂM®BlockStatementÍ/ÜÍ0y”P³ExpressionStatementÍ/çÍ/úQ´AssignmentExpressionÍ/çÍ/ù¡=R°MemberExpressionÍ/çÍ/òS®ThisExpressionÍ/çÍ/ëLªIdentifierÍ/ìÍ/ò¦pausedÂÂU§LiteralÍ/õÍ/ùÃ¤trueP³ExpressionStatementÍ0Í0#Q´AssignmentExpressionÍ0Í0"¡=R°MemberExpressionÍ0Í0S®ThisExpressionÍ0Í0LªIdentifierÍ0	Í0¥stateÂÂR°MemberExpressionÍ0Í0"LªIdentifierÍ0Í0ªFocusStateLªIdentifierÍ0Í0"¦PAUSEDÂÂP³ExpressionStatementÍ0-Í0X[®CallExpressionÍ0-Í0WR°MemberExpressionÍ0-Í0U[®CallExpressionÍ0-Í0PR°MemberExpressionÍ0-Í0NLªIdentifierÍ0-Í0BµFocusDetectionServiceLªIdentifierÍ0CÍ0N«getInstanceÂÂÂLªIdentifierÍ0QÍ0U¤stopÂÂÂP³ExpressionStatementÍ0bÍ0r[®CallExpressionÍ0bÍ0qR°MemberExpressionÍ0bÍ0oS®ThisExpressionÍ0bÍ0fLªIdentifierÍ0gÍ0o¨pushLiveÂÂÂN°MethodDefinitionÍ0Í1áÂÂLªIdentifierÍ0Í0…¦resume¦methodO²FunctionExpressionÍ0…Í1áÀÂÂÂM®BlockStatementÍ0ˆÍ1á•P³ExpressionStatementÍ0“Í0§Q´AssignmentExpressionÍ0“Í0¦¡=R°MemberExpressionÍ0“Í0S®ThisExpressionÍ0“Í0—LªIdentifierÍ0˜Í0¦pausedÂÂU§LiteralÍ0¡Í0¦Â¥falseP³ExpressionStatementÍ0±Í0ÑQ´AssignmentExpressionÍ0±Í0Ğ¡=R°MemberExpressionÍ0±Í0»S®ThisExpressionÍ0±Í0µLªIdentifierÍ0¶Í0»¥stateÂÂR°MemberExpressionÍ0¾Í0ĞLªIdentifierÍ0¾Í0ÈªFocusStateLªIdentifierÍ0ÉÍ0Ğ§FOCUSEDÂÂP³ExpressionStatementÍ0ÛÍ0üQ´AssignmentExpressionÍ0ÛÍ0û¡=R°MemberExpressionÍ0ÛÍ0îS®ThisExpressionÍ0ÛÍ0ßLªIdentifierÍ0àÍ0î®stateEnteredAtÂÂ[®CallExpressionÍ0ñÍ0ûR°MemberExpressionÍ0ñÍ0ùLªIdentifierÍ0ñÍ0õ¤DateLªIdentifierÍ0öÍ0ù£nowÂÂÂX«IfStatementÍ1Í1ÀR°MemberExpressionÍ1
+Í1;[®CallExpressionÍ1
+Í14R°MemberExpressionÍ1
+Í12[®CallExpressionÍ1
+Í1)R°MemberExpressionÍ1
+Í1'LªIdentifierÍ1
+Í1±PermissionServiceLªIdentifierÍ1Í1'«getInstanceÂÂÂLªIdentifierÍ1*Í12¨snapshotÂÂÂLªIdentifierÍ15Í1;¦cameraÂÂM®BlockStatementÍ1=Í1À‘P³ExpressionStatementÍ1LÍ1µ[®CallExpressionÍ1LÍ1´R°MemberExpressionÍ1LÍ1u[®CallExpressionÍ1LÍ1oR°MemberExpressionÍ1LÍ1mLªIdentifierÍ1LÍ1aµFocusDetectionServiceLªIdentifierÍ1bÍ1m«getInstanceÂÂÂLªIdentifierÍ1pÍ1u¥startÂÂ‘O·ArrowFunctionExpressionÍ1vÍ1³ÀÂÂÂ‘LªIdentifierÍ1wÍ1x¡rM®BlockStatementÍ1}Í1³‘P³ExpressionStatementÍ1Í1¤[®CallExpressionÍ1Í1£R°MemberExpressionÍ1Í1 S®ThisExpressionÍ1Í1”LªIdentifierÍ1•Í1 «onDetectionÂÂ‘LªIdentifierÍ1¡Í1¢¡rÂÂÀP³ExpressionStatementÍ1ÊÍ1Ú[®CallExpressionÍ1ÊÍ1ÙR°MemberExpressionÍ1ÊÍ1×S®ThisExpressionÍ1ÊÍ1ÎLªIdentifierÍ1ÏÍ1×¨pushLiveÂÂÂN°MethodDefinitionÍ2Í2¹ÂÂLªIdentifierÍ2Í2ªstartBreak¦methodO²FunctionExpressionÍ2Í2¹ÀÂÂÂM®BlockStatementÍ2Í2¹”P³ExpressionStatementÍ2%Í29Q´AssignmentExpressionÍ2%Í28¡=R°MemberExpressionÍ2%Í21S®ThisExpressionÍ2%Í2)LªIdentifierÍ2*Í21§restingÂÂU§LiteralÍ24Í28Ã¤trueP³ExpressionStatementÍ2CÍ2cQ´AssignmentExpressionÍ2CÍ2b¡=R°MemberExpressionÍ2CÍ2MS®ThisExpressionÍ2CÍ2GLªIdentifierÍ2HÍ2M¥stateÂÂR°MemberExpressionÍ2PÍ2bLªIdentifierÍ2PÍ2ZªFocusStateLªIdentifierÍ2[Í2b§RESTINGÂÂP³ExpressionStatementÍ2mÍ2˜[®CallExpressionÍ2mÍ2—R°MemberExpressionÍ2mÍ2•[®CallExpressionÍ2mÍ2R°MemberExpressionÍ2mÍ2LªIdentifierÍ2mÍ2‚µFocusDetectionServiceLªIdentifierÍ2ƒÍ2«getInstanceÂÂÂLªIdentifierÍ2‘Í2•¤stopÂÂÂP³ExpressionStatementÍ2¢Í2²[®CallExpressionÍ2¢Í2±R°MemberExpressionÍ2¢Í2¯S®ThisExpressionÍ2¢Í2¦LªIdentifierÍ2§Í2¯¨pushLiveÂÂÂN°MethodDefinitionÍ2¿Í4$ÂÂLªIdentifierÍ2¿Í2Ç¨endBreak¦methodO²FunctionExpressionÍ2ÇÍ4$ÀÂÂÂM®BlockStatementÍ2ÊÍ4$•P³ExpressionStatementÍ2ÕÍ2êQ´AssignmentExpressionÍ2ÕÍ2é¡=R°MemberExpressionÍ2ÕÍ2áS®ThisExpressionÍ2ÕÍ2ÙLªIdentifierÍ2ÚÍ2á§restingÂÂU§LiteralÍ2äÍ2éÂ¥falseP³ExpressionStatementÍ2ôÍ3Q´AssignmentExpressionÍ2ôÍ3¡=R°MemberExpressionÍ2ôÍ2şS®ThisExpressionÍ2ôÍ2øLªIdentifierÍ2ùÍ2ş¥stateÂÂR°MemberExpressionÍ3Í3LªIdentifierÍ3Í3ªFocusStateLªIdentifierÍ3Í3§FOCUSEDÂÂP³ExpressionStatementÍ3Í3?Q´AssignmentExpressionÍ3Í3>¡=R°MemberExpressionÍ3Í31S®ThisExpressionÍ3Í3"LªIdentifierÍ3#Í31®stateEnteredAtÂÂ[®CallExpressionÍ34Í3>R°MemberExpressionÍ34Í3<LªIdentifierÍ34Í38¤DateLªIdentifierÍ39Í3<£nowÂÂÂX«IfStatementÍ3IÍ4R°MemberExpressionÍ3MÍ3~[®CallExpressionÍ3MÍ3wR°MemberExpressionÍ3MÍ3u[®CallExpressionÍ3MÍ3lR°MemberExpressionÍ3MÍ3jLªIdentifierÍ3MÍ3^±PermissionServiceLªIdentifierÍ3_Í3j«getInstanceÂÂÂLªIdentifierÍ3mÍ3u¨snapshotÂÂÂLªIdentifierÍ3xÍ3~¦cameraÂÂM®BlockStatementÍ3€Í4‘P³ExpressionStatementÍ3Í3ø[®CallExpressionÍ3Í3÷R°MemberExpressionÍ3Í3¸[®CallExpressionÍ3Í3²R°MemberExpressionÍ3Í3°LªIdentifierÍ3Í3¤µFocusDetectionServiceLªIdentifierÍ3¥Í3°«getInstanceÂÂÂLªIdentifierÍ3³Í3¸¥startÂÂ‘O·ArrowFunctionExpressionÍ3¹Í3öÀÂÂÂ‘LªIdentifierÍ3ºÍ3»¡rM®BlockStatementÍ3ÀÍ3ö‘P³ExpressionStatementÍ3ÓÍ3ç[®CallExpressionÍ3ÓÍ3æR°MemberExpressionÍ3ÓÍ3ãS®ThisExpressionÍ3ÓÍ3×LªIdentifierÍ3ØÍ3ã«onDetectionÂÂ‘LªIdentifierÍ3äÍ3å¡rÂÂÀP³ExpressionStatementÍ4Í4[®CallExpressionÍ4Í4R°MemberExpressionÍ4Í4S®ThisExpressionÍ4Í4LªIdentifierÍ4Í4¨pushLiveÂÂÂN°MethodDefinitionÍ4JÍ6LÂÂLªIdentifierÍ4JÍ4X®demoCycleState¦methodO²FunctionExpressionÍ4XÍ6LÀÂÂÂM®BlockStatementÍ4[Í6L’X«IfStatementÍ4fÍ4·Y±LogicalExpressionÍ4jÍ4”Y±LogicalExpressionÍ4jÍ4…R°MemberExpressionÍ4jÍ4uS®ThisExpressionÍ4jÍ4nLªIdentifierÍ4oÍ4u¦qaModeÂÂ¢||R°MemberExpressionÍ4yÍ4…S®ThisExpressionÍ4yÍ4}LªIdentifierÍ4~Í4…§restingÂÂ¢||R°MemberExpressionÍ4‰Í4”S®ThisExpressionÍ4‰Í4LªIdentifierÍ4Í4”¦pausedÂÂM®BlockStatementÍ4–Í4·‘Z¯ReturnStatementÍ4¥Í4¬ÀÀX«IfStatementÍ4ÁÍ6EY°BinaryExpressionÍ4ÅÍ4æR°MemberExpressionÍ4ÅÍ4ÏS®ThisExpressionÍ4ÅÍ4ÉLªIdentifierÍ4ÊÍ4Ï¥stateÂÂ£===R°MemberExpressionÍ4ÔÍ4æLªIdentifierÍ4ÔÍ4ŞªFocusStateLªIdentifierÍ4ßÍ4æ§FOCUSEDÂÂM®BlockStatementÍ4èÍ5O‘P³ExpressionStatementÍ4÷Í5D[®CallExpressionÍ4÷Í5CR°MemberExpressionÍ4÷Í5#[®CallExpressionÍ4÷Í5R°MemberExpressionÍ4÷Í5LªIdentifierÍ4÷Í5µFocusDetectionServiceLªIdentifierÍ5Í5«getInstanceÂÂÂLªIdentifierÍ5Í5#¨simulateÂÂ‘R°MemberExpressionÍ5$Í5BLªIdentifierÍ5$Í5.ªFocusStateLªIdentifierÍ5/Í5B³SLIGHTLY_DISTRACTEDÂÂÂX«IfStatementÍ5^Í6EY°BinaryExpressionÍ5bÍ5R°MemberExpressionÍ5bÍ5lS®ThisExpressionÍ5bÍ5fLªIdentifierÍ5gÍ5l¥stateÂÂ£===R°MemberExpressionÍ5qÍ5LªIdentifierÍ5qÍ5{ªFocusStateLªIdentifierÍ5|Í5³SLIGHTLY_DISTRACTEDÂÂM®BlockStatementÍ5‘Í5ï‘P³ExpressionStatementÍ5 Í5ä[®CallExpressionÍ5 Í5ãR°MemberExpressionÍ5 Í5Ì[®CallExpressionÍ5 Í5ÃR°MemberExpressionÍ5 Í5ÁLªIdentifierÍ5 Í5µµFocusDetectionServiceLªIdentifierÍ5¶Í5Á«getInstanceÂÂÂLªIdentifierÍ5ÄÍ5Ì¨simulateÂÂ‘R°MemberExpressionÍ5ÍÍ5âLªIdentifierÍ5ÍÍ5×ªFocusStateLªIdentifierÍ5ØÍ5âªDISTRACTEDÂÂÂM®BlockStatementÍ5şÍ6E‘P³ExpressionStatementÍ6Í6:[®CallExpressionÍ6Í69R°MemberExpressionÍ6Í67[®CallExpressionÍ6Í60R°MemberExpressionÍ6Í6.LªIdentifierÍ6Í6"µFocusDetectionServiceLªIdentifierÍ6#Í6.«getInstanceÂÂÂLªIdentifierÍ61Í67¦resumeÂÂÂN°MethodDefinitionÍ6‚Í;‰ÂÂLªIdentifierÍ6‚Í6‰§restore¦methodO²FunctionExpressionÍ6‰Í;‰ÀÂÂÂ’LªIdentifierÍ6ŠÍ6¤snapLªIdentifierÍ6Í6•¥tasksM®BlockStatementÍ6—Í;‰Ü X«IfStatementÍ6¢Í6èY°BinaryExpressionÍ6¦Í6¹LªIdentifierÍ6¦Í6«¥tasks£!==LªIdentifierÍ6°Í6¹©undefinedM®BlockStatementÍ6»Í6è‘P³ExpressionStatementÍ6ÊÍ6İQ´AssignmentExpressionÍ6ÊÍ6Ü¡=R°MemberExpressionÍ6ÊÍ6ÔS®ThisExpressionÍ6ÊÍ6ÎLªIdentifierÍ6ÏÍ6Ô¥tasksÂÂLªIdentifierÍ6×Í6Ü¥tasksÀP³ExpressionStatementÍ6òÍ7Q´AssignmentExpressionÍ6òÍ7¡=R°MemberExpressionÍ6òÍ6şS®ThisExpressionÍ6òÍ6öLªIdentifierÍ6÷Í6ş§sessionÂÂV­NewExpressionÍ7Í7LªIdentifierÍ7Í7¬FocusSessionP³ExpressionStatementÍ7Í7?Q´AssignmentExpressionÍ7Í7>¡=R°MemberExpressionÍ7Í7-R°MemberExpressionÍ7Í7*S®ThisExpressionÍ7Í7"LªIdentifierÍ7#Í7*§sessionÂÂLªIdentifierÍ7+Í7-¢idÂÂR°MemberExpressionÍ70Í7>LªIdentifierÍ70Í74¤snapLªIdentifierÍ75Í7>©sessionIdÂÂP³ExpressionStatementÍ7IÍ7uQ´AssignmentExpressionÍ7IÍ7t¡=R°MemberExpressionÍ7IÍ7\R°MemberExpressionÍ7IÍ7US®ThisExpressionÍ7IÍ7MLªIdentifierÍ7NÍ7U§sessionÂÂLªIdentifierÍ7VÍ7\¦statusÂÂR°MemberExpressionÍ7_Í7tLªIdentifierÍ7_Í7l­SessionStatusLªIdentifierÍ7mÍ7t§RUNNINGÂÂP³ExpressionStatementÍ7Í7±Q´AssignmentExpressionÍ7Í7°¡=R°MemberExpressionÍ7Í7šR°MemberExpressionÍ7Í7‹S®ThisExpressionÍ7Í7ƒLªIdentifierÍ7„Í7‹§sessionÂÂLªIdentifierÍ7ŒÍ7š®perceptionModeÂÂR°MemberExpressionÍ7Í7°LªIdentifierÍ7Í7¡¤snapLªIdentifierÍ7¢Í7°®perceptionModeÂÂP³ExpressionStatementÍ7»Í7åQ´AssignmentExpressionÍ7»Í7ä¡=R°MemberExpressionÍ7»Í7ÎS®ThisExpressionÍ7»Í7¿LªIdentifierÍ7ÀÍ7Î®perceptionModeÂÂR°MemberExpressionÍ7ÑÍ7äLªIdentifierÍ7ÑÍ7Õ¤snapLªIdentifierÍ7ÖÍ7ä®perceptionModeÂÂP³ExpressionStatementÍ7ïÍ8Q´AssignmentExpressionÍ7ïÍ8¡=R°MemberExpressionÍ7ïÍ7üS®ThisExpressionÍ7ïÍ7óLªIdentifierÍ7ôÍ7ü¨totalSecÂÂR°MemberExpressionÍ7ÿÍ8LªIdentifierÍ7ÿÍ8¤snapLªIdentifierÍ8Í8¨totalSecÂÂP³ExpressionStatementÍ8Í85Q´AssignmentExpressionÍ8Í84¡=R°MemberExpressionÍ8Í8$S®ThisExpressionÍ8Í8LªIdentifierÍ8Í8$¨focusSecÂÂR°MemberExpressionÍ8'Í84LªIdentifierÍ8'Í8+¤snapLªIdentifierÍ8,Í84¨focusSecÂÂP³ExpressionStatementÍ8?Í8iQ´AssignmentExpressionÍ8?Í8h¡=R°MemberExpressionÍ8?Í8RS®ThisExpressionÍ8?Í8CLªIdentifierÍ8DÍ8R®distractionSecÂÂR°MemberExpressionÍ8UÍ8hLªIdentifierÍ8UÍ8Y¤snapLªIdentifierÍ8ZÍ8h®distractionSecÂÂP³ExpressionStatementÍ8sÍ8‹Q´AssignmentExpressionÍ8sÍ8Š¡=R°MemberExpressionÍ8sÍ8}S®ThisExpressionÍ8sÍ8wLªIdentifierÍ8xÍ8}¥qaSecÂÂR°MemberExpressionÍ8€Í8ŠLªIdentifierÍ8€Í8„¤snapLªIdentifierÍ8…Í8Š¥qaSecÂÂP³ExpressionStatementÍ8•Í8³Q´AssignmentExpressionÍ8•Í8²¡=R°MemberExpressionÍ8•Í8¢S®ThisExpressionÍ8•Í8™LªIdentifierÍ8šÍ8¢¨breakSecÂÂR°MemberExpressionÍ8¥Í8²LªIdentifierÍ8¥Í8©¤snapLªIdentifierÍ8ªÍ8²¨breakSecÂÂP³ExpressionStatementÍ8½Í8ÕQ´AssignmentExpressionÍ8½Í8Ô¡=R°MemberExpressionÍ8½Í8ÇS®ThisExpressionÍ8½Í8ÁLªIdentifierÍ8ÂÍ8Ç¥stateÂÂR°MemberExpressionÍ8ÊÍ8ÔLªIdentifierÍ8ÊÍ8Î¤snapLªIdentifierÍ8ÏÍ8Ô¥stateÂÂP³ExpressionStatementÍ8ßÍ9 Q´AssignmentExpressionÍ8ßÍ8ÿ¡=R°MemberExpressionÍ8ßÍ8òS®ThisExpressionÍ8ßÍ8ãLªIdentifierÍ8äÍ8ò®stateEnteredAtÂÂ[®CallExpressionÍ8õÍ8ÿR°MemberExpressionÍ8õÍ8ıLªIdentifierÍ8õÍ8ù¤DateLªIdentifierÍ8úÍ8ı£nowÂÂÂP³ExpressionStatementÍ9
+Í9Q´AssignmentExpressionÍ9
+Í9¡=R°MemberExpressionÍ9
+Í9S®ThisExpressionÍ9
+Í9LªIdentifierÍ9Í9§runningÂÂU§LiteralÍ9Í9Ã¤trueP³ExpressionStatementÍ9(Í9EQ´AssignmentExpressionÍ9(Í9D¡=R°MemberExpressionÍ9(Í97S®ThisExpressionÍ9(Í9,LªIdentifierÍ9-Í97ªlastTickAtÂÂ[®CallExpressionÍ9:Í9DR°MemberExpressionÍ9:Í9BLªIdentifierÍ9:Í9>¤DateLªIdentifierÍ9?Í9B£nowÂÂÂP³ExpressionStatementÍ9OÍ9µQ´AssignmentExpressionÍ9OÍ9´¡=R°MemberExpressionÍ9OÍ9ZS®ThisExpressionÍ9OÍ9SLªIdentifierÍ9TÍ9Z¦tickIdÂÂ[®CallExpressionÍ9]Í9´LªIdentifierÍ9]Í9h«setInterval’O·ArrowFunctionExpressionÍ9iÍ9ÀÂÂÂM®BlockStatementÍ9oÍ9‘P³ExpressionStatementÍ9~Í9“[®CallExpressionÍ9~Í9’R°MemberExpressionÍ9~Í9S®ThisExpressionÍ9~Í9‚LªIdentifierÍ9ƒÍ9­recomputeTickÂÂÂR°MemberExpressionÍ9 Í9³LªIdentifierÍ9 Í9««FocusTuningLªIdentifierÍ9¬Í9³§TICK_MSÂÂÂP³ExpressionStatementÍ9¿Í:6Q´AssignmentExpressionÍ9¿Í:5¡=R°MemberExpressionÍ9¿Í9ÎS®ThisExpressionÍ9¿Í9ÃLªIdentifierÍ9ÄÍ9ÎªsnapshotIdÂÂ[®CallExpressionÍ9ÑÍ:5LªIdentifierÍ9ÑÍ9Ü«setInterval’O·ArrowFunctionExpressionÍ9İÍ:ÀÂÂÂM®BlockStatementÍ9ãÍ:‘P³ExpressionStatementÍ9òÍ:[®CallExpressionÍ9òÍ:R°MemberExpressionÍ9òÍ:S®ThisExpressionÍ9òÍ9öLªIdentifierÍ9÷Í:­writeSnapshotÂÂÂR°MemberExpressionÍ:Í:4LªIdentifierÍ:Í:«FocusTuningLªIdentifierÍ: Í:4´SNAPSHOT_INTERVAL_MSÂÂÂP³ExpressionStatementÍ:@Í:P[®CallExpressionÍ:@Í:OR°MemberExpressionÍ:@Í:MS®ThisExpressionÍ:@Í:DLªIdentifierÍ:EÍ:M¨pushLiveÂÂÂX«IfStatementÍ:ZÍ;R°MemberExpressionÍ:^Í:[®CallExpressionÍ:^Í:ˆR°MemberExpressionÍ:^Í:†[®CallExpressionÍ:^Í:}R°MemberExpressionÍ:^Í:{LªIdentifierÍ:^Í:o±PermissionServiceLªIdentifierÍ:pÍ:{«getInstanceÂÂÂLªIdentifierÍ:~Í:†¨snapshotÂÂÂLªIdentifierÍ:‰Í:¦cameraÂÂM®BlockStatementÍ:‘Í;‘P³ExpressionStatementÍ: Í;	[®CallExpressionÍ: Í;R°MemberExpressionÍ: Í:É[®CallExpressionÍ: Í:ÃR°MemberExpressionÍ: Í:ÁLªIdentifierÍ: Í:µµFocusDetectionServiceLªIdentifierÍ:¶Í:Á«getInstanceÂÂÂLªIdentifierÍ:ÄÍ:É¥startÂÂ‘O·ArrowFunctionExpressionÍ:ÊÍ;ÀÂÂÂ‘LªIdentifierÍ:ËÍ:Ì¡rM®BlockStatementÍ:ÑÍ;‘P³ExpressionStatementÍ:äÍ:ø[®CallExpressionÍ:äÍ:÷R°MemberExpressionÍ:äÍ:ôS®ThisExpressionÍ:äÍ:èLªIdentifierÍ:éÍ:ô«onDetectionÂÂ‘LªIdentifierÍ:õÍ:ö¡rÂÂÀP³ExpressionStatementÍ;Í;‚[®CallExpressionÍ;Í;R°MemberExpressionÍ;Í;v[®CallExpressionÍ;Í;pR°MemberExpressionÍ;Í;A[®CallExpressionÍ;Í;:R°MemberExpressionÍ;Í;8LªIdentifierÍ;Í;,®StorageServiceLªIdentifierÍ;-Í;8«getInstanceÂÂÂLªIdentifierÍ;;Í;A¦saveKvÂÂ’R°MemberExpressionÍ;BÍ;^LªIdentifierÍ;BÍ;LªStorageKeyLªIdentifierÍ;MÍ;^±ACTIVE_SESSION_IDÂÂR°MemberExpressionÍ;`Í;oR°MemberExpressionÍ;`Í;lS®ThisExpressionÍ;`Í;dLªIdentifierÍ;eÍ;l§sessionÂÂLªIdentifierÍ;mÍ;o¢idÂÂÂLªIdentifierÍ;qÍ;v¥catchÂÂ‘O·ArrowFunctionExpressionÍ;wÍ;€ÀÂÂÂM®BlockStatementÍ;}Í;€ÂN°MethodDefinitionÍ;§ÍB-ÂÂLªIdentifierÍ;§Í;¯¨finalize¦methodO²FunctionExpressionÍ;¯ÍB-ÀÂÂÂM®BlockStatementÍ;²ÍB-Ü X«IfStatementÍ;½Í<'Y°BinaryExpressionÍ;ÁÍ;ÑR°MemberExpressionÍ;ÁÍ;ÌS®ThisExpressionÍ;ÁÍ;ÅLªIdentifierÍ;ÆÍ;Ì¦tickIdÂÂ¢>=U§LiteralÍ;ĞÍ;Ñ ¡0M®BlockStatementÍ;ÓÍ<'’P³ExpressionStatementÍ;âÍ;ı[®CallExpressionÍ;âÍ;üLªIdentifierÍ;âÍ;ï­clearInterval‘R°MemberExpressionÍ;ğÍ;ûS®ThisExpressionÍ;ğÍ;ôLªIdentifierÍ;õÍ;û¦tickIdÂÂÂP³ExpressionStatementÍ<Í<Q´AssignmentExpressionÍ<Í<¡=R°MemberExpressionÍ<Í<S®ThisExpressionÍ<Í<LªIdentifierÍ<Í<¦tickIdÂÂT¯UnaryExpressionÍ<Í<¡-ÃU§LiteralÍ<Í<¡1ÀX«IfStatementÍ<1Í<§Y°BinaryExpressionÍ<5Í<IR°MemberExpressionÍ<5Í<DS®ThisExpressionÍ<5Í<9LªIdentifierÍ<:Í<DªsnapshotIdÂÂ¢>=U§LiteralÍ<HÍ<I ¡0M®BlockStatementÍ<KÍ<§’P³ExpressionStatementÍ<ZÍ<y[®CallExpressionÍ<ZÍ<xLªIdentifierÍ<ZÍ<g­clearInterval‘R°MemberExpressionÍ<hÍ<wS®ThisExpressionÍ<hÍ<lLªIdentifierÍ<mÍ<wªsnapshotIdÂÂÂP³ExpressionStatementÍ<‡Í<œQ´AssignmentExpressionÍ<‡Í<›¡=R°MemberExpressionÍ<‡Í<–S®ThisExpressionÍ<‡Í<‹LªIdentifierÍ<ŒÍ<–ªsnapshotIdÂÂT¯UnaryExpressionÍ<™Í<›¡-ÃU§LiteralÍ<šÍ<›¡1ÀP³ExpressionStatementÍ<±Í<Ü[®CallExpressionÍ<±Í<ÛR°MemberExpressionÍ<±Í<Ù[®CallExpressionÍ<±Í<ÔR°MemberExpressionÍ<±Í<ÒLªIdentifierÍ<±Í<ÆµFocusDetectionServiceLªIdentifierÍ<ÇÍ<Ò«getInstanceÂÂÂLªIdentifierÍ<ÕÍ<Ù¤stopÂÂÂP³ExpressionStatementÍ<æÍ<ûQ´AssignmentExpressionÍ<æÍ<ú¡=R°MemberExpressionÍ<æÍ<òS®ThisExpressionÍ<æÍ<êLªIdentifierÍ<ëÍ<ò§runningÂÂU§LiteralÍ<õÍ<úÂ¥falseP³ExpressionStatementÍ=Í='Q´AssignmentExpressionÍ=Í=&¡=R°MemberExpressionÍ=Í=R°MemberExpressionÍ=Í=S®ThisExpressionÍ=Í=	LªIdentifierÍ=
+Í=§sessionÂÂLªIdentifierÍ=Í=§endTimeÂÂ[®CallExpressionÍ=Í=&R°MemberExpressionÍ=Í=$LªIdentifierÍ=Í= ¤DateLªIdentifierÍ=!Í=$£nowÂÂÂP³ExpressionStatementÍ=1Í=hQ´AssignmentExpressionÍ=1Í=g¡=R°MemberExpressionÍ=1Í=KR°MemberExpressionÍ=1Í==S®ThisExpressionÍ=1Í=5LªIdentifierÍ=6Í==§sessionÂÂLªIdentifierÍ=>Í=K­totalDurationÂÂ[®CallExpressionÍ=NÍ=gR°MemberExpressionÍ=NÍ=XLªIdentifierÍ=NÍ=R¤MathLªIdentifierÍ=SÍ=X¥floorÂÂ‘R°MemberExpressionÍ=YÍ=fS®ThisExpressionÍ=YÍ=]LªIdentifierÍ=^Í=f¨totalSecÂÂÂP³ExpressionStatementÍ=rÍ=©Q´AssignmentExpressionÍ=rÍ=¨¡=R°MemberExpressionÍ=rÍ=ŒR°MemberExpressionÍ=rÍ=~S®ThisExpressionÍ=rÍ=vLªIdentifierÍ=wÍ=~§sessionÂÂLªIdentifierÍ=Í=Œ­focusDurationÂÂ[®CallExpressionÍ=Í=¨R°MemberExpressionÍ=Í=™LªIdentifierÍ=Í=“¤MathLªIdentifierÍ=”Í=™¥floorÂÂ‘R°MemberExpressionÍ=šÍ=§S®ThisExpressionÍ=šÍ=LªIdentifierÍ=ŸÍ=§¨focusSecÂÂÂP³ExpressionStatementÍ=³Í=öQ´AssignmentExpressionÍ=³Í=õ¡=R°MemberExpressionÍ=³Í=ÓR°MemberExpressionÍ=³Í=¿S®ThisExpressionÍ=³Í=·LªIdentifierÍ=¸Í=¿§sessionÂÂLªIdentifierÍ=ÀÍ=Ó³distractionDurationÂÂ[®CallExpressionÍ=ÖÍ=õR°MemberExpressionÍ=ÖÍ=àLªIdentifierÍ=ÖÍ=Ú¤MathLªIdentifierÍ=ÛÍ=à¥floorÂÂ‘R°MemberExpressionÍ=áÍ=ôS®ThisExpressionÍ=áÍ=åLªIdentifierÍ=æÍ=ô®distractionSecÂÂÂP³ExpressionStatementÍ> Í>1Q´AssignmentExpressionÍ> Í>0¡=R°MemberExpressionÍ> Í>R°MemberExpressionÍ> Í>S®ThisExpressionÍ> Í>LªIdentifierÍ>Í>§sessionÂÂLªIdentifierÍ>Í>ªqaDurationÂÂ[®CallExpressionÍ>Í>0R°MemberExpressionÍ>Í>$LªIdentifierÍ>Í>¤MathLªIdentifierÍ>Í>$¥floorÂÂ‘R°MemberExpressionÍ>%Í>/S®ThisExpressionÍ>%Í>)LªIdentifierÍ>*Í>/¥qaSecÂÂÂP³ExpressionStatementÍ>;Í>rQ´AssignmentExpressionÍ>;Í>q¡=R°MemberExpressionÍ>;Í>UR°MemberExpressionÍ>;Í>GS®ThisExpressionÍ>;Í>?LªIdentifierÍ>@Í>G§sessionÂÂLªIdentifierÍ>HÍ>U­breakDurationÂÂ[®CallExpressionÍ>XÍ>qR°MemberExpressionÍ>XÍ>bLªIdentifierÍ>XÍ>\¤MathLªIdentifierÍ>]Í>b¥floorÂÂ‘R°MemberExpressionÍ>cÍ>pS®ThisExpressionÍ>cÍ>gLªIdentifierÍ>hÍ>p¨breakSecÂÂÂP³ExpressionStatementÍ>|Í>·Q´AssignmentExpressionÍ>|Í>¶¡=R°MemberExpressionÍ>|Í>—R°MemberExpressionÍ>|Í>ˆS®ThisExpressionÍ>|Í>€LªIdentifierÍ>Í>ˆ§sessionÂÂLªIdentifierÍ>‰Í>—®pausedDurationÂÂ[®CallExpressionÍ>šÍ>¶R°MemberExpressionÍ>šÍ>¤LªIdentifierÍ>šÍ>¤MathLªIdentifierÍ>ŸÍ>¤¥floorÂÂ‘R°MemberExpressionÍ>¥Í>µS®ThisExpressionÍ>¥Í>©LªIdentifierÍ>ªÍ>µ«pausedAccumÂÂÂP³ExpressionStatementÍ>ÁÍ>çQ´AssignmentExpressionÍ>ÁÍ>æ¡=R°MemberExpressionÍ>ÁÍ>ÖR°MemberExpressionÍ>ÁÍ>ÍS®ThisExpressionÍ>ÁÍ>ÅLªIdentifierÍ>ÆÍ>Í§sessionÂÂLªIdentifierÍ>ÎÍ>Ö¨timelineÂÂR°MemberExpressionÍ>ÙÍ>æS®ThisExpressionÍ>ÙÍ>İLªIdentifierÍ>ŞÍ>æ¨timelineÂÂP³ExpressionStatementÍ>ñÍ?Q´AssignmentExpressionÍ>ñÍ?¡=R°MemberExpressionÍ>ñÍ?R°MemberExpressionÍ>ñÍ>ıS®ThisExpressionÍ>ñÍ>õLªIdentifierÍ>öÍ>ı§sessionÂÂLªIdentifierÍ>şÍ?¦eventsÂÂR°MemberExpressionÍ?Í?S®ThisExpressionÍ?Í?LªIdentifierÍ?Í?¦eventsÂÂP³ExpressionStatementÍ?Í?oQ´AssignmentExpressionÍ?Í?n¡=R°MemberExpressionÍ?Í?:R°MemberExpressionÍ?Í?)S®ThisExpressionÍ?Í?!LªIdentifierÍ?"Í?)§sessionÂÂLªIdentifierÍ?*Í?:°completedTaskIdsÂÂ[®CallExpressionÍ?=Í?nR°MemberExpressionÍ?=Í?a[®CallExpressionÍ?=Í?]R°MemberExpressionÍ?=Í?NR°MemberExpressionÍ?=Í?GS®ThisExpressionÍ?=Í?ALªIdentifierÍ?BÍ?G¥tasksÂÂLªIdentifierÍ?HÍ?N¦filterÂÂ‘O·ArrowFunctionExpressionÍ?OÍ?\ÀÃÂÂ‘LªIdentifierÍ?PÍ?Q¡tR°MemberExpressionÍ?VÍ?\LªIdentifierÍ?VÍ?W¡tLªIdentifierÍ?XÍ?\¤doneÂÂÂLªIdentifierÍ?^Í?a£mapÂÂ‘O·ArrowFunctionExpressionÍ?bÍ?mÀÃÂÂ‘LªIdentifierÍ?cÍ?d¡tR°MemberExpressionÍ?iÍ?mLªIdentifierÍ?iÍ?j¡tLªIdentifierÍ?kÍ?m¢idÂÂÂP³ExpressionStatementÍ?yÍ?¦Q´AssignmentExpressionÍ?yÍ?¥¡=R°MemberExpressionÍ?yÍ?ŒR°MemberExpressionÍ?yÍ?…S®ThisExpressionÍ?yÍ?}LªIdentifierÍ?~Í?…§sessionÂÂLªIdentifierÍ?†Í?Œ¦statusÂÂR°MemberExpressionÍ?Í?¥LªIdentifierÍ?Í?œ­SessionStatusLªIdentifierÍ?Í?¥¨FINISHEDÂÂP³ExpressionStatementÍ?°Í?ÔQ´AssignmentExpressionÍ?°Í?Ó¡=R°MemberExpressionÍ?°Í?ÆR°MemberExpressionÍ?°Í?¼S®ThisExpressionÍ?°Í?´LªIdentifierÍ?µÍ?¼§sessionÂÂLªIdentifierÍ?½Í?Æ©updatedAtÂÂ[®CallExpressionÍ?ÉÍ?ÓR°MemberExpressionÍ?ÉÍ?ÑLªIdentifierÍ?ÉÍ?Í¤DateLªIdentifierÍ?ÎÍ?Ñ£nowÂÂÂP³ExpressionStatementÍ@Í@)[®CallExpressionÍ@Í@(R°MemberExpressionÍ@Í@[®CallExpressionÍ@Í@R°MemberExpressionÍ@Í@S®ThisExpressionÍ@Í@LªIdentifierÍ@Í@­writeSnapshotÂÂÂLªIdentifierÍ@Í@¥catchÂÂ‘O·ArrowFunctionExpressionÍ@Í@'ÀÂÂÂM®BlockStatementÍ@$Í@'ÂX«IfStatementÍ@3Í@ÔY°BinaryExpressionÍ@7Í@\R°MemberExpressionÍ@7Í@XR°MemberExpressionÍ@7Í@QR°MemberExpressionÍ@7Í@CS®ThisExpressionÍ@7Í@;LªIdentifierÍ@<Í@C§sessionÂÂLªIdentifierÍ@DÍ@Q­interventionsÂÂLªIdentifierÍ@RÍ@X¦lengthÂÂ¡>U§LiteralÍ@[Í@\ ¡0M®BlockStatementÍ@^Í@Ô‘P³ExpressionStatementÍ@mÍ@É[®CallExpressionÍ@mÍ@ÈR°MemberExpressionÍ@mÍ@½[®CallExpressionÍ@mÍ@·R°MemberExpressionÍ@mÍ@›[®CallExpressionÍ@mÍ@‰R°MemberExpressionÍ@mÍ@‡LªIdentifierÍ@mÍ@{®StorageServiceLªIdentifierÍ@|Í@‡«getInstanceÂÂÂLªIdentifierÍ@ŠÍ@›±saveInterventionsÂÂ‘R°MemberExpressionÍ@œÍ@¶R°MemberExpressionÍ@œÍ@¨S®ThisExpressionÍ@œÍ@ LªIdentifierÍ@¡Í@¨§sessionÂÂLªIdentifierÍ@©Í@¶­interventionsÂÂÂLªIdentifierÍ@¸Í@½¥catchÂÂ‘O·ArrowFunctionExpressionÍ@¾Í@ÇÀÂÂÂM®BlockStatementÍ@ÄÍ@ÇÂÀX«IfStatementÍ@ŞÍAY°BinaryExpressionÍ@âÍAR°MemberExpressionÍ@âÍAR°MemberExpressionÍ@âÍ@ûR°MemberExpressionÍ@âÍ@îS®ThisExpressionÍ@âÍ@æLªIdentifierÍ@çÍ@î§sessionÂÂLªIdentifierÍ@ïÍ@û¬taskTimelineÂÂLªIdentifierÍ@üÍA¦lengthÂÂ¡>U§LiteralÍAÍA ¡0M®BlockStatementÍAÍA‘P³ExpressionStatementÍAÍA‚[®CallExpressionÍAÍAR°MemberExpressionÍAÍAv[®CallExpressionÍAÍApR°MemberExpressionÍAÍAD[®CallExpressionÍAÍA3R°MemberExpressionÍAÍA1LªIdentifierÍAÍA%®StorageServiceLªIdentifierÍA&ÍA1«getInstanceÂÂÂLªIdentifierÍA4ÍAD°saveTaskTimelineÂÂ’R°MemberExpressionÍAEÍA^R°MemberExpressionÍAEÍAQS®ThisExpressionÍAEÍAILªIdentifierÍAJÍAQ§sessionÂÂLªIdentifierÍARÍA^¬taskTimelineÂÂR°MemberExpressionÍA`ÍAoR°MemberExpressionÍA`ÍAlS®ThisExpressionÍA`ÍAdLªIdentifierÍAeÍAl§sessionÂÂLªIdentifierÍAmÍAo¢idÂÂÂLªIdentifierÍAqÍAv¥catchÂÂ‘O·ArrowFunctionExpressionÍAwÍA€ÀÂÂÂM®BlockStatementÍA}ÍA€ÂÀP³ExpressionStatementÍA—ÍAî[®CallExpressionÍA—ÍAíR°MemberExpressionÍA—ÍAâ[®CallExpressionÍA—ÍAÜR°MemberExpressionÍA—ÍAº[®CallExpressionÍA—ÍA³R°MemberExpressionÍA—ÍA±LªIdentifierÍA—ÍA¥®StorageServiceLªIdentifierÍA¦ÍA±«getInstanceÂÂÂLªIdentifierÍA´ÍAº¦saveKvÂÂ’R°MemberExpressionÍA»ÍA×LªIdentifierÍA»ÍAÅªStorageKeyLªIdentifierÍAÆÍA×±ACTIVE_SESSION_IDÂÂU§LiteralÍAÙÍAÛ ¢''ÂLªIdentifierÍAİÍAâ¥catchÂÂ‘O·ArrowFunctionExpressionÍAãÍAìÀÂÂÂM®BlockStatementÍAéÍAìÂP³ExpressionStatementÍAøÍB[®CallExpressionÍAøÍBR°MemberExpressionÍAøÍBS®ThisExpressionÍAøÍAüLªIdentifierÍAıÍB¨pushLiveÂÂÂZ¯ReturnStatementÍBÍB&R°MemberExpressionÍBÍB%S®ThisExpressionÍBÍBLªIdentifierÍBÍB%§sessionÂÂN°MethodDefinitionÍB3ÍE“ÂÂLªIdentifierÍB9ÍBF­writeSnapshot¦methodO²FunctionExpressionÍBFÍE“ÀÂÂÃM®BlockStatementÍBIÍE“X«IfStatementÍBTÍBˆT¯UnaryExpressionÍBXÍBe¡!ÃR°MemberExpressionÍBYÍBeS®ThisExpressionÍBYÍB]LªIdentifierÍB^ÍBe§runningÂÂM®BlockStatementÍBgÍBˆ‘Z¯ReturnStatementÍBvÍB}ÀÀ\³VariableDeclarationÍB’ÍBµ‘]²VariableDeclaratorÍB˜ÍB´LªIdentifierÍB˜ÍBœ¤snapV­NewExpressionÍBŸÍB´LªIdentifierÍB£ÍB²¯SessionSnapshot¥constP³ExpressionStatementÍB¿ÍBàQ´AssignmentExpressionÍB¿ÍBß¡=R°MemberExpressionÍB¿ÍBÍLªIdentifierÍB¿ÍBÃ¤snapLªIdentifierÍBÄÍBÍ©sessionIdÂÂR°MemberExpressionÍBĞÍBßR°MemberExpressionÍBĞÍBÜS®ThisExpressionÍBĞÍBÔLªIdentifierÍBÕÍBÜ§sessionÂÂLªIdentifierÍBİÍBß¢idÂÂP³ExpressionStatementÍBêÍBÿQ´AssignmentExpressionÍBêÍBş¡=R°MemberExpressionÍBêÍBñLªIdentifierÍBêÍBî¤snapLªIdentifierÍBïÍBñ¢tsÂÂ[®CallExpressionÍBôÍBşR°MemberExpressionÍBôÍBüLªIdentifierÍBôÍBø¤DateLªIdentifierÍBùÍBü£nowÂÂÂP³ExpressionStatementÍC	ÍC3Q´AssignmentExpressionÍC	ÍC2¡=R°MemberExpressionÍC	ÍCLªIdentifierÍC	ÍC¤snapLªIdentifierÍCÍC¨totalSecÂÂ[®CallExpressionÍCÍC2R°MemberExpressionÍCÍC#LªIdentifierÍCÍC¤MathLªIdentifierÍCÍC#¥floorÂÂ‘R°MemberExpressionÍC$ÍC1S®ThisExpressionÍC$ÍC(LªIdentifierÍC)ÍC1¨totalSecÂÂÂP³ExpressionStatementÍC=ÍCgQ´AssignmentExpressionÍC=ÍCf¡=R°MemberExpressionÍC=ÍCJLªIdentifierÍC=ÍCA¤snapLªIdentifierÍCBÍCJ¨focusSecÂÂ[®CallExpressionÍCMÍCfR°MemberExpressionÍCMÍCWLªIdentifierÍCMÍCQ¤MathLªIdentifierÍCRÍCW¥floorÂÂ‘R°MemberExpressionÍCXÍCeS®ThisExpressionÍCXÍC\LªIdentifierÍC]ÍCe¨focusSecÂÂÂP³ExpressionStatementÍCqÍC§Q´AssignmentExpressionÍCqÍC¦¡=R°MemberExpressionÍCqÍC„LªIdentifierÍCqÍCu¤snapLªIdentifierÍCvÍC„®distractionSecÂÂ[®CallExpressionÍC‡ÍC¦R°MemberExpressionÍC‡ÍC‘LªIdentifierÍC‡ÍC‹¤MathLªIdentifierÍCŒÍC‘¥floorÂÂ‘R°MemberExpressionÍC’ÍC¥S®ThisExpressionÍC’ÍC–LªIdentifierÍC—ÍC¥®distractionSecÂÂÂP³ExpressionStatementÍC±ÍCÕQ´AssignmentExpressionÍC±ÍCÔ¡=R°MemberExpressionÍC±ÍC»LªIdentifierÍC±ÍCµ¤snapLªIdentifierÍC¶ÍC»¥qaSecÂÂ[®CallExpressionÍC¾ÍCÔR°MemberExpressionÍC¾ÍCÈLªIdentifierÍC¾ÍCÂ¤MathLªIdentifierÍCÃÍCÈ¥floorÂÂ‘R°MemberExpressionÍCÉÍCÓS®ThisExpressionÍCÉÍCÍLªIdentifierÍCÎÍCÓ¥qaSecÂÂÂP³ExpressionStatementÍCßÍD	Q´AssignmentExpressionÍCßÍD¡=R°MemberExpressionÍCßÍCìLªIdentifierÍCßÍCã¤snapLªIdentifierÍCäÍCì¨breakSecÂÂ[®CallExpressionÍCïÍDR°MemberExpressionÍCïÍCùLªIdentifierÍCïÍCó¤MathLªIdentifierÍCôÍCù¥floorÂÂ‘R°MemberExpressionÍCúÍDS®ThisExpressionÍCúÍCşLªIdentifierÍCÿÍD¨breakSecÂÂÂP³ExpressionStatementÍDÍD;Q´AssignmentExpressionÍDÍD:¡=R°MemberExpressionÍDÍD%LªIdentifierÍDÍD¤snapLªIdentifierÍDÍD%­currentTaskIdÂÂR°MemberExpressionÍD(ÍD:S®ThisExpressionÍD(ÍD,LªIdentifierÍD-ÍD:­currentTaskIdÂÂP³ExpressionStatementÍDEÍD]Q´AssignmentExpressionÍDEÍD\¡=R°MemberExpressionÍDEÍDOLªIdentifierÍDEÍDI¤snapLªIdentifierÍDJÍDO¥stateÂÂR°MemberExpressionÍDRÍD\S®ThisExpressionÍDRÍDVLªIdentifierÍDWÍD\¥stateÂÂP³ExpressionStatementÍDgÍD‘Q´AssignmentExpressionÍDgÍD¡=R°MemberExpressionÍDgÍDzLªIdentifierÍDgÍDk¤snapLªIdentifierÍDlÍDz®perceptionModeÂÂR°MemberExpressionÍD}ÍDS®ThisExpressionÍD}ÍDLªIdentifierÍD‚ÍD®perceptionModeÂÂÔr`–¤type¥start£end¥block§handler©finalizer¬TryStatementÍD›ÍEŒM®BlockStatementÍDŸÍER“P³ExpressionStatementÍD®ÍDäZ¯AwaitExpressionÍD®ÍDã[®CallExpressionÍD´ÍDãR°MemberExpressionÍD´ÍDİ[®CallExpressionÍD´ÍDĞR°MemberExpressionÍD´ÍDÎLªIdentifierÍD´ÍDÂ®StorageServiceLªIdentifierÍDÃÍDÎ«getInstanceÂÂÂLªIdentifierÍDÑÍDİ¬saveSnapshotÂÂ‘LªIdentifierÍDŞÍDâ¤snapÂP³ExpressionStatementÍDòÍEQ´AssignmentExpressionÍDòÍE¢+=R°MemberExpressionÍDòÍER°MemberExpressionÍDòÍDşS®ThisExpressionÍDòÍDöLªIdentifierÍD÷ÍDş§sessionÂÂLªIdentifierÍDÿÍE®snapshotsCountÂÂU§LiteralÍEÍE¡1P³ExpressionStatementÍE!ÍEGQ´AssignmentExpressionÍE!ÍEF¡=R°MemberExpressionÍE!ÍE<R°MemberExpressionÍE!ÍE-S®ThisExpressionÍE!ÍE%LªIdentifierÍE&ÍE-§sessionÂÂLªIdentifierÍE.ÍE<®lastSnapshotAtÂÂR°MemberExpressionÍE?ÍEFLªIdentifierÍE?ÍEC¤snapLªIdentifierÍEDÍEF¢tsÂÂÔra•¤type¥start£end¥param¤body«CatchClauseÍE\ÍEŒLªIdentifierÍEcÍEd¡eM®BlockStatementÍEfÍEŒÀN°MethodDefinitionÍE™ÍGAÂÂLªIdentifierÍE™ÍE¡¨pushLive¦methodO²FunctionExpressionÍE¡ÍGAÀÂÂÂM®BlockStatementÍE¤ÍGA•P³ExpressionStatementÍE¯ÍEû[®CallExpressionÍE¯ÍEúR°MemberExpressionÍE¯ÍEÅLªIdentifierÍE¯ÍE¹ªAppStorageLªIdentifierÍEºÍEÅ«setOrCreateÂÂ’R°MemberExpressionÍEÆÍEŞLªIdentifierÍEÆÍEĞªStorageKeyLªIdentifierÍEÑÍEŞ­FOCUS_ELAPSEDÂÂ[®CallExpressionÍEàÍEùR°MemberExpressionÍEàÍEêLªIdentifierÍEàÍEä¤MathLªIdentifierÍEåÍEê¥floorÂÂ‘R°MemberExpressionÍEëÍEøS®ThisExpressionÍEëÍEïLªIdentifierÍEğÍEø¨totalSecÂÂÂÂP³ExpressionStatementÍFÍFM[®CallExpressionÍFÍFLR°MemberExpressionÍFÍFLªIdentifierÍFÍFªAppStorageLªIdentifierÍFÍF«setOrCreateÂÂ’R°MemberExpressionÍFÍF0LªIdentifierÍFÍF&ªStorageKeyLªIdentifierÍF'ÍF0©FOCUS_NETÂÂ[®CallExpressionÍF2ÍFKR°MemberExpressionÍF2ÍF<LªIdentifierÍF2ÍF6¤MathLªIdentifierÍF7ÍF<¥floorÂÂ‘R°MemberExpressionÍF=ÍFJS®ThisExpressionÍF=ÍFALªIdentifierÍFBÍFJ¨focusSecÂÂÂÂP³ExpressionStatementÍFWÍF’[®CallExpressionÍFWÍF‘R°MemberExpressionÍFWÍFmLªIdentifierÍFWÍFaªAppStorageLªIdentifierÍFbÍFm«setOrCreateÂÂ’R°MemberExpressionÍFnÍF„LªIdentifierÍFnÍFxªStorageKeyLªIdentifierÍFyÍF„«FOCUS_STATEÂÂR°MemberExpressionÍF†ÍFS®ThisExpressionÍF†ÍFŠLªIdentifierÍF‹ÍF¥stateÂÂÂP³ExpressionStatementÍFœÍFè[®CallExpressionÍFœÍFçR°MemberExpressionÍFœÍF²LªIdentifierÍFœÍF¦ªAppStorageLªIdentifierÍF§ÍF²«setOrCreateÂÂ’R°MemberExpressionÍF³ÍFÎLªIdentifierÍF³ÍF½ªStorageKeyLªIdentifierÍF¾ÍFÎ°FOCUS_QA_ELAPSEDÂÂ[®CallExpressionÍFĞÍFæR°MemberExpressionÍFĞÍFÚLªIdentifierÍFĞÍFÔ¤MathLªIdentifierÍFÕÍFÚ¥floorÂÂ‘R°MemberExpressionÍFÛÍFåS®ThisExpressionÍFÛÍFßLªIdentifierÍFàÍFå¥qaSecÂÂÂÂP³ExpressionStatementÍFòÍG:[®CallExpressionÍFòÍG9R°MemberExpressionÍFòÍGLªIdentifierÍFòÍFüªAppStorageLªIdentifierÍFıÍG«setOrCreateÂÂ’R°MemberExpressionÍG	ÍG#LªIdentifierÍG	ÍGªStorageKeyLªIdentifierÍGÍG#¯PERCEPTION_MODEÂÂR°MemberExpressionÍG%ÍG8S®ThisExpressionÍG%ÍG)LªIdentifierÍG*ÍG8®perceptionModeÂÂÂÀ›Ôrb•¤type¥start£endªspecifiers¦source±ImportDeclaration <’Ôrc•¤type¥start£end¨imported¥local¯ImportSpecifier	LªIdentifier	ªFocusStateLªIdentifier	ªFocusStatec¯ImportSpecifier"LªIdentifier"­SessionStatusLªIdentifier"­SessionStatusU§Literal*;¯../models/Enums±'../models/Enums'b±ImportDeclaration>Ì”“c¯ImportSpecifierÌGÌSLªIdentifierÌGÌS¬FocusSessionLªIdentifierÌGÌS¬FocusSessionc¯ImportSpecifierÌUÌ_LªIdentifierÌUÌ_ªFocusEventLªIdentifierÌUÌ_ªFocusEventc¯ImportSpecifierÌaÌsLªIdentifierÌaÌs²FocusTimelinePointLªIdentifierÌaÌs²FocusTimelinePointU§LiteralÌ{Ì“¶../models/FocusSession¸'../models/FocusSession'b±ImportDeclarationÌ–ÌÒ‘c¯ImportSpecifierÌŸÌ®LªIdentifierÌŸÌ®¯SessionSnapshotLªIdentifierÌŸÌ®¯SessionSnapshotU§LiteralÌ¶ÌÑ¹../models/SessionSnapshot»'../models/SessionSnapshot'b±ImportDeclarationÌÔÍ‘c¯ImportSpecifierÌİÌçLªIdentifierÌİÌçªStorageKeyLªIdentifierÌİÌçªStorageKeyU§LiteralÌïÍ³../common/Constantsµ'../common/Constants'b±ImportDeclarationÍÍ;‘c¯ImportSpecifierÍÍLªIdentifierÍÍ«FocusTuningLªIdentifierÍÍ«FocusTuningU§LiteralÍ#Í:µ../common/FocusTuning·'../common/FocusTuning'b±ImportDeclarationÍ=Íu‘c¯ImportSpecifierÍFÍWLªIdentifierÍFÍW±PermissionServiceLªIdentifierÍFÍW±PermissionServiceU§LiteralÍ_Ít³./PermissionServiceµ'./PermissionService'b±ImportDeclarationÍwÍ©‘c¯ImportSpecifierÍ€ÍLªIdentifierÍ€Í®StorageServiceLªIdentifierÍ€Í®StorageServiceU§LiteralÍ–Í¨°./StorageService²'./StorageService'b±ImportDeclarationÍ«Íë‘c¯ImportSpecifierÍ´ÍÉLªIdentifierÍ´ÍÉµFocusDetectionServiceLªIdentifierÍ´ÍÉµFocusDetectionServiceU§LiteralÍÑÍê·./FocusDetectionService¹'./FocusDetectionService'b±ImportDeclarationÍíÍ‘c¯ImportSpecifierÍöÍLªIdentifierÍöÍ­SensorServiceLªIdentifierÍöÍ­SensorServiceU§LiteralÍÍ¯./SensorService±'./SensorService'b±ImportDeclarationÍÍY‘c¯ImportSpecifierÍ(Í:LªIdentifierÍ(Í:²InterventionEngineLªIdentifierÍ(Í:²InterventionEngineU§LiteralÍBÍX´./InterventionEngine¶'./InterventionEngine'b±ImportDeclarationÍ[Í†‘c¯ImportSpecifierÍdÍkLªIdentifierÍdÍk§IdUtilsLªIdentifierÍdÍk§IdUtilsU§LiteralÍsÍ…°../utils/IdUtils²'../utils/IdUtils'

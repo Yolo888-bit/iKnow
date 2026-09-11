@@ -4,8 +4,10 @@ import { AIMessage } from '../models/AIMessage'
 import { MessageRole } from '../models/Enums'
 import { IdUtils } from '../utils/IdUtils'
 import { AITag } from '../components/AITag'
+import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
 
 /** AI 学伴 —— 长期关系建立页 */
+@Entry
 @Component
 export struct AICompanion {
   @State messages: AIMessage[] = []
@@ -155,6 +157,7 @@ export struct AICompanion {
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+    AIFirstDisclaimer()
     }
     .width('100%')
     .height('100%')

@@ -2,21 +2,25 @@ import { router } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
-import { AIService } from '../services/AIService'
+import { PermissionService } from '../services/PermissionService'
 import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
 import { TaskCard } from '../components/TaskCard'
-import { CircularProgress } from '../components/CircularProgress'
 
 /** 首页 / 今日专注 */
 @Component
 export struct Home {
   @StorageProp(StorageKey.USER_NICKNAME) nickname: string = '刘灿'
+  @StorageProp(StorageKey.EXAM_DAYS) examDays: number = 0
   @StorageProp(StorageKey.TODAY_FOCUS_SEC) todayFocus: number = 0
   @StorageProp(StorageKey.FOCUS_RATE) focusRate: number = 0
+  @StorageProp(StorageKey.TODAY_DONE_TASKS) todayDone: number = 0
+  @StorageProp(StorageKey.TODAY_TOTAL_TASKS) todayTotal: number = 0
   @StorageProp(StorageKey.DATA_VERSION) @Watch('refreshPlan') dataVersion: number = 0
+  @State goalTitle: string = '考研上岸'
+  @State examType: string = '考研'
+  @State completionRate: number = 0
   @State plan: Task[] = []
-  @State showProactive: boolean = true
 
   aboutToAppear(): void {
     this.refreshPlan()
@@ -24,34 +28,55 @@ export struct Home {
 
   refreshPlan(): void {
     this.plan = AppStore.getInstance().getCurrentPlan()
-  }
-
-  private deltaText(): string {
-    const trend = AppStore.getInstance().getDashboard().weekTrend
-    if (trend.length < 2) {
-      return '新的一天，慢慢来'
-    }
-    const today = trend[trend.length - 1]
-    const yest = trend[trend.length - 2]
-    if (yest <= 0) {
-      return '新的一天，慢慢来'
-    }
-    const d = Math.round((today - yest) / yest * 100)
-    if (d > 0) {
-      return `↑ 比昨天提升 ${d}%`
-    }
-    if (d < 0) {
-      return '比昨天稍少一点，没关系'
-    }
-    return '和昨天持平，很稳'
+    const goal = AppStore.getInstance().getGoal()
+    this.goalTitle = goal.title
+    this.examType = goal.examType
+    this.completionRate = this.todayTotal > 0 ? Math.round(this.todayDone / this.todayTotal * 100) : 0
   }
 
   private startFocus(): void {
     if (this.plan.length === 0) {
       router.pushUrl({ url: 'pages/TaskPlanning' })
-    } else {
-      router.pushUrl({ url: 'pages/Focus' })
+      return
     }
+    // 摄像头感知授权前置：已授权直接使用；未授权弹出选择，拒绝则降级仅计时模式
+    if (PermissionService.getInstance().isCameraOn()) {
+      router.pushUrl({ url: 'pages/Focus' })
+      return
+    }
+    AlertDialog.show({
+      title: '开启摄像头感知？',
+      message: '开启后，我会用前置摄像头在本地感知你的专注状态，全程不出端、不上传。你也可以选择仅计时模式。',
+      primaryButton: {
+        value: '开启感知',
+        action: () => {
+          PermissionService.getInstance().grant('camera')
+          router.pushUrl({ url: 'pages/Focus' })
+        }
+      },
+      secondaryButton: {
+        value: '仅计时开始',
+        action: () => {
+          router.pushUrl({ url: 'pages/Focus' })
+        }
+      }
+    })
+  }
+
+  @Builder
+  statTile(value: string, label: string) {
+    Column() {
+      Text(value)
+        .fontSize(22)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Colors.TEXT_PRIMARY)
+      Text(label)
+        .fontSize(12)
+        .fontColor(Colors.TEXT_SECONDARY)
+        .margin({ top: 4 })
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Center)
   }
 
   build() {
@@ -89,67 +114,129 @@ export struct Home {
         }
         .width('100%')
 
-        // 今日专注数据
+        // 今日目标（点击进入目标编辑 / 规划）
         Column() {
           Row() {
-            CircularProgress({ percent: this.focusRate, boxSize: 132, label: '净专注率' })
-            Column() {
-              Text('今日已专注').fontSize(13).fontColor(Colors.TEXT_SECONDARY)
-              Text(TimeUtils.formatHMin(this.todayFocus))
-                .fontSize(28)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(Colors.TEXT_PRIMARY)
-                .margin({ top: 6 })
-              Text(this.deltaText())
-                .fontSize(12)
-                .fontColor(Colors.PRIMARY_DARK)
-                .margin({ top: 6 })
-            }
-            .alignItems(HorizontalAlign.Start)
-            .margin({ left: 24 })
-            .layoutWeight(1)
+            Text('今日目标')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Blank()
+            Text('编辑 ›')
+              .fontSize(13)
+              .fontColor(Colors.PRIMARY_DARK)
           }
           .width('100%')
-          .padding(20)
+
+          Row({ space: 16 }) {
+            Column() {
+              Text(this.examType)
+                .fontSize(20)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Colors.PRIMARY_DARK)
+              Text(this.goalTitle)
+                .fontSize(13)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ top: 4 })
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+
+            Column() {
+              Text(`${this.examDays}`)
+                .fontSize(28)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text('天')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+            }
+            .alignItems(HorizontalAlign.Center)
+          }
+          .width('100%')
+          .margin({ top: 12 })
         }
         .width('100%')
+        .padding(20)
         .backgroundColor(Colors.CARD)
         .borderRadius(Radius.LG)
+        .onClick(() => {
+          router.pushUrl({ url: 'pages/TaskPlanning' })
+        })
 
-        // 当前学习任务
+        // 今日任务
         Column() {
-          Text('当前学习任务')
+          Row() {
+            Text('今日任务')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Blank()
+            Text(`${this.plan.length === 0 ? '待规划' : this.plan.length + ' 项'}`)
+              .fontSize(13)
+              .fontColor(Colors.TEXT_SECONDARY)
+          }
+          .width('100%')
+          .margin({ bottom: 12 })
+
+          if (this.plan.length === 0) {
+            Column() {
+              Text('还没有今日计划')
+                .fontSize(15)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text('点这里，让小伴帮你规划今天')
+                .fontSize(13)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ top: 6 })
+            }
+            .width('100%')
+            .padding(20)
+            .backgroundColor(Colors.CARD)
+            .borderRadius(Radius.MD)
+            .onClick(() => {
+              router.pushUrl({ url: 'pages/TaskPlanning' })
+            })
+          } else {
+            Column({ space: Spacing.SM }) {
+              ForEach(this.plan, (task: Task) => {
+                TaskCard({
+                  title: task.title,
+                  subject: task.subject,
+                  minutes: task.estimatedDuration,
+                  done: task.done,
+                  showCheckbox: true,
+                  onToggle: () => {
+                    AppStore.getInstance().togglePlanTask(task.id)
+                    this.plan = AppStore.getInstance().getCurrentPlan()
+                  }
+                })
+              }, (task: Task) => task.id)
+            }
+            .width('100%')
+          }
+        }
+        .width('100%')
+
+        // 今日数据
+        Column() {
+          Text('今日数据')
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
-            .margin({ bottom: 12 })
+            .margin({ bottom: 14 })
 
-          if (this.plan.length === 0) {
-            Text('还没有今日计划，去规划一个吧')
-              .fontSize(14)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .width('100%')
-              .padding(20)
-              .backgroundColor(Colors.CARD)
-              .borderRadius(Radius.MD)
-          } else {
-            ForEach(this.plan.slice(0, 3), (task: Task) => {
-              TaskCard({
-                title: task.title,
-                subject: task.subject,
-                minutes: task.estimatedDuration,
-                done: task.done,
-                showCheckbox: true,
-                onToggle: () => {
-                  AppStore.getInstance().togglePlanTask(task.id)
-                  this.plan = AppStore.getInstance().getCurrentPlan()
-                }
-              })
-            }, (task: Task) => task.id)
+          Row({ space: 8 }) {
+            this.statTile(`${this.focusRate}%`, '净专注率')
+            this.statTile(TimeUtils.formatHMin(this.todayFocus), '今日专注时长')
+            this.statTile(`${this.completionRate}%`, '任务完成率')
           }
+          .width('100%')
         }
         .width('100%')
+        .padding(20)
+        .backgroundColor(Colors.CARD)
+        .borderRadius(Radius.LG)
 
         // 主操作按钮
         Button('开始专注')
@@ -163,57 +250,6 @@ export struct Home {
           .onClick(() => {
             this.startFocus()
           })
-
-        // AI 主动建议
-        if (this.showProactive) {
-          Column() {
-            Row() {
-              Text('💡 小伴发现').fontSize(13).fontColor(Colors.PRIMARY_DARK)
-              Blank()
-              Text('稍后')
-                .fontSize(13)
-                .fontColor(Colors.TEXT_TERTIARY)
-                .onClick(() => {
-                  this.showProactive = false
-                })
-            }
-            .width('100%')
-
-            Text(AIService.getInstance().proactive(AppStore.getInstance().getProfile().bestFocusTime))
-              .fontSize(15)
-              .fontColor(Colors.TEXT_PRIMARY)
-              .lineHeight(22)
-              .margin({ top: 10 })
-
-            Row() {
-              Button('开始')
-                .fontSize(14)
-                .fontColor(Color.White)
-                .backgroundColor(Colors.PRIMARY)
-                .height(36)
-                .borderRadius(18)
-                .onClick(() => {
-                  this.showProactive = false
-                  router.pushUrl({ url: 'pages/TaskPlanning' })
-                })
-              Button('稍后')
-                .fontSize(14)
-                .fontColor(Colors.TEXT_SECONDARY)
-                .backgroundColor(Colors.CARD)
-                .height(36)
-                .borderRadius(18)
-                .margin({ left: 12 })
-                .onClick(() => {
-                  this.showProactive = false
-                })
-            }
-            .margin({ top: 12 })
-          }
-          .width('100%')
-          .padding(16)
-          .backgroundColor(Colors.PRIMARY_SOFT)
-          .borderRadius(Radius.MD)
-        }
 
         Blank().height(20)
       }

@@ -24,6 +24,18 @@ export class StorageKey {
     static readonly CAMERA_ON = 'ik_camera_on';
     // 当前计划
     static readonly CURRENT_PLAN = 'ik_current_plan_json';
+    // 分项授权（PRD §17 全局唯一事实源，落库）
+    static readonly AUTHORIZATION = 'ik_authorization_json';
+    // 感知模式：PERCEPTION_FULL / PERCEPTION_TIMER_ONLY（关闭摄像头后降级）
+    static readonly PERCEPTION_MODE = 'ik_perception_mode';
+    // 指标最小样本数（§5/§6 N>=3），冗余缓存到 AppStorage 以便 UI 直接读取
+    static readonly METRICS_MIN_SAMPLES = 'ik_metrics_min_samples';
+    // AI 智能体标识（所有 AI 页面顶部展示）
+    static readonly AI_AGENT_TAG = 'ik_ai_agent_tag';
+    // AI 智能体首次非真人声明是否已展示（全局仅一次）
+    static readonly AI_DISCLAIMER_SHOWN = 'ik_ai_disclaimer_shown';
+    // 进行中会话 id（持久化到库，用于崩溃/后台恢复，硬规则 §7）
+    static readonly ACTIVE_SESSION_ID = 'ik_active_session_id';
 }
 export class Product {
     static readonly COMPANION_NAME = '小伴';

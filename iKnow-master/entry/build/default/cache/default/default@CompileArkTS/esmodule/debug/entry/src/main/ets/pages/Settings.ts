@@ -76,7 +76,7 @@ export class Settings extends ViewPU {
     private selectPersona(key: AIPersonality): void {
         this.personality = key;
         AppStore.getInstance().saveUserPersonality(key);
-        promptAction.showToast({ message: '已切换学伴人格' });
+        promptAction.showToast({ message: '已切换考伴人格' });
     }
     private doClearAll(): void {
         this.showClearConfirm = false;
@@ -110,12 +110,12 @@ export class Settings extends ViewPU {
         }, Text);
         Text.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            // AI 学伴人格
+            // AI 考伴人格
             Column.create();
             __Column__settingCard();
         }, Column);
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('AI 学伴人格');
+            Text.create('AI 考伴人格');
             Text.fontSize(16);
             Text.fontWeight(FontWeight.Medium);
             Text.fontColor(Colors.TEXT_PRIMARY);
@@ -181,7 +181,7 @@ export class Settings extends ViewPU {
             this.forEachUpdateFunction(elmtId, this.personas, forEachItemGenFunction, (p: PersonaOption) => p.label, false, false);
         }, ForEach);
         ForEach.pop();
-        // AI 学伴人格
+        // AI 考伴人格
         Column.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
             // 数据清除（合规必备：一键清除 + 二次确认）
@@ -221,7 +221,7 @@ export class Settings extends ViewPU {
         // 数据清除（合规必备：一键清除 + 二次确认）
         Column.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('iKnow · 专注感知智能学伴 v1.0.0');
+            Text.create('iKnow · 专注感知智能考伴 v1.0.0');
             Text.fontSize(12);
             Text.fontColor(Colors.TEXT_TERTIARY);
             Text.width('100%');

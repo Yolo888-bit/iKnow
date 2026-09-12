@@ -3,6 +3,8 @@ if (!("finalizeConstruction" in ViewPU.prototype)) {
 }
 interface Dashboard_Params {
     examDays?: number;
+    nickname?: string;
+    avatar?: string;
     todayDone?: number;
     todayTotal?: number;
     weekFocus?: number;
@@ -11,18 +13,18 @@ interface Dashboard_Params {
     weekTrend?: number[];
     subjects?: SubjectProgress[];
     examType?: string;
-    hardestSubject?: string;
-    aiInsight?: string;
+    greeting?: string;
+    showAvatarSheet?: boolean;
     weekLabels?: string[];
 }
 import { Colors, Radius, Spacing } from "@normalized:N&&&entry/src/main/ets/common/Theme&";
 import { StorageKey } from "@normalized:N&&&entry/src/main/ets/common/Constants&";
 import { AppStore } from "@normalized:N&&&entry/src/main/ets/store/AppStore&";
 import { TimeUtils } from "@normalized:N&&&entry/src/main/ets/utils/TimeUtils&";
-import { AIService } from "@normalized:N&&&entry/src/main/ets/services/AIService&";
 import { BarChart } from "@normalized:N&&&entry/src/main/ets/components/BarChart&";
 import type { SubjectProgress } from '../models/Dashboard';
-import { AITag } from "@normalized:N&&&entry/src/main/ets/components/AITag&";
+import { UserAvatar } from "@normalized:N&&&entry/src/main/ets/components/UserAvatar&";
+import { AvatarPicker } from "@normalized:N&&&entry/src/main/ets/components/AvatarPicker&";
 export class Dashboard extends ViewPU {
     constructor(parent, params, __localStorage, elmtId = -1, paramsLambda = undefined, extraInfo) {
         super(parent, __localStorage, elmtId, extraInfo);
@@ -30,6 +32,8 @@ export class Dashboard extends ViewPU {
             this.paramsGenerator_ = paramsLambda;
         }
         this.__examDays = this.createStorageProp(StorageKey.EXAM_DAYS, 0, "examDays");
+        this.__nickname = this.createStorageProp(StorageKey.USER_NICKNAME, '', "nickname");
+        this.__avatar = this.createStorageProp(StorageKey.USER_AVATAR, '🧑‍🎓', "avatar");
         this.__todayDone = this.createStorageProp(StorageKey.TODAY_DONE_TASKS, 0, "todayDone");
         this.__todayTotal = this.createStorageProp(StorageKey.TODAY_TOTAL_TASKS, 0, "todayTotal");
         this.__weekFocus = this.createStorageProp(StorageKey.WEEK_FOCUS_SEC, 0, "weekFocus");
@@ -38,8 +42,8 @@ export class Dashboard extends ViewPU {
         this.__weekTrend = new ObservedPropertyObjectPU([], this, "weekTrend");
         this.__subjects = new ObservedPropertyObjectPU([], this, "subjects");
         this.__examType = new ObservedPropertySimplePU('考研', this, "examType");
-        this.__hardestSubject = new ObservedPropertySimplePU('综合', this, "hardestSubject");
-        this.__aiInsight = new ObservedPropertySimplePU('', this, "aiInsight");
+        this.__greeting = new ObservedPropertySimplePU('', this, "greeting");
+        this.__showAvatarSheet = new ObservedPropertySimplePU(false, this, "showAvatarSheet");
         this.weekLabels = ['一', '二', '三', '四', '五', '六', '日'];
         this.setInitiallyProvidedValue(params);
         this.declareWatch("dataVersion", this.refresh);
@@ -55,11 +59,11 @@ export class Dashboard extends ViewPU {
         if (params.examType !== undefined) {
             this.examType = params.examType;
         }
-        if (params.hardestSubject !== undefined) {
-            this.hardestSubject = params.hardestSubject;
+        if (params.greeting !== undefined) {
+            this.greeting = params.greeting;
         }
-        if (params.aiInsight !== undefined) {
-            this.aiInsight = params.aiInsight;
+        if (params.showAvatarSheet !== undefined) {
+            this.showAvatarSheet = params.showAvatarSheet;
         }
         if (params.weekLabels !== undefined) {
             this.weekLabels = params.weekLabels;
@@ -69,6 +73,8 @@ export class Dashboard extends ViewPU {
     }
     purgeVariableDependenciesOnElmtId(rmElmtId) {
         this.__examDays.purgeDependencyOnElmtId(rmElmtId);
+        this.__nickname.purgeDependencyOnElmtId(rmElmtId);
+        this.__avatar.purgeDependencyOnElmtId(rmElmtId);
         this.__todayDone.purgeDependencyOnElmtId(rmElmtId);
         this.__todayTotal.purgeDependencyOnElmtId(rmElmtId);
         this.__weekFocus.purgeDependencyOnElmtId(rmElmtId);
@@ -77,11 +83,13 @@ export class Dashboard extends ViewPU {
         this.__weekTrend.purgeDependencyOnElmtId(rmElmtId);
         this.__subjects.purgeDependencyOnElmtId(rmElmtId);
         this.__examType.purgeDependencyOnElmtId(rmElmtId);
-        this.__hardestSubject.purgeDependencyOnElmtId(rmElmtId);
-        this.__aiInsight.purgeDependencyOnElmtId(rmElmtId);
+        this.__greeting.purgeDependencyOnElmtId(rmElmtId);
+        this.__showAvatarSheet.purgeDependencyOnElmtId(rmElmtId);
     }
     aboutToBeDeleted() {
         this.__examDays.aboutToBeDeleted();
+        this.__nickname.aboutToBeDeleted();
+        this.__avatar.aboutToBeDeleted();
         this.__todayDone.aboutToBeDeleted();
         this.__todayTotal.aboutToBeDeleted();
         this.__weekFocus.aboutToBeDeleted();
@@ -90,8 +98,8 @@ export class Dashboard extends ViewPU {
         this.__weekTrend.aboutToBeDeleted();
         this.__subjects.aboutToBeDeleted();
         this.__examType.aboutToBeDeleted();
-        this.__hardestSubject.aboutToBeDeleted();
-        this.__aiInsight.aboutToBeDeleted();
+        this.__greeting.aboutToBeDeleted();
+        this.__showAvatarSheet.aboutToBeDeleted();
         SubscriberManager.Get().delete(this.id__());
         this.aboutToBeDeletedInternal();
     }
@@ -101,6 +109,20 @@ export class Dashboard extends ViewPU {
     }
     set examDays(newValue: number) {
         this.__examDays.set(newValue);
+    }
+    private __nickname: ObservedPropertyAbstractPU<string>;
+    get nickname() {
+        return this.__nickname.get();
+    }
+    set nickname(newValue: string) {
+        this.__nickname.set(newValue);
+    }
+    private __avatar: ObservedPropertyAbstractPU<string>;
+    get avatar() {
+        return this.__avatar.get();
+    }
+    set avatar(newValue: string) {
+        this.__avatar.set(newValue);
     }
     private __todayDone: ObservedPropertyAbstractPU<number>;
     get todayDone() {
@@ -158,42 +180,36 @@ export class Dashboard extends ViewPU {
     set examType(newValue: string) {
         this.__examType.set(newValue);
     }
-    private __hardestSubject: ObservedPropertySimplePU<string>;
-    get hardestSubject() {
-        return this.__hardestSubject.get();
+    private __greeting: ObservedPropertySimplePU<string>;
+    get greeting() {
+        return this.__greeting.get();
     }
-    set hardestSubject(newValue: string) {
-        this.__hardestSubject.set(newValue);
+    set greeting(newValue: string) {
+        this.__greeting.set(newValue);
     }
-    private __aiInsight: ObservedPropertySimplePU<string>;
-    get aiInsight() {
-        return this.__aiInsight.get();
+    private __showAvatarSheet: ObservedPropertySimplePU<boolean>;
+    get showAvatarSheet() {
+        return this.__showAvatarSheet.get();
     }
-    set aiInsight(newValue: string) {
-        this.__aiInsight.set(newValue);
+    set showAvatarSheet(newValue: boolean) {
+        this.__showAvatarSheet.set(newValue);
     }
     private weekLabels: string[];
     aboutToAppear(): void {
         this.refresh();
     }
+    /** 顶部问候语（按当前时间）+ 登录用户名 */
+    private displayName(): string {
+        const n = this.nickname.length > 0 ? this.nickname : AppStore.getInstance().getUser().nickname;
+        return n.length > 0 ? n : '同学';
+    }
     refresh(): void {
+        this.greeting = TimeUtils.greeting(Date.now());
         const store = AppStore.getInstance();
         const d = store.getDashboard();
         this.weekTrend = d.weekTrend;
         this.subjects = d.subjectProgress;
         this.examType = store.getGoal().examType;
-        // 最薄弱学科 = 进度最低者，供 AI 洞察引用（指标统一走 AppStore 聚合）
-        let minP = 101;
-        let hard = '综合';
-        for (const sp of this.subjects) {
-            if (sp.percent < minP) {
-                minP = sp.percent;
-                hard = sp.subject;
-            }
-        }
-        this.hardestSubject = hard;
-        // 动态 AI 内容必须经 AI 服务返回（硬规则 §1）
-        this.aiInsight = AIService.getInstance().longTermAnalysis(store.getProfile(), this.hardestSubject);
     }
     sectionTitle(title: string, parent = null) {
         this.observeComponentCreation2((elmtId, isInitialRender) => {
@@ -208,6 +224,11 @@ export class Dashboard extends ViewPU {
     }
     initialRender() {
         this.observeComponentCreation2((elmtId, isInitialRender) => {
+            Stack.create({ alignContent: Alignment.TopStart });
+            Stack.width('100%');
+            Stack.height('100%');
+        }, Stack);
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
             Scroll.create();
             Scroll.backgroundColor(Colors.BG);
             Scroll.width('100%');
@@ -219,13 +240,20 @@ export class Dashboard extends ViewPU {
             Column.width('100%');
         }, Column);
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            // 顶部标题
+            // 顶部问候（按当前时间生成 + 登录用户名）+ 右上角头像
+            Row.create();
+            // 顶部问候（按当前时间生成 + 登录用户名）+ 右上角头像
+            Row.width('100%');
+            // 顶部问候（按当前时间生成 + 登录用户名）+ 右上角头像
+            Row.alignItems(VerticalAlign.Center);
+        }, Row);
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
             Column.create();
-            // 顶部标题
-            Column.width('100%');
+            Column.layoutWeight(1);
+            Column.alignItems(HorizontalAlign.Start);
         }, Column);
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('我的工作台');
+            Text.create(`${this.greeting}，${this.displayName()}`);
             Text.fontSize(24);
             Text.fontWeight(FontWeight.Bold);
             Text.fontColor(Colors.TEXT_PRIMARY);
@@ -233,15 +261,47 @@ export class Dashboard extends ViewPU {
         }, Text);
         Text.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('全局学习看板 · 数据每日更新');
+            Text.create('今天也一起稳稳推进吧');
             Text.fontSize(13);
             Text.fontColor(Colors.TEXT_SECONDARY);
             Text.margin({ top: 6 });
             Text.width('100%');
         }, Text);
         Text.pop();
-        // 顶部标题
         Column.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            // 右上角头像：点击即可更换
+            Column.create();
+            // 右上角头像：点击即可更换
+            Column.onClick(() => {
+                this.showAvatarSheet = true;
+            });
+        }, Column);
+        {
+            this.observeComponentCreation2((elmtId, isInitialRender) => {
+                if (isInitialRender) {
+                    let componentCall = new UserAvatar(this, { avatar: this.avatar, diameter: 52, bg: Colors.PRIMARY_SOFT }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Dashboard.ets", line: 80, col: 13 });
+                    ViewPU.create(componentCall);
+                    let paramsLambda = () => {
+                        return {
+                            avatar: this.avatar,
+                            diameter: 52,
+                            bg: Colors.PRIMARY_SOFT
+                        };
+                    };
+                    componentCall.paramsGenerator_ = paramsLambda;
+                }
+                else {
+                    this.updateStateVarsOfChildByElmtId(elmtId, {
+                        avatar: this.avatar, diameter: 52, bg: Colors.PRIMARY_SOFT
+                    });
+                }
+            }, { name: "UserAvatar" });
+        }
+        // 右上角头像：点击即可更换
+        Column.pop();
+        // 顶部问候（按当前时间生成 + 登录用户名）+ 右上角头像
+        Row.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
             // 考试总览
             Column.create();
@@ -440,7 +500,7 @@ export class Dashboard extends ViewPU {
         {
             this.observeComponentCreation2((elmtId, isInitialRender) => {
                 if (isInitialRender) {
-                    let componentCall = new BarChart(this, { values: this.weekTrend, labels: this.weekLabels }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Dashboard.ets", line: 189, col: 11 });
+                    let componentCall = new BarChart(this, { values: this.weekTrend, labels: this.weekLabels }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Dashboard.ets", line: 198, col: 11 });
                     ViewPU.create(componentCall);
                     let paramsLambda = () => {
                         return {
@@ -469,59 +529,42 @@ export class Dashboard extends ViewPU {
         // 长期趋势
         Column.pop();
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            // AI 洞察
-            Column.create();
-            __Column__dashCard();
-        }, Column);
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Row.create();
-            Row.width('100%');
-            Row.margin({ bottom: 10 });
-        }, Row);
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('AI 洞察');
-            Text.fontSize(16);
-            Text.fontWeight(FontWeight.Medium);
-            Text.fontColor(Colors.TEXT_PRIMARY);
-        }, Text);
-        Text.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Blank.create();
-        }, Blank);
-        Blank.pop();
-        {
-            this.observeComponentCreation2((elmtId, isInitialRender) => {
-                if (isInitialRender) {
-                    let componentCall = new AITag(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Dashboard.ets", line: 207, col: 13 });
-                    ViewPU.create(componentCall);
-                    let paramsLambda = () => {
-                        return {};
-                    };
-                    componentCall.paramsGenerator_ = paramsLambda;
-                }
-                else {
-                    this.updateStateVarsOfChildByElmtId(elmtId, {});
-                }
-            }, { name: "AITag" });
-        }
-        Row.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create(this.aiInsight);
-            Text.fontSize(14);
-            Text.lineHeight(22);
-            Text.fontColor(Colors.TEXT_SECONDARY);
-            Text.width('100%');
-        }, Text);
-        Text.pop();
-        // AI 洞察
-        Column.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
             Blank.create();
             Blank.height(20);
         }, Blank);
         Blank.pop();
         Column.pop();
         Scroll.pop();
+        {
+            this.observeComponentCreation2((elmtId, isInitialRender) => {
+                if (isInitialRender) {
+                    let componentCall = new 
+                    // 头像选择器（右上角头像点击后弹出）
+                    AvatarPicker(this, {
+                        show: this.showAvatarSheet,
+                        onClose: () => {
+                            this.showAvatarSheet = false;
+                        }
+                    }, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Dashboard.ets", line: 218, col: 7 });
+                    ViewPU.create(componentCall);
+                    let paramsLambda = () => {
+                        return {
+                            show: this.showAvatarSheet,
+                            onClose: () => {
+                                this.showAvatarSheet = false;
+                            }
+                        };
+                    };
+                    componentCall.paramsGenerator_ = paramsLambda;
+                }
+                else {
+                    this.updateStateVarsOfChildByElmtId(elmtId, {
+                        show: this.showAvatarSheet
+                    });
+                }
+            }, { name: "AvatarPicker" });
+        }
+        Stack.pop();
     }
     rerender() {
         this.updateDirtyElements();

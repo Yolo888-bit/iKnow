@@ -554,7 +554,7 @@ function privacyCard() {
   .borderRadius(Radius.LG)
   .alignItems(HorizontalAlign.Start)
 }
-ÀÔrC“²@ohos.promptAction¯../common/Theme±../store/AppStoreÔrD—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙ` hvigor_ignore_D:_soft_env_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.promptAction.d.tsAÃªoh-resolveÂDAÂÙ9D:\iKnow\iKnow-master\entry\src\main\ets\common\Theme.etsAÃªoh-resolveÂDAÂÙ;D:\iKnow\iKnow-master\entry\src\main\ets\store\AppStore.etsAÃªoh-resolveÂ“ÔrE–§version¤fileªsourceRoot§sources¥names¨mappingsªPrivacy.js ‘«Privacy.etsÜW–”    ”  	”  ”  ”-  )”.  )œ”   ” ”	 	” ” ” ” ”   ”" "”( (”9 9”: 9˜”   ” ”	 	” ” ” ”, ,”- ,””   ” ” ” ‘”  ’”:  ”> $’”7 	”; 	!’”: 
+ÀÔrC“²@ohos.promptAction±../store/AppStore¯../common/ThemeÔrD—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙ` hvigor_ignore_D:_soft_env_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.promptAction.d.tsAÃªoh-resolveÂDAÂÙ;D:\iKnow\iKnow-master\entry\src\main\ets\store\AppStore.etsAÃªoh-resolveÂDAÂÙ9D:\iKnow\iKnow-master\entry\src\main\ets\common\Theme.etsAÃªoh-resolveÂ“ÔrE–§version¤fileªsourceRoot§sources¥names¨mappingsªPrivacy.js ‘«Privacy.etsÜW–”    ”  	”  ”  ”-  )”.  )œ”   ” ”	 	” ” ” ” ”   ”" "”( (”9 9”: 9˜”   ” ”	 	” ” ” ”, ,”- ,””   ” ” ” ‘”  ’”:  ”> $’”7 	”; 	!’”: 
  ”? 
 %’”? %”ÌD *‘” ,’” 	” ’” 	” ’” 		” 	’” 		” 	’” 
 	” 

@@ -1,28 +1,58 @@
-import { router } from '@kit.ArkUI'
-import { Colors, Radius, Spacing } from '../common/Theme'
+import { router, promptAction } from '@kit.ArkUI'
+import { Colors, Radius } from '../common/Theme'
+import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { AIService } from '../services/AIService'
+import { PlanningInput, PlanningDialogInput } from '../services/ai/PlanningService'
+import { PlanTask } from '../models/StudyPlan'
 import { AIMessage } from '../models/AIMessage'
 import { Task } from '../models/Task'
-import { MessageRole, TaskStatus } from '../models/Enums'
+import { MessageRole } from '../models/Enums'
 import { IdUtils } from '../utils/IdUtils'
-import { AITag } from '../components/AITag'
+import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
+import { UserAvatar } from '../components/UserAvatar'
 
-/** AI 对话式任务规划 */
+/**
+ * AI 任务规划 —— 微信式一问一答的对话规划
+ *
+ *  顶部：iKnow 品牌 + 居中「AI 任务规划 / AI 助手在线」+ 右上角用户头像
+ *  消息：AI 在左（深色 AI 圆头像 + 暖米色气泡），用户在右（浅绿气泡 + 用户头像）
+ *  下方：居中「待确认任务」+ 圆圈列表（可点选、点文字可编辑）
+ *  底部：✓ 进入 X 分钟专注学习 + 绿色大按钮 + 提示文案
+ *
+ *  - 接入 AI：追问走 task_dialog 场景，出计划走 task_plan 场景，时间分析由 AI 生成
+ *    （硬规则 §1：动态 AI 文案不写死在页面）。
+ */
 @Entry
 @Component
 export struct TaskPlanning {
   @State messages: AIMessage[] = []
-  @State plan: Task[] = []
-  @State step: number = 0
-  @State goalText: string = ''
+  /** 用户已发言轮数（兜底用：聊太多轮还没出计划就直接生成） */
+  @State turns: number = 0
+  /** 出计划后是否仍显示输入框（用户点「继续调整」时置 true） */
+  @State showComposer: boolean = false
+  @State tasks: Task[] = []
+  /** 已点击确认（圆圈变实心）的任务 id */
+  @State confirmedIds: string[] = []
+  @State thinking: boolean = false
   @State inputValue: string = ''
-  @State planning: boolean = false
+  /** 正在编辑的任务 id（空串表示未编辑） */
+  @State editId: string = ''
+  @State draftTitle: string = ''
+  @State draftSubject: string = ''
+  @State draftMinutes: number = 30
+  @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
+  private scroller: Scroller = new Scroller()
+  /** 传给 AI 的历史对话，按 [user, ai, user, ai, ...] 交替存放 */
+  private history: string[] = []
+  /** 用户说过的原话，兜底生成计划时拼成目标 */
+  private userTexts: string[] = []
 
   aboutToAppear(): void {
-    this.pushAI(AIService.getInstance().openPlanning())
+    this.pushAI(AIService.getInstance().planningIntro())
   }
 
+  // ---------- 消息 ----------
   private pushAI(content: string): void {
     const m = new AIMessage()
     m.id = IdUtils.uuid()
@@ -30,6 +60,7 @@ export struct TaskPlanning {
     m.content = content
     m.timestamp = Date.now()
     this.messages.push(m)
+    this.scrollToBottom()
   }
 
   private pushUser(content: string): void {
@@ -39,240 +70,594 @@ export struct TaskPlanning {
     m.content = content
     m.timestamp = Date.now()
     this.messages.push(m)
+    this.scrollToBottom()
   }
 
+  /** 新消息后滚到底部，保持「聊天跟手」 */
+  private scrollToBottom(): void {
+    setTimeout(() => {
+      this.scroller.scrollEdge(Edge.Bottom)
+    }, 80)
+  }
+
+  // ---------- 对话流程（AI 驱动，不再固定轮数）----------
+
+  /**
+   * 每次发言都带完整历史调用 task_dialog：
+   *  - 模型正常聊天、按需追问；
+   *  - 一旦判断信息够了，直接返回 done=true + tasks → 立刻出计划；
+   *  - 聊满 4 轮仍未给计划 → 兜底走 task_plan 直接拆任务。
+   */
   private async send(): Promise<void> {
     const text = this.inputValue.trim()
-    if (text.length === 0) {
+    if (text.length === 0 || this.thinking) {
       return
     }
     this.inputValue = ''
     this.pushUser(text)
+    this.userTexts.push(text)
+    this.turns += 1
 
-    if (this.step === 0) {
-      this.goalText = text
-      this.step = 1
-      this.pushAI(AIService.getInstance().nextPlanningQuestion(0))
-    } else {
-      this.step = 2
-      this.pushAI('好的，我帮你安排一下。')
-      this.planning = true
-      const tasks = await AppStore.getInstance().planTasks(this.goalText)
-      this.plan = tasks
-      this.planning = false
-      this.pushAI(`我帮你拆成了 ${tasks.length} 个小任务，你可以勾选、删除或添加，确认后再开始。`)
+    this.thinking = true
+    const input: PlanningDialogInput = { step: this.turns, userInput: text, history: this.history }
+    const r = await AIService.getInstance().dialogByScene(input)
+    this.thinking = false
+
+    const reply: string = r.reply.length > 0 ? r.reply : AIService.getInstance().planningHold()
+    this.pushAI(reply)
+    this.history.push(text)
+    this.history.push(reply)
+
+    // 模型判断信息足够：reply 里已含时间安排建议，直接落到待确认列表
+    const got: PlanTask[] | undefined = r.tasks
+    if (r.done && got !== undefined && got.length > 0) {
+      this.applyPlan(got)
+      return
+    }
+    // 兜底：聊满 4 轮还没出计划，就按已收集的信息直接生成
+    if (this.turns >= 4) {
+      await this.generatePlan()
     }
   }
 
-  private toggle(id: string): void {
+  /** 把 AI 给出的结构化任务落到「待确认任务」列表 */
+  private applyPlan(list: PlanTask[]): void {
+    const out: Task[] = []
+    for (const p of list) {
+      out.push(this.toTask(p))
+    }
+    if (out.length === 0) {
+      return
+    }
+    this.tasks = out
+    this.confirmedIds = []
+    this.showComposer = false
+  }
+
+  private composeGoal(): string {
+    return this.userTexts.join('；')
+  }
+
+  /** 兜底路径：直接按已收集的目标生成结构化任务（task_plan 场景） */
+  private async generatePlan(): Promise<void> {
+    this.thinking = true
+    const input: PlanningInput = { goal: this.composeGoal() }
+    const result = await AIService.getInstance().planByScene(input)
+    this.thinking = false
+
+    if (result.tasks.length === 0) {
+      this.pushAI(AIService.getInstance().planningHold())
+      return
+    }
+    if (result.summary.length > 0) {
+      this.pushAI(result.summary)
+    }
+    this.applyPlan(result.tasks)
+  }
+
+  private toTask(p: PlanTask): Task {
+    const t = new Task()
+    t.id = p.id.length > 0 ? p.id : IdUtils.uuid()
+    t.title = p.title
+    t.subject = p.subject
+    t.estimatedDuration = p.estimatedDuration
+    t.sortOrder = p.sortOrder
+    t.createdAt = Date.now()
+    return t
+  }
+
+  // ---------- 待确认任务：确认 / 编辑 ----------
+  private isConfirmed(id: string): boolean {
+    return this.confirmedIds.indexOf(id) >= 0
+  }
+
+  private toggleConfirm(id: string): void {
+    const next: string[] = []
+    let found = false
+    for (const x of this.confirmedIds) {
+      if (x === id) {
+        found = true
+      } else {
+        next.push(x)
+      }
+    }
+    if (!found) {
+      next.push(id)
+    }
+    this.confirmedIds = next
+  }
+
+  private startEdit(t: Task): void {
+    this.editId = t.id
+    this.draftTitle = t.title
+    this.draftSubject = t.subject
+    this.draftMinutes = t.estimatedDuration
+  }
+
+  private saveEdit(): void {
+    const title = this.draftTitle.trim()
+    const subject = this.draftSubject.trim()
     const next: Task[] = []
-    for (const t of this.plan) {
+    for (const t of this.tasks) {
       const c = t.copy()
-      if (c.id === id) {
-        c.done = !c.done
-        c.status = c.done ? TaskStatus.DONE : TaskStatus.TODO
+      if (c.id === this.editId) {
+        c.title = title.length > 0 ? title : c.title
+        c.subject = subject.length > 0 ? subject : c.subject
+        c.estimatedDuration = this.draftMinutes
       }
       next.push(c)
     }
-    this.plan = next
+    this.tasks = next
+    this.editId = ''
   }
 
-  private removeTask(id: string): void {
+  private deleteTask(): void {
     const next: Task[] = []
-    for (const t of this.plan) {
-      if (t.id !== id) {
+    for (const t of this.tasks) {
+      if (t.id !== this.editId) {
         next.push(t)
       }
     }
-    this.plan = next
+    this.tasks = next
+    this.editId = ''
   }
 
-  private addTask(): void {
-    const t = new Task()
-    t.id = IdUtils.uuid()
-    t.title = '新任务'
-    t.subject = '综合'
-    t.estimatedDuration = 25
-    t.sortOrder = this.plan.length
-    t.createdAt = Date.now()
-    this.plan.push(t)
+  // ---------- 底部：预计时长 / 开始专注 ----------
+  private selectedTasks(): Task[] {
+    if (this.confirmedIds.length === 0) {
+      return this.tasks
+    }
+    const out: Task[] = []
+    for (const t of this.tasks) {
+      if (this.isConfirmed(t.id)) {
+        out.push(t)
+      }
+    }
+    return out
   }
 
-  private confirm(): void {
-    AppStore.getInstance().setCurrentPlan(this.plan)
+  private plannedMinutes(): number {
+    let sum = 0
+    for (const t of this.selectedTasks()) {
+      sum += t.estimatedDuration
+    }
+    return sum
+  }
+
+  private confirmStart(): void {
+    const selected = this.selectedTasks()
+    if (selected.length === 0) {
+      promptAction.showToast({ message: '至少保留一个任务' })
+      return
+    }
+    AppStore.getInstance().setCurrentPlan(selected)
     router.replaceUrl({ url: 'pages/Focus' })
   }
 
+  // ---------- 视图 ----------
   @Builder
-  bubble(m: AIMessage) {
-    if (m.role === MessageRole.AI) {
+  header() {
+    Row() {
+      // 左：品牌（固定占位，保证中间标题真正居中）
       Row() {
-        Text('💡').fontSize(16)
-        Text(m.content)
-          .fontSize(15)
-          .fontColor(Colors.TEXT_PRIMARY)
-          .backgroundColor(Colors.CARD)
-          .padding(12)
-          .borderRadius(16)
-          .constraintSize({ maxWidth: '78%' })
-          .margin({ left: 8 })
+        Text('iKnow')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Colors.PRIMARY)
+          .fontStyle(FontStyle.Italic)
       }
-      .width('100%')
+      .width(58)
       .justifyContent(FlexAlign.Start)
-    } else {
-      Row() {
-        Text(m.content)
-          .fontSize(15)
+
+      // 中：标题 + 在线徽标
+      Column() {
+        Text('AI 任务规划')
+          .fontSize(19)
+          .fontWeight(FontWeight.Bold)
           .fontColor(Colors.TEXT_PRIMARY)
-          .backgroundColor(Colors.PRIMARY_SOFT)
-          .padding(12)
-          .borderRadius(16)
-          .constraintSize({ maxWidth: '78%' })
+        Row() {
+          Circle()
+            .width(6)
+            .height(6)
+            .fill(Colors.ONLINE_DOT)
+          Text('AI 助手在线')
+            .fontSize(11)
+            .fontColor(Colors.TEXT_SECONDARY)
+            .margin({ left: 5 })
+        }
+        .padding({ left: 10, right: 12, top: 3, bottom: 3 })
+        .backgroundColor(Colors.ONLINE_SOFT)
+        .borderRadius(10)
+        .margin({ top: 5 })
       }
-      .width('100%')
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Center)
+
+      // 右：用户头像
+      Row() {
+        UserAvatar({ avatar: this.avatar, diameter: 38, radius: 10, bg: Colors.PRIMARY_SOFT })
+      }
+      .width(58)
       .justifyContent(FlexAlign.End)
     }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: 18, right: 16, top: 14, bottom: 12 })
+  }
+
+  @Builder
+  aiBubble(content: string) {
+    Row({ space: 10 }) {
+      // AI 头像：深色圆 + "AI"
+      Stack() {
+        Circle()
+          .width(34)
+          .height(34)
+          .fill(Colors.AI_AVATAR_BG)
+        Text('AI')
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Color.White)
+      }
+      Text(content)
+        .fontSize(15)
+        .fontColor(Colors.TEXT_PRIMARY)
+        .lineHeight(23)
+        .backgroundColor(Colors.BUBBLE_AI)
+        .padding({ left: 14, right: 14, top: 11, bottom: 11 })
+        .borderRadius(14)
+        .constraintSize({ maxWidth: '74%' })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+    .justifyContent(FlexAlign.Start)
+  }
+
+  @Builder
+  userBubble(content: string) {
+    Row({ space: 10 }) {
+      Text(content)
+        .fontSize(15)
+        .fontColor(Colors.TEXT_PRIMARY)
+        .lineHeight(23)
+        .backgroundColor(Colors.BUBBLE_USER)
+        .padding({ left: 14, right: 14, top: 11, bottom: 11 })
+        .borderRadius(14)
+        .constraintSize({ maxWidth: '74%' })
+      // 用户头像（emoji 或相册照片，右上角与工作台一致）
+      UserAvatar({ avatar: this.avatar, diameter: 34, radius: 10, bg: Colors.PRIMARY_SOFT })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+    .justifyContent(FlexAlign.End)
+  }
+
+  @Builder
+  planRow(t: Task) {
+    Row({ space: 12 }) {
+      // 圆圈确认：点击后变实心
+      Stack() {
+        Circle()
+          .width(20)
+          .height(20)
+          .fill(this.isConfirmed(t.id) ? Colors.CHAT_ACTION : Color.Transparent)
+          .stroke(this.isConfirmed(t.id) ? Colors.CHAT_ACTION : Colors.TEXT_TERTIARY)
+          .strokeWidth(1.5)
+        if (this.isConfirmed(t.id)) {
+          Text('✓')
+            .fontSize(12)
+            .fontColor(Color.White)
+            .fontWeight(FontWeight.Bold)
+        }
+      }
+      .onClick(() => {
+        this.toggleConfirm(t.id)
+      })
+
+      // 点文字进入编辑（截图里不额外显示按钮，保持简洁）
+      Text(t.title)
+        .fontSize(15)
+        .fontColor(Colors.TEXT_PRIMARY)
+        .layoutWeight(1)
+        .onClick(() => {
+          this.startEdit(t)
+        })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  planSection() {
+    Column() {
+      Text('待确认任务')
+        .fontSize(17)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Colors.TEXT_PRIMARY)
+        .width('100%')
+        .textAlign(TextAlign.Center)
+        .margin({ top: 6, bottom: 16 })
+
+      Column({ space: 16 }) {
+        ForEach(this.tasks, (t: Task) => {
+          this.planRow(t)
+        }, (t: Task) => t.id)
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12 })
+
+      // 出计划后仍可回到对话，继续让 AI 调整安排
+      if (!this.showComposer) {
+        Text('💬 继续和 AI 考伴调整')
+          .fontSize(12)
+          .fontColor(Colors.TEXT_SECONDARY)
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .margin({ top: 16 })
+          .onClick(() => {
+            this.showComposer = true
+          })
+      }
+    }
+    .width('100%')
+  }
+
+  @Builder
+  editPanel() {
+    Column() {
+      Column() {
+        Text('编辑任务')
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Colors.TEXT_PRIMARY)
+          .width('100%')
+
+        TextInput({ placeholder: '任务名称', text: this.draftTitle })
+          .fontSize(15)
+          .height(46)
+          .margin({ top: 16 })
+          .backgroundColor(Colors.BG)
+          .borderRadius(Radius.MD)
+          .onChange((v: string) => {
+            this.draftTitle = v
+          })
+
+        TextInput({ placeholder: '科目', text: this.draftSubject })
+          .fontSize(15)
+          .height(46)
+          .margin({ top: 10 })
+          .backgroundColor(Colors.BG)
+          .borderRadius(Radius.MD)
+          .onChange((v: string) => {
+            this.draftSubject = v
+          })
+
+        Row() {
+          Text('预计时长')
+            .fontSize(14)
+            .fontColor(Colors.TEXT_SECONDARY)
+          Blank()
+          Button('−')
+            .width(34)
+            .height(34)
+            .fontSize(16)
+            .fontColor(Colors.TEXT_PRIMARY)
+            .backgroundColor(Colors.BG)
+            .borderRadius(17)
+            .onClick(() => {
+              if (this.draftMinutes > 5) {
+                this.draftMinutes -= 5
+              }
+            })
+          Text(`${this.draftMinutes} 分钟`)
+            .fontSize(15)
+            .fontColor(Colors.TEXT_PRIMARY)
+            .width(76)
+            .textAlign(TextAlign.Center)
+          Button('＋')
+            .width(34)
+            .height(34)
+            .fontSize(16)
+            .fontColor(Colors.TEXT_PRIMARY)
+            .backgroundColor(Colors.BG)
+            .borderRadius(17)
+            .onClick(() => {
+              if (this.draftMinutes < 240) {
+                this.draftMinutes += 5
+              }
+            })
+        }
+        .width('100%')
+        .margin({ top: 16 })
+
+        Row({ space: 12 }) {
+          Button('删除')
+            .layoutWeight(1)
+            .height(46)
+            .fontSize(15)
+            .fontColor(Colors.CAMERA_RED)
+            .backgroundColor(Colors.BG)
+            .borderRadius(Radius.MD)
+            .onClick(() => {
+              this.deleteTask()
+            })
+          Button('取消')
+            .layoutWeight(1)
+            .height(46)
+            .fontSize(15)
+            .fontColor(Colors.TEXT_SECONDARY)
+            .backgroundColor(Colors.BG)
+            .borderRadius(Radius.MD)
+            .onClick(() => {
+              this.editId = ''
+            })
+          Button('保存')
+            .layoutWeight(1)
+            .height(46)
+            .fontSize(15)
+            .fontColor(Color.White)
+            .backgroundColor(Colors.CHAT_ACTION)
+            .borderRadius(Radius.MD)
+            .onClick(() => {
+              this.saveEdit()
+            })
+        }
+        .width('100%')
+        .margin({ top: 22 })
+      }
+      .width('86%')
+      .padding(24)
+      .backgroundColor(Colors.CARD)
+      .borderRadius(Radius.LG)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#66000000')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  @Builder
+  inputBar() {
+    Row({ space: 10 }) {
+      TextInput({ placeholder: '说说你今天想学什么…', text: this.inputValue })
+        .fontSize(15)
+        .height(44)
+        .layoutWeight(1)
+        .backgroundColor(Colors.CARD)
+        .borderRadius(22)
+        .onChange((v: string) => {
+          this.inputValue = v
+        })
+        .onSubmit(() => {
+          this.send()
+        })
+
+      Button('发送')
+        .height(44)
+        .fontSize(15)
+        .fontColor(Color.White)
+        .backgroundColor(Colors.CHAT_ACTION)
+        .borderRadius(22)
+        .padding({ left: 18, right: 18 })
+        .onClick(() => {
+          this.send()
+        })
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 10, bottom: 16 })
+    .backgroundColor(Colors.BG)
+  }
+
+  @Builder
+  startBar() {
+    Column() {
+      Row({ space: 8 }) {
+        Stack() {
+          Circle()
+            .width(18)
+            .height(18)
+            .fill(Colors.CHAT_ACTION)
+          Text('✓')
+            .fontSize(11)
+            .fontColor(Color.White)
+            .fontWeight(FontWeight.Bold)
+        }
+        Text(`进入 ${this.plannedMinutes()} 分钟专注学习`)
+          .fontSize(14)
+          .fontColor(Colors.TEXT_PRIMARY)
+      }
+      .margin({ bottom: 12 })
+
+      Button('确认并开始专注学习')
+        .width('100%')
+        .height(52)
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Color.White)
+        .backgroundColor(Colors.CHAT_ACTION)
+        .borderRadius(26)
+        .onClick(() => {
+          this.confirmStart()
+        })
+
+      Text('AI 将在学习过程中提醒你节奏与复盘节点')
+        .fontSize(12)
+        .fontColor(Colors.TEXT_TERTIARY)
+        .margin({ top: 10 })
+    }
+    .width('100%')
+    .padding({ left: 22, right: 22, top: 12, bottom: 16 })
+    .backgroundColor(Colors.BG)
   }
 
   build() {
-    Column() {
-      // 顶部标题
-      Row() {
-        Text('AI 任务规划')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.TEXT_PRIMARY)
-        Blank()
-        AITag()
-      }
-      .width('100%')
-      .padding({ left: 20, right: 20, top: 16, bottom: 12 })
+    Stack() {
+      Column() {
+        this.header()
 
-      // 对话 + 计划
-      Scroll() {
-        Column({ space: Spacing.MD }) {
-          ForEach(this.messages, (m: AIMessage) => {
-            this.bubble(m)
-          }, (m: AIMessage) => m.id)
-
-          if (this.planning) {
-            Text('小伴思考中…')
-              .fontSize(13)
-              .fontColor(Colors.TEXT_TERTIARY)
-              .margin({ left: 24 })
-          }
-
-          if (this.plan.length > 0) {
-            Column() {
-              Text('今日学习计划')
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(Colors.TEXT_PRIMARY)
-                .width('100%')
-                .margin({ top: 8, bottom: 12 })
-
-              ForEach(this.plan, (task: Task) => {
-                Row() {
-                  Checkbox()
-                    .select(task.done)
-                    .selectedColor(Colors.PRIMARY)
-                    .width(22)
-                    .height(22)
-                    .onChange((val: boolean) => {
-                      this.toggle(task.id)
-                    })
-                  Column() {
-                    Text(task.title)
-                      .fontSize(15)
-                      .fontColor(task.done ? Colors.TEXT_TERTIARY : Colors.TEXT_PRIMARY)
-                    Text(`${task.subject} · ${task.estimatedDuration} min`)
-                      .fontSize(12)
-                      .fontColor(Colors.TEXT_SECONDARY)
-                      .margin({ top: 4 })
-                  }
-                  .alignItems(HorizontalAlign.Start)
-                  .margin({ left: 12 })
-                  .layoutWeight(1)
-
-                  Text('×')
-                    .fontSize(20)
-                    .fontColor(Colors.TEXT_TERTIARY)
-                    .padding(6)
-                    .onClick(() => {
-                      this.removeTask(task.id)
-                    })
-                }
-                .width('100%')
-                .padding(14)
-                .backgroundColor(Colors.CARD)
-                .borderRadius(Radius.MD)
-              }, (task: Task) => task.id)
-
-              Row() {
-                Text('+ 添加任务')
-                  .fontSize(14)
-                  .fontColor(Colors.PRIMARY_DARK)
-                  .onClick(() => {
-                    this.addTask()
-                  })
-                Blank()
+        // 对话 + 待确认任务
+        Scroll(this.scroller) {
+          Column({ space: 18 }) {
+            ForEach(this.messages, (m: AIMessage) => {
+              if (m.role === MessageRole.AI) {
+                this.aiBubble(m.content)
+              } else {
+                this.userBubble(m.content)
               }
-              .width('100%')
-              .padding({ top: 8, bottom: 8 })
+            }, (m: AIMessage) => m.id)
 
-              Button('确认计划并开始专注')
-                .width('100%')
-                .height(50)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(Color.White)
-                .backgroundColor(Colors.PRIMARY)
-                .borderRadius(Radius.LG)
-                .margin({ top: 8 })
-                .onClick(() => {
-                  this.confirm()
-                })
+            if (this.thinking) {
+              this.aiBubble('正在思考…')
             }
-            .width('100%')
-            .padding(16)
-            .backgroundColor(Colors.BG)
-            .borderRadius(Radius.LG)
+
+            if (this.tasks.length > 0) {
+              this.planSection()
+            }
           }
+          .width('100%')
+          .padding({ left: 16, right: 16, top: 10, bottom: 18 })
         }
-        .padding(20)
-        .width('100%')
-      }
-      .layoutWeight(1)
-      .align(Alignment.Top)
+        .layoutWeight(1)
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
 
-      // 输入栏
-      Row() {
-        TextInput({ placeholder: '说说你今天想学什么…' })
-          .fontSize(15)
-          .height(44)
-          .layoutWeight(1)
-          .backgroundColor(Colors.CARD)
-          .borderRadius(22)
-          .onChange((v: string) => {
-            this.inputValue = v
-          })
-          .onSubmit(() => {
-            this.send()
-          })
-
-        Button('发送')
-          .height(44)
-          .fontSize(15)
-          .fontColor(Color.White)
-          .backgroundColor(Colors.PRIMARY)
-          .borderRadius(22)
-          .margin({ left: 10 })
-          .onClick(() => {
-            this.send()
-          })
+        // 底部：出计划后固定「开始专注」，否则为输入栏
+        if (this.tasks.length > 0 && !this.showComposer) {
+          this.startBar()
+        } else {
+          this.inputBar()
+        }
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 10, bottom: 16 })
+      .height('100%')
+
+      if (this.editId.length > 0) {
+        this.editPanel()
+      }
+
+      AIFirstDisclaimer()
     }
     .width('100%')
     .height('100%')

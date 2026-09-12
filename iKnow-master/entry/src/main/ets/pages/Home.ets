@@ -35,11 +35,8 @@ export struct Home {
   }
 
   private startFocus(): void {
-    if (this.plan.length === 0) {
-      router.pushUrl({ url: 'pages/TaskPlanning' })
-      return
-    }
     // 摄像头感知授权前置：已授权直接使用；未授权弹出选择，拒绝则降级仅计时模式
+    // 无计划时按「自由专注」直接开始，不再跳转规划聊天页
     if (PermissionService.getInstance().isCameraOn()) {
       router.pushUrl({ url: 'pages/Focus' })
       return
@@ -61,6 +58,11 @@ export struct Home {
         }
       }
     })
+  }
+
+  /** 进入 AI 任务规划（首页唯一的"对话式规划"入口） */
+  private openAIPlanning(): void {
+    router.pushUrl({ url: 'pages/TaskPlanning' })
   }
 
   @Builder
@@ -114,7 +116,7 @@ export struct Home {
         }
         .width('100%')
 
-        // 今日目标（点击进入目标编辑 / 规划）
+        // 今日目标（仅展示；编辑与规划统一走下方「AI 智能规划」入口）
         Column() {
           Row() {
             Text('今日目标')
@@ -122,9 +124,6 @@ export struct Home {
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)
             Blank()
-            Text('编辑 ›')
-              .fontSize(13)
-              .fontColor(Colors.PRIMARY_DARK)
           }
           .width('100%')
 
@@ -160,8 +159,39 @@ export struct Home {
         .padding(20)
         .backgroundColor(Colors.CARD)
         .borderRadius(Radius.LG)
+
+        // AI 智能规划 —— 首页唯一的对话式规划总入口
+        Row() {
+          Text('🤖')
+            .fontSize(24)
+            .width(48)
+            .height(48)
+            .textAlign(TextAlign.Center)
+            .backgroundColor(Colors.CARD)
+            .borderRadius(24)
+          Column() {
+            Text('AI 智能规划')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Text('按目标智能分析，合理安排今天的时间')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ top: 4 })
+          }
+          .alignItems(HorizontalAlign.Start)
+          .margin({ left: 14 })
+          .layoutWeight(1)
+          Text('›')
+            .fontSize(20)
+            .fontColor(Colors.PRIMARY_DARK)
+        }
+        .width('100%')
+        .padding(18)
+        .backgroundColor(Colors.PRIMARY_SOFT)
+        .borderRadius(Radius.LG)
         .onClick(() => {
-          router.pushUrl({ url: 'pages/TaskPlanning' })
+          this.openAIPlanning()
         })
 
         // 今日任务
@@ -184,7 +214,7 @@ export struct Home {
               Text('还没有今日计划')
                 .fontSize(15)
                 .fontColor(Colors.TEXT_PRIMARY)
-              Text('点这里，让小伴帮你规划今天')
+              Text('点上方「AI 智能规划」，让小伴帮你安排今天')
                 .fontSize(13)
                 .fontColor(Colors.TEXT_SECONDARY)
                 .margin({ top: 6 })
@@ -193,9 +223,6 @@ export struct Home {
             .padding(20)
             .backgroundColor(Colors.CARD)
             .borderRadius(Radius.MD)
-            .onClick(() => {
-              router.pushUrl({ url: 'pages/TaskPlanning' })
-            })
           } else {
             Column({ space: Spacing.SM }) {
               ForEach(this.plan, (task: Task) => {

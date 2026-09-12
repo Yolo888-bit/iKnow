@@ -47,6 +47,17 @@ export class StorageKey {
   static readonly ACTIVE_SESSION_ID = 'ik_active_session_id'
 }
 
+/**
+ * 本地登录 KV 键（AuthService 使用）
+ * 说明：MVP 无后端，账号密码仅存本地（密码存散列，不落明文）。
+ * 生产环境应由服务端鉴权，客户端不持有任何密钥（硬规则 §10）。
+ */
+export class AuthKey {
+  static readonly USERNAME = 'ik_auth_username'
+  static readonly PASSWORD_HASH = 'ik_auth_password_hash'
+  static readonly LOGGED_IN = 'ik_auth_logged_in'
+}
+
 export class Product {
   static readonly COMPANION_NAME = '小伴'
   static readonly AI_TAG = '💡 AI 智能体'

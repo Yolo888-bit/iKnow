@@ -24,6 +24,13 @@ export class Colors {
     static readonly RED_SOFT = '#F9E7E4';
     // 合规 —— 摄像头红色指示灯
     static readonly CAMERA_RED = '#E4564B';
+    // 对话气泡（AI 规划页 · 微信式一来一回）
+    static readonly BUBBLE_AI = '#F1ECE3'; // AI 侧气泡：暖米色
+    static readonly BUBBLE_USER = '#DCEBD1'; // 用户侧气泡：浅绿
+    static readonly CHAT_ACTION = '#7FA65F'; // 对话页主按钮：低饱和橄榄绿
+    static readonly AI_AVATAR_BG = '#2E2E2E'; // AI 头像底色：深灰
+    static readonly ONLINE_SOFT = '#E4F0DA'; // "AI 助手在线" 徽标底
+    static readonly ONLINE_DOT = '#5FA84E'; // "在线" 状态点
     // 柔和阴影
     static readonly SHADOW = '#14000000';
 }

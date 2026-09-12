@@ -1,4 +1,4 @@
-# iKnow —— 专注感知智能学伴
+# iKnow —— 专注感知智能考伴
 
 > 陪你学，更懂你何时需要推一把。
 
@@ -118,14 +118,14 @@ enum FocusState {
 ## 七、页面导航
 
 ```
-Index（Tabs：首页 / 工作台 / AI学伴 / 我的）
+Index（Tabs：首页 / 工作台 / AI考伴 / 我的）
   ├── 首页「开始专注」→ 无计划则 TaskPlanning（对话式 AI 规划）
   │                          └─ 确认计划 → Focus
   ├── Focus ─ 休息 → FocusBreak
   │        └─ AI 悬浮按钮 → AIChat（答疑）→ 返回专注
   │        └─ 结束 → StudyReport（单次复盘）→ 完成 → 首页
   ├── 工作台：学习总览 / 今日任务 / 周趋势 / 学科进度 / 考试倒计时
-  ├── AI 学伴：AI 对话 + 快捷提问
+  ├── AI 考伴：AI 对话 + 快捷提问
   └── 我的：个人专注画像(FocusProfile) / 设备(Device) / 隐私(Privacy) / 设置(Settings)
 ```
 

@@ -24,6 +24,20 @@ export interface HabitInsight {
   advice: string
 }
 
+/** 单日学习总结（复盘页日历切换到「某天」时使用） */
+export interface DaySummary {
+  hasData: boolean
+  studyMinutes: number
+  focusRate: number
+  completedTasks: number
+  totalTasks: number
+  qaSessions: number
+  sessionCount: number
+  bestPeriod: string
+  levels: number[]
+  states: string[]
+}
+
 /**
  * 指标字典 —— 全局唯一指标计算事实源（PRD §5 / §6）
  *
@@ -289,6 +303,58 @@ export class Metrics {
 
     const focusRate = totalStudySec > 0 ? Math.round(totalNetSec / totalStudySec * 100) : 0
     return { totalHours: Math.round(totalNetSec / 3600), completedTasks: completedIds.length, focusRate: focusRate, trend: trend }
+  }
+
+  /**
+   * 单日学习总结：汇总某一天（dayStart 起 24h 内）全部专注会话。
+   * 学习时长 / 专注率 / 任务完成 / 答疑会话数 / 最佳时段 / 当日专注曲线，
+   * 全部走统一口径，页面不得自行计算（硬规则 §3）。
+   */
+  static daySummary(sessions: FocusSession[], dayStart: number): DaySummary {
+    const dayEnd = dayStart + 24 * 3600 * 1000
+    const daySessions: FocusSession[] = []
+    for (const s of sessions) {
+      if (s.startTime >= dayStart && s.startTime < dayEnd) {
+        daySessions.push(s)
+      }
+    }
+
+    let netSec = 0
+    let studySec = 0
+    let done = 0
+    let total = 0
+    let qaSessions = 0
+    const levels: number[] = []
+    const states: string[] = []
+
+    for (const s of daySessions) {
+      netSec += s.focusDuration
+      studySec += Metrics.totalStudySec(s)
+      done += s.completedTaskIds.length
+      total += s.taskIds.length
+      if (Metrics.qaSec(s) > 0) {
+        qaSessions++
+      }
+      for (const p of s.timeline) {
+        levels.push(p.level)
+        states.push(p.state)
+      }
+    }
+
+    const focusRate = studySec > 0 ? Math.round(netSec / studySec * 100) : 0
+    const best = daySessions.length > 0 ? Metrics.goldenWindow(daySessions) : ''
+    return {
+      hasData: daySessions.length > 0,
+      studyMinutes: Math.round(studySec / 60),
+      focusRate: focusRate,
+      completedTasks: done,
+      totalTasks: total,
+      qaSessions: qaSessions,
+      sessionCount: daySessions.length,
+      bestPeriod: best,
+      levels: levels,
+      states: states
+    }
   }
 
   /** 练习内容总结：按学科统计已完成任务次数，返回前 5 项 */

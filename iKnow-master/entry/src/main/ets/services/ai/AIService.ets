@@ -3,6 +3,11 @@ import { CompanionService } from './CompanionService'
 import { ReviewService } from './ReviewService'
 import { PlanningService } from './PlanningService'
 import { MemoryService } from './MemoryService'
+import { QATextPayload, QAImagePayload, QAResp } from './QAService'
+import { CompanionContext, CompanionDecision } from './CompanionService'
+import { ReviewPayload, ReviewData } from './ReviewService'
+import { PlanningInput, PlanningResult, PlanningDialogInput, PlanningDialogResult } from './PlanningService'
+import { MemoryPayload, MemoryDelta } from './MemoryService'
 
 /**
  * AI 服务统一信封与聚合接口（PRD §14）
@@ -24,6 +29,30 @@ export type AIScene =
   | 'review'
   | 'planning'
   | 'memory'
+
+/**
+ * 场景 → 输入载荷 联合类型（PRD §14.2 / §14.3）。
+ * 调用方只需传 scene + payload，dispatch 据此分发到对应 Agent。
+ */
+export type AIPayload =
+  | QATextPayload
+  | QAImagePayload
+  | CompanionContext
+  | ReviewPayload
+  | PlanningInput
+  | PlanningDialogInput
+  | MemoryPayload
+
+/**
+ * 场景 → 输出数据 联合类型。返回后调用方按 scene 区分具体结构。
+ */
+export type AIResult =
+  | QAResp
+  | CompanionDecision
+  | ReviewData
+  | PlanningResult
+  | PlanningDialogResult
+  | MemoryDelta
 
 /** AI Context Assembly（PRD §13 L1/L2/L3 三层记忆） */
 export interface AIContext {
@@ -79,4 +108,10 @@ export interface AIResponse<TData> {
 export interface AIService extends QAService, CompanionService, ReviewService, PlanningService, MemoryService {
   setPersonality(p: string): void
   getPersonality(): string
+  /**
+   * 场景路由（PRD §14.1 / §14.2）：依据 req.scene 将请求分发到对应 Agent。
+   * 调用方只需传 scene + payload，无需知道背后是 QA / Companion / Review /
+   * Planning / Memory 哪一个。Mock 与 Gateway 实现同一方法，替换时不改 UI（硬规则 §8）。
+   */
+  dispatch(req: AIRequest<AIPayload>): Promise<AIResponse<AIResult>>
 }

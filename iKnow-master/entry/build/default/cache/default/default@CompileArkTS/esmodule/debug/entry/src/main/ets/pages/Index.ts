@@ -8,8 +8,8 @@ interface Index_Params {
     controller?: TabsController;
 }
 import router from "@ohos:router";
-import { Home } from "@normalized:N&&&entry/src/main/ets/pages/Home&";
 import { Dashboard } from "@normalized:N&&&entry/src/main/ets/pages/Dashboard&";
+import { TaskPlanning } from "@normalized:N&&&entry/src/main/ets/pages/TaskPlanning&";
 import { Review } from "@normalized:N&&&entry/src/main/ets/pages/Review&";
 import { Mine } from "@normalized:N&&&entry/src/main/ets/pages/Mine&";
 import { Colors, Radius } from "@normalized:N&&&entry/src/main/ets/common/Theme&";
@@ -148,30 +148,7 @@ class Index extends ViewPU {
                 {
                     this.observeComponentCreation2((elmtId, isInitialRender) => {
                         if (isInitialRender) {
-                            let componentCall = new Home(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Index.ets", line: 66, col: 11 });
-                            ViewPU.create(componentCall);
-                            let paramsLambda = () => {
-                                return {};
-                            };
-                            componentCall.paramsGenerator_ = paramsLambda;
-                        }
-                        else {
-                            this.updateStateVarsOfChildByElmtId(elmtId, {});
-                        }
-                    }, { name: "Home" });
-                }
-            });
-            TabContent.tabBar({ builder: () => {
-                    this.tabBar.call(this, '首页', 0, '🏠');
-                } });
-        }, TabContent);
-        TabContent.pop();
-        this.observeComponentCreation2((elmtId, isInitialRender) => {
-            TabContent.create(() => {
-                {
-                    this.observeComponentCreation2((elmtId, isInitialRender) => {
-                        if (isInitialRender) {
-                            let componentCall = new Dashboard(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Index.ets", line: 70, col: 11 });
+                            let componentCall = new Dashboard(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Index.ets", line: 66, col: 11 });
                             ViewPU.create(componentCall);
                             let paramsLambda = () => {
                                 return {};
@@ -185,7 +162,30 @@ class Index extends ViewPU {
                 }
             });
             TabContent.tabBar({ builder: () => {
-                    this.tabBar.call(this, '工作台', 1, '📊');
+                    this.tabBar.call(this, '工作台', 0, '📊');
+                } });
+        }, TabContent);
+        TabContent.pop();
+        this.observeComponentCreation2((elmtId, isInitialRender) => {
+            TabContent.create(() => {
+                {
+                    this.observeComponentCreation2((elmtId, isInitialRender) => {
+                        if (isInitialRender) {
+                            let componentCall = new TaskPlanning(this, {}, undefined, elmtId, () => { }, { page: "entry/src/main/ets/pages/Index.ets", line: 70, col: 11 });
+                            ViewPU.create(componentCall);
+                            let paramsLambda = () => {
+                                return {};
+                            };
+                            componentCall.paramsGenerator_ = paramsLambda;
+                        }
+                        else {
+                            this.updateStateVarsOfChildByElmtId(elmtId, {});
+                        }
+                    }, { name: "TaskPlanning" });
+                }
+            });
+            TabContent.tabBar({ builder: () => {
+                    this.tabBar.call(this, 'AI 规划', 1, '🤖');
                 } });
         }, TabContent);
         TabContent.pop();

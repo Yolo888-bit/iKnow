@@ -1,6 +1,6 @@
 import { router } from '@kit.ArkUI'
-import { Home } from './Home'
 import { Dashboard } from './Dashboard'
+import { TaskPlanning } from './TaskPlanning'
 import { Review } from './Review'
 import { Mine } from './Mine'
 import { Colors, Radius } from '../common/Theme'
@@ -63,12 +63,12 @@ struct Index {
     Stack() {
       Tabs({ barPosition: BarPosition.End, controller: this.controller }) {
         TabContent() {
-          Home()
-        }.tabBar(this.tabBar('首页', 0, '🏠'))
+          Dashboard()
+        }.tabBar(this.tabBar('工作台', 0, '📊'))
 
         TabContent() {
-          Dashboard()
-        }.tabBar(this.tabBar('工作台', 1, '📊'))
+          TaskPlanning()
+        }.tabBar(this.tabBar('AI 规划', 1, '🤖'))
 
         TabContent() {
           Review()

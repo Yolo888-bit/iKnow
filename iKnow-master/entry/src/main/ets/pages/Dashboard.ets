@@ -2,15 +2,17 @@ import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { TimeUtils } from '../utils/TimeUtils'
-import { AIService } from '../services/AIService'
 import { BarChart } from '../components/BarChart'
 import { SubjectProgress } from '../models/Dashboard'
-import { AITag } from '../components/AITag'
+import { UserAvatar } from '../components/UserAvatar'
+import { AvatarPicker } from '../components/AvatarPicker'
 
 /** 我的工作台 —— 学习全局看板 */
 @Component
 export struct Dashboard {
   @StorageProp(StorageKey.EXAM_DAYS) examDays: number = 0
+  @StorageProp(StorageKey.USER_NICKNAME) nickname: string = ''
+  @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
   @StorageProp(StorageKey.TODAY_DONE_TASKS) todayDone: number = 0
   @StorageProp(StorageKey.TODAY_TOTAL_TASKS) todayTotal: number = 0
   @StorageProp(StorageKey.WEEK_FOCUS_SEC) weekFocus: number = 0
@@ -19,34 +21,27 @@ export struct Dashboard {
   @State weekTrend: number[] = []
   @State subjects: SubjectProgress[] = []
   @State examType: string = '考研'
-  @State hardestSubject: string = '综合'
-  @State aiInsight: string = ''
+  @State greeting: string = ''
+  @State showAvatarSheet: boolean = false
   private weekLabels: string[] = ['一', '二', '三', '四', '五', '六', '日']
 
   aboutToAppear(): void {
     this.refresh()
   }
 
+  /** 顶部问候语（按当前时间）+ 登录用户名 */
+  private displayName(): string {
+    const n = this.nickname.length > 0 ? this.nickname : AppStore.getInstance().getUser().nickname
+    return n.length > 0 ? n : '同学'
+  }
+
   refresh(): void {
+    this.greeting = TimeUtils.greeting(Date.now())
     const store = AppStore.getInstance()
     const d = store.getDashboard()
     this.weekTrend = d.weekTrend
     this.subjects = d.subjectProgress
     this.examType = store.getGoal().examType
-
-    // 最薄弱学科 = 进度最低者，供 AI 洞察引用（指标统一走 AppStore 聚合）
-    let minP = 101
-    let hard = '综合'
-    for (const sp of this.subjects) {
-      if (sp.percent < minP) {
-        minP = sp.percent
-        hard = sp.subject
-      }
-    }
-    this.hardestSubject = hard
-
-    // 动态 AI 内容必须经 AI 服务返回（硬规则 §1）
-    this.aiInsight = AIService.getInstance().longTermAnalysis(store.getProfile(), this.hardestSubject)
   }
 
   @Builder
@@ -60,22 +55,36 @@ export struct Dashboard {
   }
 
   build() {
-    Scroll() {
-      Column({ space: Spacing.LG }) {
-        // 顶部标题
-        Column() {
-          Text('我的工作台')
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Colors.TEXT_PRIMARY)
-            .width('100%')
-          Text('全局学习看板 · 数据每日更新')
-            .fontSize(13)
-            .fontColor(Colors.TEXT_SECONDARY)
-            .margin({ top: 6 })
-            .width('100%')
+    Stack({ alignContent: Alignment.TopStart }) {
+      Scroll() {
+        Column({ space: Spacing.LG }) {
+        // 顶部问候（按当前时间生成 + 登录用户名）+ 右上角头像
+        Row() {
+          Column() {
+            Text(`${this.greeting}，${this.displayName()}`)
+              .fontSize(24)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .width('100%')
+            Text('今天也一起稳稳推进吧')
+              .fontSize(13)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ top: 6 })
+              .width('100%')
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+
+          // 右上角头像：点击即可更换
+          Column() {
+            UserAvatar({ avatar: this.avatar, diameter: 52, bg: Colors.PRIMARY_SOFT })
+          }
+          .onClick(() => {
+            this.showAvatarSheet = true
+          })
         }
         .width('100%')
+        .alignItems(VerticalAlign.Center)
 
         // 考试总览
         Column() {
@@ -196,32 +205,23 @@ export struct Dashboard {
         }
         .dashCard()
 
-        // AI 洞察
-        Column() {
-          Row() {
-            Text('AI 洞察')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.TEXT_PRIMARY)
-            Blank()
-            AITag()
-          }
-          .width('100%')
-          .margin({ bottom: 10 })
-          Text(this.aiInsight)
-            .fontSize(14)
-            .lineHeight(22)
-            .fontColor(Colors.TEXT_SECONDARY)
-            .width('100%')
-        }
-        .dashCard()
-
         Blank().height(20)
+        }
+        .padding(20)
+        .width('100%')
       }
-      .padding(20)
+      .backgroundColor(Colors.BG)
       .width('100%')
+      .height('100%')
+
+      // 头像选择器（右上角头像点击后弹出）
+      AvatarPicker({
+        show: this.showAvatarSheet,
+        onClose: () => {
+          this.showAvatarSheet = false
+        }
+      })
     }
-    .backgroundColor(Colors.BG)
     .width('100%')
     .height('100%')
   }

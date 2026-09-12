@@ -80,8 +80,9 @@ export class SchemaValidator {
         return SchemaValidator.companionValidator()
       case 'review':
         return SchemaValidator.reviewValidator()
-      case 'task_plan':
       case 'task_dialog':
+        return SchemaValidator.dialogValidator()
+      case 'task_plan':
       case 'planning':
         return SchemaValidator.planValidator()
       case 'memory':
@@ -137,6 +138,25 @@ export class SchemaValidator {
       }
       if (!Array.isArray(o.suggestions)) {
         errors.push('字段 suggestions 缺失或非数组')
+      }
+      return { ok: errors.length === 0, data: p, errors: errors }
+    })
+  }
+
+  /**
+   * 对话式规划（task_dialog）—— 结构是 { reply, done, tasks? }，与 task_plan 不同。
+   * 历史上这里误用了 planValidator（要求 tasks + summary），导致 {reply,done} 永远校验失败，
+   * dialog 一直落到兜底文案。此处拆出独立校验器修正。
+   */
+  private static dialogValidator(): SceneValidator {
+    return new SceneValidator('task_dialog', PLANNING_SCHEMA_VERSION, (p: Object): ValidationResult => {
+      const o = p as DialogPayload
+      const errors: string[] = []
+      if (typeof o.reply !== 'string' || o.reply.length === 0) {
+        errors.push('字段 reply 缺失或非字符串')
+      }
+      if (typeof o.done !== 'boolean') {
+        errors.push('字段 done 缺失或非布尔')
       }
       return { ok: errors.length === 0, data: p, errors: errors }
     })

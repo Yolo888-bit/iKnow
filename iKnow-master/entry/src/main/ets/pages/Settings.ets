@@ -9,7 +9,7 @@ interface PersonaOption {
   desc: string
 }
 
-/** 设置：AI 学伴人格 + 一键清除数据（合规） */
+/** 设置：AI 考伴人格 + 一键清除数据（合规） */
 @Entry
 @Component
 export struct Settings {
@@ -29,7 +29,7 @@ export struct Settings {
   private selectPersona(key: AIPersonality): void {
     this.personality = key
     AppStore.getInstance().saveUserPersonality(key)
-    promptAction.showToast({ message: '已切换学伴人格' })
+    promptAction.showToast({ message: '已切换考伴人格' })
   }
 
   private doClearAll(): void {
@@ -49,9 +49,9 @@ export struct Settings {
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
 
-          // AI 学伴人格
+          // AI 考伴人格
           Column() {
-            Text('AI 学伴人格')
+            Text('AI 考伴人格')
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)
@@ -119,7 +119,7 @@ export struct Settings {
           }
           .settingCard()
 
-          Text('iKnow · 专注感知智能学伴 v1.0.0')
+          Text('iKnow · 专注感知智能考伴 v1.0.0')
             .fontSize(12)
             .fontColor(Colors.TEXT_TERTIARY)
             .width('100%')

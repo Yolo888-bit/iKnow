@@ -170,7 +170,7 @@ export class AICompanion extends ViewPU {
             Row.padding({ left: 20, right: 20, top: 16, bottom: 10 });
         }, Row);
         this.observeComponentCreation2((elmtId, isInitialRender) => {
-            Text.create('AI 学伴');
+            Text.create('AI 考伴');
             Text.fontSize(20);
             Text.fontWeight(FontWeight.Bold);
             Text.fontColor(Colors.TEXT_PRIMARY);

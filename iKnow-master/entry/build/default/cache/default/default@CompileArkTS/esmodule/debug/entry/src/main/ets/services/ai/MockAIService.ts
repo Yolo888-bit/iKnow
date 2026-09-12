@@ -1,4 +1,4 @@
-import type { AIService, AIScene, AIRequest, AIResponse } from './AIService';
+import type { AIService, AIScene, AIRequest, AIResponse, AIPayload, AIResult } from './AIService';
 import { QA_SCHEMA_VERSION } from "@normalized:N&&&entry/src/main/ets/services/ai/QAService&";
 import type { QATextPayload, QAImagePayload, QAResp, QAService } from "@normalized:N&&&entry/src/main/ets/services/ai/QAService&";
 import { COMPANION_SCHEMA_VERSION } from "@normalized:N&&&entry/src/main/ets/services/ai/CompanionService&";
@@ -75,7 +75,7 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
         }
     };
     /** §14.7 QA 免责声明（所有 AI 输出必须携带） */
-    private static readonly DISCLAIMER = '（小伴是 AI 学伴，不是真人，回答仅供参考，重要结论请自行核实。）';
+    private static readonly DISCLAIMER = '（小伴是 AI 考伴，不是真人，回答仅供参考，重要结论请自行核实。）';
     static getInstance(): MockAIService {
         if (MockAIService.inst === null) {
             MockAIService.inst = new MockAIService();
@@ -427,6 +427,46 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     async update(req: AIRequest<MemoryPayload>): Promise<AIResponse<MemoryDelta>> {
         return this.runWithRetry<MemoryDelta>('memory', req.requestId, () => this.produceMemory(req.payload), this.defaultMemory());
     }
+    // ===================== 场景路由（PRD §14.1 / §14.2）=====================
+    /** 将统一信封按 scene 转成对应 Agent 的具体请求（payload 类型随 scene 收窄） */
+    private castReq<T>(req: AIRequest<AIPayload>): AIRequest<T> {
+        return {
+            requestId: req.requestId,
+            scene: req.scene,
+            userId: req.userId,
+            sessionId: req.sessionId,
+            payload: req.payload as T,
+            context: req.context,
+            options: req.options
+        } as AIRequest<T>;
+    }
+    /**
+     * 统一场景路由：依据 req.scene 分发到 5 个 Agent 的具体方法。
+     * 复用现有 runWithRetry（§14.5 超时/重试/兜底 + SchemaValidator），调用方零改动。
+     */
+    async dispatch(req: AIRequest<AIPayload>): Promise<AIResponse<AIResult>> {
+        switch (req.scene) {
+            case 'task_plan':
+                return (await this.plan(this.castReq<PlanningInput>(req))) as Object as Promise<AIResponse<AIResult>>;
+            case 'task_dialog':
+                return (await this.dialog(this.castReq<PlanningDialogInput>(req))) as Object as Promise<AIResponse<AIResult>>;
+            case 'planning':
+                return (await this.weeklyInsight(this.castReq<PlanningInput>(req))) as Object as Promise<AIResponse<AIResult>>;
+            case 'companion':
+                return (await this.decide(this.castReq<CompanionContext>(req))) as Object as Promise<AIResponse<AIResult>>;
+            case 'qa_text':
+                return (await this.askText(this.castReq<QATextPayload>(req))) as Object as Promise<AIResponse<AIResult>>;
+            case 'qa_image':
+                return (await this.askImage(this.castReq<QAImagePayload>(req))) as Object as Promise<AIResponse<AIResult>>;
+            case 'review':
+                return (await this.generate(this.castReq<ReviewPayload>(req))) as Object as Promise<AIResponse<AIResult>>;
+            case 'memory':
+                return (await this.update(this.castReq<MemoryPayload>(req))) as Object as Promise<AIResponse<AIResult>>;
+            default:
+                // 穷尽守卫（场景为封闭联合，实际不可达）
+                return this.fallback<AIResult>(req.scene, req.requestId, {} as AIResult);
+        }
+    }
     // ===================== 兼容垫片便捷方法（供现有 AppStore/UI 调用）=====================
     private toTask(p: PlanTask): Task {
         const t = new Task();
@@ -505,10 +545,72 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
         return profile;
     }
     companionIntro(): string {
-        return '你好，我是你的 AI 学伴小伴，不是真人，但会一直陪你。';
+        return '你好，我是你的 AI 考伴小伴，不是真人，但会一直陪你。';
     }
     openPlanning(): string {
         return '今天想学点什么？先告诉我一个大概的目标，我帮你拆成几个具体的小任务。';
+    }
+    /** 规划页开场白（AI 输出，页面不硬编码文案，硬规则 §1） */
+    planningIntro(): string {
+        return '你好，我是 iKnow，你的专属 AI 学习伙伴。今天准备好来学习什么了吗？';
+    }
+    /**
+     * 生成规划后的时间安排分析（AI 输出，硬规则 §1：动态文案不得写死在页面）。
+     * 依据任务科目与预计时长给出分科安排、休息建议与建议总时长。
+     */
+    analyzePlan(tasks: Task[]): string {
+        if (tasks.length === 0) {
+            return '还没有可安排的任务，先告诉我你的学习目标吧。';
+        }
+        let total = 0;
+        const map: Map<string, number> = new Map<string, number>();
+        for (const t of tasks) {
+            total += t.estimatedDuration;
+            const cur = map.get(t.subject);
+            map.set(t.subject, (cur === undefined ? 0 : cur) + t.estimatedDuration);
+        }
+        const parts: string[] = [];
+        map.forEach((min: number, subject: string) => {
+            parts.push(`${subject} ${min} 分钟`);
+        });
+        const restMin = Math.max(10, Math.round(total / 6));
+        return `我建议这样安排：${parts.join('、')}，合计 ${total} 分钟。` +
+            `中途每 30-45 分钟休息 5-10 分钟，避免长时间近距离用眼导致疲劳，` +
+            `所以建议总时长约 ${total + restMin} 分钟。`;
+    }
+    /**
+     * 单日复盘 AI 洞察（AI 输出，硬规则 §1：动态文案不得写死在页面）。
+     * dayLabel 形如「9月12日」；bestPeriod 形如「08:00 - 10:00」。
+     */
+    dayInsight(dayLabel: string, focusRate: number, bestPeriod: string, hasData: boolean): string {
+        if (!hasData) {
+            return `${dayLabel}还没有专注记录，先从一次 25 分钟的专注开始吧。`;
+        }
+        const period = bestPeriod.length > 0 ? bestPeriod : '上午';
+        if (focusRate >= 80) {
+            return `${dayLabel}你的净专注率约 ${focusRate}%，在 ${period} 状态最好。建议下次把最难点任务安排在排这个时间段。`;
+        }
+        if (focusRate >= 60) {
+            return `${dayLabel}你的净专注率约 ${focusRate}%，整体稳定；在 ${period} 状态相对更好，可以把重点任务优先放这里。`;
+        }
+        return `${dayLabel}你的净专注率约 ${focusRate}%，分心偏多。建议把任务切得更小，并在 ${period} 这类状态好的时段集中攻克难点。`;
+    }
+    /** 单日复盘建议（AI 输出，硬规则 §1） */
+    daySuggestions(studyMinutes: number, focusRate: number): string[] {
+        const out: string[] = ['先复盘当天的错题，弄清错因再合上答案重做一遍'];
+        out.push('再做 5 道同类型题，巩固刚掌握的方法');
+        out.push('最后用自己的话总结解题步骤，形成可复用的套路');
+        if (studyMinutes > 0 && focusRate < 70) {
+            out.push('专注率偏低时把单段时长缩短到 25-30 分钟，中间主动休息');
+        }
+        if (studyMinutes >= 180) {
+            out.push('当天学习量较大，注意用眼与休息，避免连续久坐');
+        }
+        return out;
+    }
+    /** 规划对话无有效回复时的承接语（AI 文案，硬规则 §1：不写死在页面） */
+    planningHold(): string {
+        return '我在听，再多说一点你的安排吧，我好帮你把时间和任务都排清楚。';
     }
     nextPlanningQuestion(step: number): string {
         if (step === 0) {

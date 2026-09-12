@@ -69,7 +69,7 @@ export enum CameraState {
     SLEEPY = "SLEEPY",
     UNAVAILABLE = "UNAVAILABLE"
 }
-/** AI 学伴人格 */
+/** AI 考伴人格 */
 export enum AIPersonality {
     STRICT = "STRICT",
     GENTLE = "GENTLE",

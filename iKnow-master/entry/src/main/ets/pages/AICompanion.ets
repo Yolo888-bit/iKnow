@@ -6,7 +6,7 @@ import { IdUtils } from '../utils/IdUtils'
 import { AITag } from '../components/AITag'
 import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
 
-/** AI 学伴 —— 长期关系建立页 */
+/** AI 考伴 —— 长期关系建立页 */
 @Entry
 @Component
 export struct AICompanion {
@@ -81,7 +81,7 @@ export struct AICompanion {
   build() {
     Column() {
       Row() {
-        Text('AI 学伴')
+        Text('AI 考伴')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(Colors.TEXT_PRIMARY)

@@ -1,6 +1,6 @@
 # iKnow PRD 优化建议（仅供评审，不改原 PRD / 不改代码）
 
-> 评阅范围：`iKnow——专注感知智能学伴 App 开发需求.md`（2000 行 PRD）、`README.md`、
+> 评阅范围：`iKnow——专注感知智能考伴 App 开发需求.md`（2000 行 PRD）、`README.md`、
 > `entry/src/main/ets/**` 共 46 个 ArkTS 文件（5283 行）。
 > 目的：**只输出优化方向**，不修改任何现有文件。
 
@@ -39,8 +39,8 @@
 | 页面 9 单次学习复盘 | `pages/StudyReport.ets` | ✅ 五段齐全 |
 | 页面 10 我的工作台 | `pages/Dashboard.ets` | ⚠️ 见 C-2、D-5 |
 | 页面 11 长期学习总结（五维雷达） | `pages/FocusProfile.ets` | ⚠️ 见 D-4 |
-| 页面 12 AI 学伴 | `pages/AICompanion.ets` | ⚠️ 纯被动问答，无主动建议推送 |
-| 页面 13 AI 学伴人格设置 | `pages/Settings.ets` | ❌ 见 B-1（人格不生效） |
+| 页面 12 AI 考伴 | `pages/AICompanion.ets` | ⚠️ 纯被动问答，无主动建议推送 |
+| 页面 13 AI 考伴人格设置 | `pages/Settings.ets` | ❌ 见 B-1（人格不生效） |
 | 页面 14 设备连接 / 模拟模式 | `pages/Device.ets` + `DeviceService` | ⚠️ 见 B-3（清单假数据） |
 | 页面 15 隐私与数据 | `pages/Privacy.ets` | ❌ 见 B-2（授权开关不生效） |
 | 专注状态机 `FocusState` | `models/Enums.ets` | ✅ |
@@ -220,4 +220,4 @@ PRD 最终目标是"有真实产品感的原型"，但没有可判定标准。�
 
 ---
 
-*本文件为评审产物，未修改 `iKnow——专注感知智能学伴 App 开发需求.md` 与任何源码。*
+*本文件为评审产物，未修改 `iKnow——专注感知智能考伴 App 开发需求.md` 与任何源码。*

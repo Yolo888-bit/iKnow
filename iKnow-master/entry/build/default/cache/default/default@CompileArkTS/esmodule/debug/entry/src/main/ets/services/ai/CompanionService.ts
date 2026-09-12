@@ -1,6 +1,6 @@
 import type { AIRequest, AIResponse } from './AIService';
 /**
- * 学伴决策服务契约（PRD §9 / §13，场景 companion）
+ * 考伴决策服务契约（PRD §9 / §13，场景 companion）
  * 决定是否干预、等级、触达渠道、文案、建议动作。
  */
 export interface RecentIntervention {

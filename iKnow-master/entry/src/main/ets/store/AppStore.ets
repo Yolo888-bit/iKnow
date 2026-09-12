@@ -69,6 +69,13 @@ export class AppStore {
       const p = await StorageService.getInstance().loadProfile()
       this.profile = p !== null ? p : new FocusProfile()
     }
+    // 登录用户名全局生效：重新启动（自动登录）时也要把持久化昵称写回 AppStorage，
+    // 否则会用 initAppStorageDefaults 的默认值，首页问候语显示成默认名。
+    if (this.user.nickname.length > 0) {
+      AppStorage.setOrCreate<string>(StorageKey.USER_NICKNAME, this.user.nickname)
+    }
+    // PRD FR-15：人格必须生效 → 启动即把持久化人格同步给 AI 层
+    AIService.getInstance().setPersonality(this.user.aiPersonality)
     await this.refreshAggregates()
     this.initialized = true
   }
@@ -176,6 +183,27 @@ export class AppStore {
     AIService.getInstance().setPersonality(p)
     await StorageService.getInstance().saveUser(this.user)
     AppStorage.setOrCreate<string>(StorageKey.USER_PERSONALITY, p)
+  }
+
+  /** 修改头像（emoji 标识）→ 持久化到用户并全局生效 */
+  async saveUserAvatar(avatar: string): Promise<void> {
+    this.user.avatar = avatar
+    await StorageService.getInstance().saveUser(this.user)
+    AppStorage.setOrCreate<string>(StorageKey.USER_AVATAR, avatar)
+  }
+
+  /**
+   * 登录成功后调用：把「登录用户名」写入用户昵称并全局生效。
+   * 首页/我的等页面通过 @StorageProp(USER_NICKNAME) 响应，无需各自改动。
+   */
+  async applyLoginUser(username: string): Promise<void> {
+    if (this.user.id.length === 0) {
+      this.user.id = IdUtils.uuid()
+      this.user.createdAt = Date.now()
+    }
+    this.user.nickname = username
+    await StorageService.getInstance().saveUser(this.user)
+    AppStorage.setOrCreate<string>(StorageKey.USER_NICKNAME, username)
   }
 
   async saveGoal(goal: LearningGoal): Promise<void> {

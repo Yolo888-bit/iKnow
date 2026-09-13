@@ -1,0 +1,59 @@
+# ---- HarmonyOS / DevEco Studio ----
+# 构建产物
+**/build/
+**/src/ohosTest/build/
+**/src/test/build/
+
+# hvigor 缓存
+.hvigor/
+**/.hvigor/
+.cxx/
+*.hvigor/
+
+# 依赖目录（ohpm）
+oh_modules/
+node_modules/
+
+# DevEco/IDE 配置（个人环境）
+.idea/
+*.iml
+local.properties
+
+# 编译中间文件
+*.o
+*.so
+*.har
+*.hap
+*.app
+*.abc
+
+# 签名与证书（切勿提交）
+*.p12
+*.cer
+*.p7b
+*.jks
+*.keystore
+signConfig/
+
+# ---- 日志与临时文件 ----
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 编辑器 / AI 工具 ----
+.vscode/
+.claude/
+.workbuddy/
+*.swp
+
+# ---- 环境与密钥 ----
+.env
+.env.*
+*.key

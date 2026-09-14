@@ -3,12 +3,15 @@ import { Colors, Radius } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { AIService } from '../services/AIService'
+import { FocusController } from '../services/FocusController'
 import { PlanningInput, PlanningDialogInput } from '../services/ai/PlanningService'
 import { PlanTask } from '../models/StudyPlan'
 import { AIMessage } from '../models/AIMessage'
 import { Task } from '../models/Task'
 import { MessageRole } from '../models/Enums'
 import { IdUtils } from '../utils/IdUtils'
+import { Metrics } from '../services/Metrics'
+import { TimeUtils } from '../utils/TimeUtils'
 import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
 import { UserAvatar } from '../components/UserAvatar'
 
@@ -99,7 +102,12 @@ export struct TaskPlanning {
     this.turns += 1
 
     this.thinking = true
-    const input: PlanningDialogInput = { step: this.turns, userInput: text, history: this.history }
+    const input: PlanningDialogInput = {
+      step: this.turns,
+      userInput: text,
+      history: this.history,
+      planningContext: this.buildPlanningContext()
+    }
     const r = await AIService.getInstance().dialogByScene(input)
     this.thinking = false
 
@@ -138,10 +146,66 @@ export struct TaskPlanning {
     return this.userTexts.join('；')
   }
 
+  /** 最近未完成的计划任务（最多 3 条），供规划参考 */
+  private unfinishedTasks(): string[] {
+    const out: string[] = []
+    for (const t of AppStore.getInstance().getTasks()) {
+      if (!t.done && out.length < 3) {
+        out.push(t.title)
+      }
+    }
+    return out
+  }
+
+  /**
+   * 组装「已知用户背景」注入提示词。
+   * 没数据的项一律不写（宁可少，也不给模型编造的依据）；一个都没有时返回空串。
+   */
+  private buildPlanningContext(): string {
+    const store = AppStore.getInstance()
+    const goal = store.getGoal()
+    const profile = store.getProfile()
+    const lines: string[] = []
+
+    if (goal.examType.length > 0) {
+      const tail = goal.targetDate > 0 ? `，距考试 ${TimeUtils.daysUntil(goal.targetDate, Date.now())} 天` : ''
+      lines.push(`- 备考目标：${goal.examType}${tail}`)
+    }
+    if (goal.subjects.length > 0) {
+      lines.push(`- 学科：${goal.subjects.join('、')}`)
+    }
+    if (profile.sampleCount >= Metrics.MIN_SAMPLES) {
+      if (profile.bestFocusTime.length > 0) {
+        lines.push(`- 最近黄金时段：${profile.bestFocusTime}`)
+      }
+      lines.push(`- 平均单次专注：${profile.averageFocusDuration} 分钟；建议单段不超过 ${profile.focusThreshold} 分钟`)
+    }
+    const unfinished = this.unfinishedTasks()
+    if (unfinished.length > 0) {
+      lines.push(`- 最近未完成任务：${unfinished.join('、')}`)
+    }
+    const minutes = TimeUtils.parseDurationMinutes(this.userTexts.join(' '))
+    if (minutes > 0) {
+      lines.push(`- 用户可用时间：${minutes} 分钟`)
+    }
+    return lines.join('\n')
+  }
+
   /** 兜底路径：直接按已收集的目标生成结构化任务（task_plan 场景） */
   private async generatePlan(): Promise<void> {
     this.thinking = true
-    const input: PlanningInput = { goal: this.composeGoal() }
+    const minutes = TimeUtils.parseDurationMinutes(this.userTexts.join(' '))
+    const input: PlanningInput = {
+      goal: this.composeGoal(),
+      planningContext: this.buildPlanningContext()
+    }
+    if (minutes > 0) {
+      input.availableMinutes = minutes
+    }
+    const subjects = AppStore.getInstance().getGoal().subjects
+    if (subjects.length > 0) {
+      input.subjects = subjects
+    }
     const result = await AIService.getInstance().planByScene(input)
     this.thinking = false
 
@@ -244,14 +308,32 @@ export struct TaskPlanning {
     return sum
   }
 
-  private confirmStart(): void {
+  private async confirmStart(): Promise<void> {
     const selected = this.selectedTasks()
     if (selected.length === 0) {
       promptAction.showToast({ message: '至少保留一个任务' })
       return
     }
+    // 上一段会话仍在跑：先落库再载入新计划，避免幽灵会话静默吞掉新计划（E4）
+    if (FocusController.getInstance().isRunning()) {
+      await AppStore.getInstance().endSession()
+    }
     AppStore.getInstance().setCurrentPlan(selected)
-    router.replaceUrl({ url: 'pages/Focus' })
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
+    router.pushUrl({ url: 'pages/Focus' })
+  }
+
+  /** 跳过规划：不聊天、不生成任务，直接带着已有计划（没有则自由专注）开始 */
+  private skipPlanning(): void {
+    if (this.thinking) {
+      return
+    }
+    if (FocusController.getInstance().isRunning()) {
+      router.pushUrl({ url: 'pages/Focus' })
+      return
+    }
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
+    router.pushUrl({ url: 'pages/Focus' })
   }
 
   // ---------- 视图 ----------
@@ -615,6 +697,30 @@ export struct TaskPlanning {
     Stack() {
       Column() {
         this.header()
+
+        // 跳过规划：还没出计划时，可直接开始（不强依赖对话）
+        if (this.tasks.length === 0) {
+          Row() {
+            Row() {
+              Text('不想聊？')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_TERTIARY)
+              Text('跳过规划，直接开始专注 ›')
+                .fontSize(12)
+                .fontColor(Colors.PRIMARY_DARK)
+                .margin({ left: 4 })
+            }
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .backgroundColor(Colors.CARD)
+            .borderRadius(14)
+            .onClick(() => {
+              this.skipPlanning()
+            })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.End)
+          .padding({ left: 18, right: 18, bottom: 6 })
+        }
 
         // 对话 + 待确认任务
         Scroll(this.scroller) {

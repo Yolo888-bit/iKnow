@@ -57,3 +57,6 @@ desktop.ini
 .env
 .env.*
 *.key
+# 注意：services/ai/BridgeConfig.local.ets 是**必须提交**的空值占位文件
+# （否则他人克隆后缺少模块、编译失败）。填入真实 Key 后请改用：
+#   git update-index --skip-worktree entry/src/main/ets/services/ai/BridgeConfig.local.ets

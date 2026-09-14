@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI'
+import { Home } from './Home'
 import { Dashboard } from './Dashboard'
 import { TaskPlanning } from './TaskPlanning'
 import { Review } from './Review'
@@ -10,17 +11,35 @@ import { FocusController } from '../services/FocusController'
 import { AppStore } from '../store/AppStore'
 import { SessionSnapshot } from '../models/SessionSnapshot'
 
-/** 根容器：4 个底部 Tab */
+/**
+ * 根容器：5 个底部 Tab（专注 / AI 规划 / 复盘 / 工作台 / 我的）
+ *
+ * 导航约定（统一模型）：**本页是唯一根页，永不被 replace**。
+ * 二级页（Focus / FocusBreak / AIChat / StudyReport 等）统一 pushUrl，
+ * 返回统一 router.back()。子页面需要切换 Tab 时通过 INDEX_TAB_REQUEST 传递。
+ */
 @Entry
 @Component
 struct Index {
   @State currentTab: number = 0
   @State showRecover: boolean = false
   @State recoverSnap: SessionSnapshot | null = null
+  @StorageProp(StorageKey.INDEX_TAB_REQUEST) @Watch('onTabRequest') tabRequest: number = -1
   private controller: TabsController = new TabsController()
 
   aboutToAppear(): void {
     this.checkRecovery()
+  }
+
+  /** 子页面请求切 Tab（如"AI 帮我规划"） */
+  private onTabRequest(): void {
+    const t = this.tabRequest
+    if (t < 0) {
+      return
+    }
+    this.controller.changeIndex(t)
+    this.currentTab = t
+    AppStorage.setOrCreate<number>(StorageKey.INDEX_TAB_REQUEST, -1)
   }
 
   /** 硬规则 §7：启动检查是否有被中断（崩溃/被杀）的会话，弹"继续/结束/放弃" */
@@ -63,8 +82,8 @@ struct Index {
     Stack() {
       Tabs({ barPosition: BarPosition.End, controller: this.controller }) {
         TabContent() {
-          Dashboard()
-        }.tabBar(this.tabBar('工作台', 0, '📊'))
+          Home()
+        }.tabBar(this.tabBar('专注', 0, '🎯'))
 
         TabContent() {
           TaskPlanning()
@@ -75,8 +94,12 @@ struct Index {
         }.tabBar(this.tabBar('复盘', 2, '📈'))
 
         TabContent() {
+          Dashboard()
+        }.tabBar(this.tabBar('工作台', 3, '📊'))
+
+        TabContent() {
           Mine()
-        }.tabBar(this.tabBar('我的', 3, '👤'))
+        }.tabBar(this.tabBar('我的', 4, '👤'))
       }
       .scrollable(false)
       .barHeight(60)
@@ -151,6 +174,7 @@ struct Index {
                   }
                   this.showRecover = false
                   this.recoverSnap = null
+                  // 会话已恢复（running），不需要再请求新开
                   router.pushUrl({ url: 'pages/Focus' })
                 })
             }

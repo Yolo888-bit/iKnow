@@ -3,22 +3,31 @@ import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { PermissionService } from '../services/PermissionService'
+import { FocusController } from '../services/FocusController'
 import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
 import { TaskCard } from '../components/TaskCard'
 
-/** 首页 / 今日专注 */
+/**
+ * 专注首页（tab 0）—— 回答 PRD 第十节的三件事：
+ * 「今天学什么 / 现在状态如何 / 是否开始专注」
+ *
+ * 开始专注有两条路：已有今日计划 → 直接进；没有计划 → 让用户选「AI 帮我规划」或「自由专注」，
+ * 不再强制先聊完规划。
+ */
 @Component
 export struct Home {
-  @StorageProp(StorageKey.USER_NICKNAME) nickname: string = '刘灿'
+  @StorageProp(StorageKey.USER_NICKNAME) nickname: string = ''
+  @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
   @StorageProp(StorageKey.EXAM_DAYS) examDays: number = 0
   @StorageProp(StorageKey.TODAY_FOCUS_SEC) todayFocus: number = 0
   @StorageProp(StorageKey.FOCUS_RATE) focusRate: number = 0
   @StorageProp(StorageKey.TODAY_DONE_TASKS) todayDone: number = 0
   @StorageProp(StorageKey.TODAY_TOTAL_TASKS) todayTotal: number = 0
+  @StorageProp(StorageKey.FOCUS_ELAPSED) focusElapsed: number = 0
   @StorageProp(StorageKey.DATA_VERSION) @Watch('refreshPlan') dataVersion: number = 0
-  @State goalTitle: string = '考研上岸'
-  @State examType: string = '考研'
+  @State goalTitle: string = ''
+  @State examType: string = ''
   @State completionRate: number = 0
   @State plan: Task[] = []
 
@@ -34,11 +43,46 @@ export struct Home {
     this.completionRate = this.todayTotal > 0 ? Math.round(this.todayDone / this.todayTotal * 100) : 0
   }
 
+  private displayName(): string {
+    return this.nickname.length > 0 ? this.nickname : '同学'
+  }
+
+  private focusRunning(): boolean {
+    return FocusController.getInstance().isRunning()
+  }
+
+  private cameraOn(): boolean {
+    return PermissionService.getInstance().isCameraOn()
+  }
+
+  /** 开始专注：有计划直接进；没有计划先问一句（可跳过规划） */
   private startFocus(): void {
-    // 摄像头感知授权前置：已授权直接使用；未授权弹出选择，拒绝则降级仅计时模式
-    // 无计划时按「自由专注」直接开始，不再跳转规划聊天页
-    if (PermissionService.getInstance().isCameraOn()) {
-      router.pushUrl({ url: 'pages/Focus' })
+    if (AppStore.getInstance().getCurrentPlan().length > 0 || this.focusRunning()) {
+      this.beginFocus()
+      return
+    }
+    AlertDialog.show({
+      title: '今天还没有计划',
+      message: '要我按你的目标帮你拆一份今日任务，还是直接开始自由专注（不设定任务）？',
+      primaryButton: {
+        value: 'AI 帮我规划',
+        action: () => {
+          this.openAIPlanning()
+        }
+      },
+      secondaryButton: {
+        value: '直接开始',
+        action: () => {
+          this.beginFocus()
+        }
+      }
+    })
+  }
+
+  /** 进专注页前确认感知授权；拒绝则降级为仅计时模式（诚实告知） */
+  private beginFocus(): void {
+    if (this.cameraOn()) {
+      this.enterFocus()
       return
     }
     AlertDialog.show({
@@ -48,21 +92,33 @@ export struct Home {
         value: '开启感知',
         action: () => {
           PermissionService.getInstance().grant('camera')
-          router.pushUrl({ url: 'pages/Focus' })
+          this.enterFocus()
         }
       },
       secondaryButton: {
         value: '仅计时开始',
         action: () => {
-          router.pushUrl({ url: 'pages/Focus' })
+          this.enterFocus()
         }
       }
     })
   }
 
-  /** 进入 AI 任务规划（首页唯一的"对话式规划"入口） */
+  private enterFocus(): void {
+    if (!FocusController.getInstance().isRunning()) {
+      // 只有主动开始才允许 Focus 页新开会话（会话在跑则直接进去继续）
+      AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
+    }
+    router.pushUrl({ url: 'pages/Focus' })
+  }
+
+  private resumeFocus(): void {
+    router.pushUrl({ url: 'pages/Focus' })
+  }
+
+  /** 切到「AI 规划」Tab（不在首页再开一个规划实例） */
   private openAIPlanning(): void {
-    router.pushUrl({ url: 'pages/TaskPlanning' })
+    AppStorage.setOrCreate<number>(StorageKey.INDEX_TAB_REQUEST, 1)
   }
 
   @Builder
@@ -87,7 +143,7 @@ export struct Home {
         // 顶部问候
         Row() {
           Column() {
-            Text(`${TimeUtils.greeting(Date.now())}，${this.nickname}`)
+            Text(`${TimeUtils.greeting(Date.now())}，${this.displayName()}`)
               .fontSize(26)
               .fontWeight(FontWeight.Bold)
               .fontColor(Colors.TEXT_PRIMARY)
@@ -100,99 +156,101 @@ export struct Home {
           .layoutWeight(1)
 
           Stack() {
-            Text('🧑‍🎓')
+            Text(this.avatar)
               .fontSize(26)
               .width(48)
               .height(48)
               .textAlign(TextAlign.Center)
               .backgroundColor(Colors.CARD)
               .borderRadius(24)
-            Circle()
-              .width(10)
-              .height(10)
-              .fill(Colors.CAMERA_RED)
-              .position({ x: 36, y: 2 })
+            // 摄像头指示灯只在真正开启感知时亮起
+            if (this.cameraOn()) {
+              Circle()
+                .width(10)
+                .height(10)
+                .fill(Colors.CAMERA_RED)
+                .position({ x: 36, y: 2 })
+            }
           }
         }
         .width('100%')
 
-        // 今日目标（仅展示；编辑与规划统一走下方「AI 智能规划」入口）
-        Column() {
+        // 专注进行中：返回键留在后台的会话不丢，从这里继续
+        if (this.focusRunning()) {
           Row() {
-            Text('今日目标')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
+            Text(`专注进行中 · ${TimeUtils.formatClock(this.focusElapsed)}`)
+              .fontSize(14)
               .fontColor(Colors.TEXT_PRIMARY)
-            Blank()
+              .layoutWeight(1)
+            Button('继续专注')
+              .fontSize(13)
+              .fontColor(Color.White)
+              .backgroundColor(Colors.PRIMARY)
+              .height(34)
+              .borderRadius(17)
+              .onClick(() => {
+                this.resumeFocus()
+              })
           }
           .width('100%')
+          .padding(14)
+          .backgroundColor(Colors.PRIMARY_SOFT)
+          .borderRadius(Radius.MD)
+        }
 
-          Row({ space: 16 }) {
-            Column() {
-              Text(this.examType)
-                .fontSize(20)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Colors.PRIMARY_DARK)
-              Text(this.goalTitle)
-                .fontSize(13)
-                .fontColor(Colors.TEXT_SECONDARY)
-                .margin({ top: 4 })
-            }
-            .alignItems(HorizontalAlign.Start)
-            .layoutWeight(1)
+        // 今日目标（未设置时给明确指引，不显示假倒计时）
+        Column() {
+          Text('今日目标')
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.TEXT_PRIMARY)
+            .width('100%')
 
-            Column() {
-              Text(`${this.examDays}`)
-                .fontSize(28)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Colors.TEXT_PRIMARY)
-              Text('天')
-                .fontSize(12)
-                .fontColor(Colors.TEXT_SECONDARY)
+          if (this.examType.length === 0) {
+            Text('还没设置目标考试')
+              .fontSize(16)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ top: 10 })
+              .width('100%')
+            Text('在「我的 → 重新设置称呼与目标」里填写')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .margin({ top: 6 })
+              .width('100%')
+          } else {
+            Row({ space: 16 }) {
+              Column() {
+                Text(this.examType)
+                  .fontSize(20)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Colors.PRIMARY_DARK)
+                Text(this.goalTitle)
+                  .fontSize(13)
+                  .fontColor(Colors.TEXT_SECONDARY)
+                  .margin({ top: 4 })
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+
+              Column() {
+                Text(`${this.examDays}`)
+                  .fontSize(28)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Colors.TEXT_PRIMARY)
+                Text('天')
+                  .fontSize(12)
+                  .fontColor(Colors.TEXT_SECONDARY)
+              }
+              .alignItems(HorizontalAlign.Center)
             }
-            .alignItems(HorizontalAlign.Center)
+            .width('100%')
+            .margin({ top: 12 })
           }
-          .width('100%')
-          .margin({ top: 12 })
         }
         .width('100%')
         .padding(20)
         .backgroundColor(Colors.CARD)
         .borderRadius(Radius.LG)
-
-        // AI 智能规划 —— 首页唯一的对话式规划总入口
-        Row() {
-          Text('🤖')
-            .fontSize(24)
-            .width(48)
-            .height(48)
-            .textAlign(TextAlign.Center)
-            .backgroundColor(Colors.CARD)
-            .borderRadius(24)
-          Column() {
-            Text('AI 智能规划')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.TEXT_PRIMARY)
-            Text('按目标智能分析，合理安排今天的时间')
-              .fontSize(12)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .margin({ top: 4 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .margin({ left: 14 })
-          .layoutWeight(1)
-          Text('›')
-            .fontSize(20)
-            .fontColor(Colors.PRIMARY_DARK)
-        }
-        .width('100%')
-        .padding(18)
-        .backgroundColor(Colors.PRIMARY_SOFT)
-        .borderRadius(Radius.LG)
-        .onClick(() => {
-          this.openAIPlanning()
-        })
 
         // 今日任务
         Column() {
@@ -214,7 +272,7 @@ export struct Home {
               Text('还没有今日计划')
                 .fontSize(15)
                 .fontColor(Colors.TEXT_PRIMARY)
-              Text('点上方「AI 智能规划」，让小伴帮你安排今天')
+              Text('可以直接开始自由专注，或让 AI 帮你拆一份任务')
                 .fontSize(13)
                 .fontColor(Colors.TEXT_SECONDARY)
                 .margin({ top: 6 })
@@ -256,7 +314,7 @@ export struct Home {
           Row({ space: 8 }) {
             this.statTile(`${this.focusRate}%`, '净专注率')
             this.statTile(TimeUtils.formatHMin(this.todayFocus), '今日专注时长')
-            this.statTile(`${this.completionRate}%`, '任务完成率')
+            this.statTile(this.todayTotal > 0 ? `${this.completionRate}%` : '—', '任务完成率')
           }
           .width('100%')
         }
@@ -266,7 +324,7 @@ export struct Home {
         .borderRadius(Radius.LG)
 
         // 主操作按钮
-        Button('开始专注')
+        Button(this.focusRunning() ? '继续专注' : '开始专注')
           .width('100%')
           .height(52)
           .fontSize(17)
@@ -277,6 +335,40 @@ export struct Home {
           .onClick(() => {
             this.startFocus()
           })
+
+        // 次级入口：AI 规划（不抢主按钮位置）
+        Row() {
+          Text('🤖')
+            .fontSize(18)
+            .width(36)
+            .height(36)
+            .textAlign(TextAlign.Center)
+            .backgroundColor(Colors.CARD)
+            .borderRadius(18)
+          Column() {
+            Text('AI 智能规划')
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Text('按目标拆一份今日任务')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ top: 2 })
+          }
+          .alignItems(HorizontalAlign.Start)
+          .margin({ left: 12 })
+          .layoutWeight(1)
+          Text('›')
+            .fontSize(20)
+            .fontColor(Colors.PRIMARY_DARK)
+        }
+        .width('100%')
+        .padding(14)
+        .backgroundColor(Colors.CARD)
+        .borderRadius(Radius.MD)
+        .onClick(() => {
+          this.openAIPlanning()
+        })
 
         Blank().height(20)
       }

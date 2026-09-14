@@ -2,6 +2,7 @@ import { FocusState } from '../models/Enums'
 import { FocusSession } from '../models/FocusSession'
 import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
+import { FocusTuning } from '../common/FocusTuning'
 
 export interface Last30DaysSummary {
   totalHours: number
@@ -125,7 +126,8 @@ export class Metrics {
    */
   static completionRate(s: FocusSession, estMap?: Map<string, number>): number {
     if (s.taskIds.length === 0) {
-      return 100
+      // 自由专注未设定任务：不返回 100，避免「自由专注 = 100% 完成」的假象
+      return 0
     }
     const done = s.completedTaskIds
     if (estMap !== undefined && estMap.size > 0) {
@@ -220,7 +222,7 @@ export class Metrics {
         }
       }
       best = Math.max(best, cur)
-      runs.push(best * 0.5) // 采样粒度约 30s → 折算分钟
+      runs.push(Metrics.samplesToMinutes(best))
     }
     const last = runs.slice(-Metrics.MIN_SAMPLES)
     if (last.length < Metrics.MIN_SAMPLES) {
@@ -440,8 +442,15 @@ export class Metrics {
       return ''
     }
     const startClock = Metrics.clock(bestStart)
-    const endClock = Metrics.clock(bestStart + bestLen)
+    // bestLen 是采样点个数，必须按采样间隔折算成分钟，否则时长被放大（30s 采样时会翻倍）
+    const spanMinutes = Math.max(1, Math.round(bestLen * FocusTuning.TIMELINE_SAMPLE_MS / 60000))
+    const endClock = Metrics.clock(bestStart + spanMinutes)
     return `${startClock} - ${endClock}`
+  }
+
+  /** 采样点个数 → 分钟（采样间隔见 FocusTuning.TIMELINE_SAMPLE_MS） */
+  private static samplesToMinutes(points: number): number {
+    return points * FocusTuning.TIMELINE_SAMPLE_MS / 60000
   }
 
   /** 疲劳点：首次出现分心/低专注等级的分钟 */

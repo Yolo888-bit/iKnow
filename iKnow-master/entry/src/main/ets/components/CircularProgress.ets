@@ -5,9 +5,10 @@ import { Colors } from '../common/Theme'
 export struct CircularProgress {
   private settings: RenderingContextSettings = new RenderingContextSettings(true)
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings)
-  @Prop percent: number = 0
+  @Prop @Watch('redraw') percent: number = 0
   @Prop boxSize: number = 140
   @Prop label: string = '净专注率'
+  private ready: boolean = false
 
   build() {
     Stack() {
@@ -15,6 +16,7 @@ export struct CircularProgress {
         .width(this.boxSize)
         .height(this.boxSize)
         .onReady(() => {
+          this.ready = true
           this.draw()
         })
 
@@ -31,6 +33,12 @@ export struct CircularProgress {
     }
     .width(this.boxSize)
     .height(this.boxSize)
+  }
+
+  private redraw(): void {
+    if (this.ready) {
+      this.draw()
+    }
   }
 
   private draw(): void {

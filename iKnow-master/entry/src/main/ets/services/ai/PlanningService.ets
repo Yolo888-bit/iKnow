@@ -9,6 +9,9 @@ export interface PlanningInput {
   availableMinutes?: number
   subjects?: string[]
   preferredSubject?: string
+  /** 已知用户背景（备考目标/学科/距考天数/黄金时段/平均专注时长/未完成任务/可用时间），
+   *  由页面组装后注入提示词；为空则不注入，行为与之前一致。 */
+  planningContext?: string
 }
 
 export interface PlanningResult {
@@ -20,6 +23,8 @@ export interface PlanningDialogInput {
   step: number
   userInput: string
   history?: string[]
+  /** 同 PlanningInput.planningContext */
+  planningContext?: string
 }
 
 export interface PlanningDialogResult {

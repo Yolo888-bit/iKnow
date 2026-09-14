@@ -201,7 +201,8 @@ export class GatewayAIService implements AIService {
    * 模型信息足够时会直接返回 done=true + tasks（PRD §14.4 任务规划）。
    */
   private async runDialog(requestId: string, input: PlanningDialogInput): Promise<AIResponse<PlanningDialogResult>> {
-    const messages: ChatMessage[] = [{ role: 'system', content: Prompts.taskDialog(this.personality) }]
+    const ctx: string = input.planningContext !== undefined ? input.planningContext : ''
+    const messages: ChatMessage[] = [{ role: 'system', content: Prompts.taskDialog(this.personality, ctx) }]
     const history: string[] = input.history !== undefined ? input.history : []
     for (let i = 0; i < history.length; i++) {
       const role: string = i % 2 === 0 ? 'user' : 'assistant'
@@ -245,8 +246,9 @@ export class GatewayAIService implements AIService {
 
   /** 单轮生成结构化任务（对话兜底路径） */
   private async runPlan(requestId: string, input: PlanningInput): Promise<AIResponse<PlanningResult>> {
+    const ctx: string = input.planningContext !== undefined ? input.planningContext : ''
     const messages: ChatMessage[] = [
-      { role: 'system', content: Prompts.taskPlan(this.personality) },
+      { role: 'system', content: Prompts.taskPlan(this.personality, ctx) },
       { role: 'user', content: input.goal }
     ]
     const started: number = Date.now()

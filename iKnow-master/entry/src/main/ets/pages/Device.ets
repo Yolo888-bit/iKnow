@@ -9,6 +9,7 @@ import { DeviceInfo } from '../services/ServiceTypes'
 export struct Device {
   @State devices: DeviceInfo[] = []
   @State simulateMode: boolean = true
+  @State watchPresent: boolean = false
 
   aboutToAppear(): void {
     this.refresh()
@@ -17,6 +18,7 @@ export struct Device {
   private refresh(): void {
     this.devices = DeviceService.getInstance().getDevices()
     this.simulateMode = DeviceService.getInstance().isSimulateMode()
+    this.watchPresent = DeviceService.getInstance().isWatchPresent()
   }
 
   private icon(type: string): string {
@@ -83,12 +85,36 @@ export struct Device {
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
 
-          Text('当前为 MVP 演示，摄像头/手表数据由模拟服务提供。可手动触发状态，验证专注页的绿/黄/红联动。')
+          Text('当前为 MVP 演示，手表为模拟设备（默认未佩戴）。未佩戴时红级干预走手机声音与屏幕，不会假装震动。可手动触发状态，验证专注页的绿/黄/红联动。')
             .fontSize(13)
             .fontColor(Colors.TEXT_SECONDARY)
             .lineHeight(20)
             .width('100%')
             .margin({ top: 8 })
+
+          Row() {
+            Column() {
+              Text('模拟佩戴手表')
+                .fontSize(15)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text(this.watchPresent ? '已佩戴：红级干预尝试手表震动' : '未佩戴：红级干预走手机声音 + 屏幕')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ top: 2 })
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+
+            Toggle({ type: ToggleType.Switch, isOn: this.watchPresent })
+              .selectedColor(Colors.PRIMARY)
+              .onChange((v: boolean) => {
+                this.watchPresent = v
+                DeviceService.getInstance().setWatchPresent(v)
+                this.refresh()
+              })
+          }
+          .width('100%')
+          .padding({ top: 14, bottom: 4 })
 
           Row({ space: 10 }) {
             Button('模拟轻度分心')

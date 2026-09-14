@@ -23,6 +23,8 @@ export class StorageKey {
   static readonly FOCUS_NET = 'ik_focus_net'
   static readonly FOCUS_STATE = 'ik_focus_state'
   static readonly FOCUS_QA_ELAPSED = 'ik_focus_qa_elapsed'
+  /** 休息剩余秒数（休息态由 FocusController 独占，页面只读此值） */
+  static readonly FOCUS_BREAK_REMAIN = 'ik_focus_break_remain'
   static readonly CAMERA_ON = 'ik_camera_on'
 
   // 当前计划
@@ -45,6 +47,12 @@ export class StorageKey {
 
   // 进行中会话 id（持久化到库，用于崩溃/后台恢复，硬规则 §7）
   static readonly ACTIVE_SESSION_ID = 'ik_active_session_id'
+
+  /** 请求切换根页 Tab（子页面无法直接操作 Index 的 TabsController，用此键传递；-1 = 无请求） */
+  static readonly INDEX_TAB_REQUEST = 'ik_index_tab_request'
+
+  /** 请求 Focus 页新开一个会话（1 = 主动开始；消费后置 0） */
+  static readonly FOCUS_START_REQUEST = 'ik_focus_start_request'
 }
 
 /**

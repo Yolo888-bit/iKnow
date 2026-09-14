@@ -37,6 +37,7 @@ import { Task } from '../../models/Task'
 import { StudyReport } from '../../models/StudyReport'
 import { Metrics } from '../Metrics'
 import { IdUtils } from '../../utils/IdUtils'
+import { TimeUtils } from '../../utils/TimeUtils'
 
 interface RetryConfig {
   timeoutMs: number
@@ -263,31 +264,19 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
 
   private async producePlan(input: PlanningInput): Promise<PlanningResult> {
     await this.delay(550)
-    const goal = input.goal
-    const tasks: PlanTask[] = []
-    const add = (title: string, subject: string, min: number, order: number): void => {
-      tasks.push(PlanTask.create(title, subject, min, order))
+    const available = input.availableMinutes !== undefined ? input.availableMinutes : 0
+    const tasks = this.buildTasks(input.goal, available)
+    if (tasks.length === 0) {
+      return { tasks: [], summary: '我还没听清你想学什么，能再说一句「今天想学什么、大概多久」吗？' }
     }
-    if (goal.indexOf('高数') >= 0 || goal.indexOf('数学') >= 0 || goal.indexOf('极限') >= 0 || goal.indexOf('导数') >= 0) {
-      add('复习极限章节', '高等数学', 30, 0)
-      add('完成极限练习题 10 道', '高等数学', 30, 1)
-      add('复习导数章节', '高等数学', 30, 2)
-      add('完成导数练习题 10 道', '高等数学', 30, 3)
-    } else if (goal.indexOf('英语') >= 0 || goal.indexOf('单词') >= 0) {
-      add('背诵 50 个核心单词', '英语', 25, 0)
-      add('精读 1 篇阅读理解', '英语', 35, 1)
-      add('整理今日生词与长难句', '英语', 20, 2)
-    } else if (goal.indexOf('政治') >= 0) {
-      add('梳理马原第一章框架', '政治', 40, 0)
-      add('完成 20 道选择题', '政治', 30, 1)
-      add('错题复盘', '政治', 20, 2)
-    } else {
-      add(`复习「${goal}」核心概念`, '综合', 40, 0)
-      add(`「${goal}」专项练习`, '综合', 40, 1)
-      add('错题与笔记整理', '综合', 20, 2)
+    let total = 0
+    for (const t of tasks) {
+      total += t.estimatedDuration
     }
-    const summary = `已为你拆出 ${tasks.length} 个任务，预计总时长约 ${tasks.reduce((a, t) => a + t.estimatedDuration, 0)} 分钟。`
-    return { tasks, summary }
+    return {
+      tasks: tasks,
+      summary: `已为你拆出 ${tasks.length} 个任务，预计总时长约 ${total} 分钟。建议每 30~45 分钟休息 5~10 分钟。`
+    }
   }
 
   private async produceDialog(input: PlanningDialogInput): Promise<PlanningDialogResult> {
@@ -298,15 +287,94 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     if (input.step === 1) {
       return { reply: '有没有特别想优先完成的部分？', done: false }
     }
-    return {
-      reply: '好的，我帮你安排一下。',
-      done: true,
-      tasks: [
-        PlanTask.create('优先任务块 A', '综合', 30, 0),
-        PlanTask.create('巩固练习 B', '综合', 30, 1),
-        PlanTask.create('整理复盘 C', '综合', 20, 2)
-      ]
+    // 本地兜底也必须基于用户说过的话来生成任务，绝不返回「优先任务块 A」这类占位符
+    const text = this.composeUserText(input)
+    const tasks = this.buildTasks(text, TimeUtils.parseDurationMinutes(text))
+    if (tasks.length === 0) {
+      return { reply: '我先记下了。再多说一句你想学什么（科目或章节），我就能帮你拆成任务。', done: false }
     }
+    let total = 0
+    for (const t of tasks) {
+      total += t.estimatedDuration
+    }
+    return {
+      reply: `按你说的，我拆成 ${tasks.length} 个任务，预计约 ${total} 分钟；建议每 30~45 分钟休息 5~10 分钟。`,
+      done: true,
+      tasks: tasks
+    }
+  }
+
+  /** 把历史里用户说过的话（奇数下标为 AI）拼成一段目标描述 */
+  private composeUserText(input: PlanningDialogInput): string {
+    const h: string[] = input.history !== undefined ? input.history : []
+    const parts: string[] = []
+    for (let i = 0; i < h.length; i += 2) {
+      parts.push(h[i])
+    }
+    parts.push(input.userInput)
+    return parts.join('；')
+  }
+
+  /**
+   * 本地兜底任务生成：按用户原话命名（未知学科也直接用其说法），
+   * 并可选地按「用户可用时间」等比缩放总时长（±15% 内，单条 5~120 分钟）。
+   */
+  private buildTasks(goal: string, availableMinutes: number): PlanTask[] {
+    const g = goal.trim()
+    if (g.length === 0) {
+      return []
+    }
+    const tasks: PlanTask[] = []
+    const add = (title: string, subject: string, min: number): void => {
+      tasks.push(PlanTask.create(title, subject, min, tasks.length))
+    }
+    if (g.indexOf('高数') >= 0 || g.indexOf('数学') >= 0 || g.indexOf('极限') >= 0 || g.indexOf('导数') >= 0) {
+      add('复习极限章节（定理 + 典型例题）', '高等数学', 30)
+      add('完成极限练习题 10 道', '高等数学', 30)
+      add('复习导数章节（求导法则）', '高等数学', 30)
+      add('完成导数练习题 10 道', '高等数学', 30)
+    } else if (g.indexOf('英语') >= 0 || g.indexOf('单词') >= 0) {
+      add('背诵 50 个核心单词', '英语', 25)
+      add('精读 1 篇阅读理解', '英语', 35)
+      add('整理今日生词与长难句', '英语', 20)
+    } else if (g.indexOf('政治') >= 0) {
+      add('梳理马原第一章框架', '政治', 40)
+      add('完成 20 道选择题', '政治', 30)
+      add('错题复盘', '政治', 20)
+    } else {
+      add(`梳理「${g}」的核心概念与框架`, '综合', 40)
+      add(`完成「${g}」的专项练习`, '综合', 40)
+      add('整理错题与笔记', '综合', 20)
+    }
+    return this.scaleToAvailable(tasks, availableMinutes)
+  }
+
+  private scaleToAvailable(tasks: PlanTask[], availableMinutes: number): PlanTask[] {
+    if (availableMinutes <= 0 || tasks.length === 0) {
+      return tasks
+    }
+    let sum = 0
+    for (const t of tasks) {
+      sum += t.estimatedDuration
+    }
+    if (sum <= 0) {
+      return tasks
+    }
+    const factor = availableMinutes / sum
+    const out: PlanTask[] = []
+    let order = 0
+    for (const t of tasks) {
+      let m = Math.round(t.estimatedDuration * factor / 5) * 5
+      if (m < 5) {
+        m = 5
+      }
+      if (m > 120) {
+        m = 120
+      }
+      out.push(PlanTask.create(t.title, t.subject, m, order))
+      order += 1
+    }
+    return out
   }
 
   private async produceInsight(input: PlanningInput): Promise<PlanningResult> {

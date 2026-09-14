@@ -16,12 +16,38 @@ import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
 @Component
 export struct AIChat {
   @StorageProp(StorageKey.FOCUS_QA_ELAPSED) qaElapsed: number = 0
+  @StorageProp(StorageKey.FOCUS_ELAPSED) elapsed: number = 0
   @State messages: AIMessage[] = []
   @State inputValue: string = ''
   @State answering: boolean = false
 
   aboutToAppear(): void {
     this.pushAI('我在答疑模式，想问什么都可以。计时还在继续，安心问。')
+  }
+
+  aboutToDisappear(): void {
+    this.leaveQA()
+  }
+
+  onBackPress(): boolean {
+    this.leaveQA()
+    router.back()
+    return true
+  }
+
+  /** 离开答疑页即归还状态机，避免 qaMode 悬空导致净专注不再累积 */
+  private leaveQA(): void {
+    const c = FocusController.getInstance()
+    if (c.isQaMode()) {
+      c.endQA()
+    }
+  }
+
+  /** 场景标识：让用户明确「我在专注会话里，问完就回去」，不会误以为是规划页 */
+  private sceneLine(): string {
+    const task = FocusController.getInstance().getCurrentTask()
+    const name = task !== null ? `（当前任务「${task.title}」）` : ''
+    return `本次专注 ${TimeUtils.formatClock(this.elapsed)} · 答疑 ${TimeUtils.formatClock(this.qaElapsed)} · 结束后自动回到专注${name}`
   }
 
   private pushAI(content: string): void {
@@ -64,7 +90,7 @@ export struct AIChat {
   }
 
   private backToFocus(): void {
-    FocusController.getInstance().endQA()
+    this.leaveQA()
     router.back()
   }
 
@@ -101,14 +127,14 @@ export struct AIChat {
 
   build() {
     Column() {
-      // 顶部：答疑计时 + 返回
+      // 顶部：场景标识（我在专注会话里）+ 返回
       Row() {
         Column() {
           Text('正在答疑')
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.TEXT_PRIMARY)
-          Text(`本次答疑时间 ${TimeUtils.formatClock(this.qaElapsed)}`)
+          Text(this.sceneLine())
             .fontSize(12)
             .fontColor(Colors.TEXT_SECONDARY)
             .margin({ top: 4 })
@@ -120,6 +146,7 @@ export struct AIChat {
       }
       .width('100%')
       .padding({ left: 20, right: 20, top: 14, bottom: 10 })
+      .backgroundColor(Colors.QA_SOFT)
 
       Scroll() {
         Column({ space: Spacing.MD }) {
@@ -140,12 +167,12 @@ export struct AIChat {
       .layoutWeight(1)
       .align(Alignment.Top)
 
-      Button('返回专注')
+      Button('← 回到专注（继续计时）')
         .width('100%')
         .height(44)
         .fontSize(15)
-        .fontColor(Colors.TEXT_PRIMARY)
-        .backgroundColor(Colors.CARD)
+        .fontColor(Color.White)
+        .backgroundColor(Colors.QA_ACCENT)
         .borderRadius(Radius.MD)
         .margin({ left: 20, right: 20, bottom: 8 })
         .onClick(() => {
@@ -170,7 +197,7 @@ export struct AIChat {
           .height(44)
           .fontSize(15)
           .fontColor(Color.White)
-          .backgroundColor(Colors.PRIMARY)
+          .backgroundColor(Colors.QA_ACCENT)
           .borderRadius(22)
           .margin({ left: 10 })
           .onClick(() => {

@@ -3,7 +3,6 @@ import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { NavParams } from '../models/NavParams'
 import { AppStore } from '../store/AppStore'
-import { AuthService } from '../services/AuthService'
 import { AIPersonality } from '../models/Enums'
 import { UserAvatar } from '../components/UserAvatar'
 import { AvatarPicker } from '../components/AvatarPicker'
@@ -19,7 +18,7 @@ interface CompanionType {
 /** 我的 */
 @Component
 export struct Mine {
-  @StorageProp(StorageKey.USER_NICKNAME) nickname: string = '刘灿'
+  @StorageProp(StorageKey.USER_NICKNAME) nickname: string = ''
   @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
   @State personality: AIPersonality = AIPersonality.GENTLE
   @State showAvatarSheet: boolean = false
@@ -38,8 +37,8 @@ export struct Mine {
     promptAction.showToast({ message: '已切换考伴类型' })
   }
 
-  private async doLogout(): Promise<void> {
-    await AuthService.getInstance().logout()
+  /** 重新设置称呼 / 目标考试与日期（本地体验模式，无账号可退出） */
+  private editProfile(): void {
     router.replaceUrl({ url: 'pages/Login' })
   }
 
@@ -133,7 +132,7 @@ export struct Mine {
             this.showAvatarSheet = true
           })
           Column() {
-            Text(this.nickname)
+            Text(this.nickname.length > 0 ? this.nickname : '同学')
               .fontSize(22)
               .fontWeight(FontWeight.Bold)
               .fontColor(Colors.TEXT_PRIMARY)
@@ -187,8 +186,8 @@ export struct Mine {
         }
         .width('100%')
 
-        // 退出登录
-        Button('退出登录')
+        // 重新设置称呼与目标（本地体验模式，无账号体系）
+        Button('重新设置称呼与目标')
           .width('100%')
           .height(48)
           .fontSize(15)
@@ -196,7 +195,7 @@ export struct Mine {
           .backgroundColor(Colors.CARD)
           .borderRadius(Radius.MD)
           .onClick(() => {
-            this.doLogout()
+            this.editProfile()
           })
 
         Blank().height(20)

@@ -25,8 +25,8 @@ export class FocusTuning {
   /** 黄 → GREEN：需绿信号持续 10 s */
   static readonly DWELL_YELLOW_TO_GREEN_MS = 10_000
 
-  /** 置信度地板：低于此值直接忽略（采而不信，§8） */
-  static readonly CONFIDENCE_FLOOR = 0.5
+  /** 置信度地板：低于此值直接忽略（采而不信，§8）。单位与检测结果一致，为 0~100 */
+  static readonly CONFIDENCE_FLOOR = 50
 
   // ---------- 干预冷却 ----------
   /** 黄级升级冷却窗口 3 min */
@@ -42,11 +42,19 @@ export class FocusTuning {
   /** 窗口内重干预上限 */
   static readonly MAX_HEAVY_PER_WINDOW = 1
 
+  // ---------- 休息（§8）----------
+  /** 一次休息时长 5 min */
+  static readonly BREAK_TOTAL_SEC = 300
+  /** 「再休息 5 分钟」的延长时长 */
+  static readonly BREAK_EXTEND_SEC = 300
+
   // ---------- 计时 / 快照 ----------
   /** 心跳 tick 间隔（仅用于驱动差值累加，不做计数） */
   static readonly TICK_MS = 1_000
   /** 每 10 s 落一条 SessionSnapshot（§4） */
   static readonly SNAPSHOT_INTERVAL_MS = 10_000
+  /** 专注曲线采样间隔：每累计该时长采一个点（状态切换时也会补采） */
+  static readonly TIMELINE_SAMPLE_MS = 30_000
   /** 崩溃/后台恢复：超过该时长的未结束会话视为可恢复 */
   static readonly RESTORE_WINDOW_MS = 30 * 60_000
   /** 后台长睡时，单 tick 累加上限（防差值爆炸） */

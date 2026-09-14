@@ -2,9 +2,9 @@
 @Observed
 export class FocusProfile {
   id: string = ''
-  bestFocusTime: string = '09:30 - 11:30'
-  averageFocusDuration: number = 42   // 平均单次专注时长（分钟）
-  focusThreshold: number = 48         // 当前专注阈值（分钟）
+  bestFocusTime: string = ''            // 空 = 尚未观察出黄金时段
+  averageFocusDuration: number = 0      // 平均单次专注时长（分钟）
+  focusThreshold: number = 0            // 当前专注阈值（分钟）
   efficiency: number = 0
   concentration: number = 0
   stability: number = 0

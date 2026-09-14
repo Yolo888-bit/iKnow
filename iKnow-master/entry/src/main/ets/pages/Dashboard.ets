@@ -1,8 +1,10 @@
+import { router } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { TimeUtils } from '../utils/TimeUtils'
 import { BarChart } from '../components/BarChart'
+import { FocusController } from '../services/FocusController'
 import { SubjectProgress } from '../models/Dashboard'
 import { UserAvatar } from '../components/UserAvatar'
 import { AvatarPicker } from '../components/AvatarPicker'
@@ -18,9 +20,10 @@ export struct Dashboard {
   @StorageProp(StorageKey.WEEK_FOCUS_SEC) weekFocus: number = 0
   @StorageProp(StorageKey.FOCUS_RATE) focusRate: number = 0
   @StorageProp(StorageKey.DATA_VERSION) @Watch('refresh') dataVersion: number = 0
+  @StorageProp(StorageKey.FOCUS_ELAPSED) focusElapsed: number = 0
   @State weekTrend: number[] = []
   @State subjects: SubjectProgress[] = []
-  @State examType: string = '考研'
+  @State examType: string = ''
   @State greeting: string = ''
   @State showAvatarSheet: boolean = false
   private weekLabels: string[] = ['一', '二', '三', '四', '五', '六', '日']
@@ -42,6 +45,15 @@ export struct Dashboard {
     this.weekTrend = d.weekTrend
     this.subjects = d.subjectProgress
     this.examType = store.getGoal().examType
+  }
+
+  /** 有会话在跑（含被返回键留在后台的）时，首页给出继续入口 */
+  private focusRunning(): boolean {
+    return FocusController.getInstance().isRunning()
+  }
+
+  private resumeFocus(): void {
+    router.pushUrl({ url: 'pages/Focus' })
   }
 
   @Builder
@@ -86,38 +98,77 @@ export struct Dashboard {
         .width('100%')
         .alignItems(VerticalAlign.Center)
 
-        // 考试总览
-        Column() {
+        // 专注进行中：返回键留在后台的会话不丢，从这里继续（E4）
+        if (this.focusRunning()) {
           Row() {
-            Column() {
-              Text('考试总览')
-                .fontSize(14)
-                .fontColor(Colors.TEXT_SECONDARY)
-              Text(this.examType)
-                .fontSize(22)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Colors.PRIMARY_DARK)
-                .margin({ top: 6 })
-            }
-            .alignItems(HorizontalAlign.Start)
-            .layoutWeight(1)
-            Column() {
-              Text(`${this.examDays}`)
-                .fontSize(34)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Colors.TEXT_PRIMARY)
-              Text('天')
-                .fontSize(12)
-                .fontColor(Colors.TEXT_SECONDARY)
-            }
-            .alignItems(HorizontalAlign.Center)
+            Text(`专注进行中 · ${TimeUtils.formatClock(this.focusElapsed)}`)
+              .fontSize(14)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .layoutWeight(1)
+            Button('继续专注')
+              .fontSize(13)
+              .fontColor(Color.White)
+              .backgroundColor(Colors.PRIMARY)
+              .height(34)
+              .borderRadius(17)
+              .onClick(() => {
+                this.resumeFocus()
+              })
           }
           .width('100%')
-          Text(`距离 ${this.examType} 还有 ${this.examDays} 天，按节奏稳步推进`)
-            .fontSize(12)
-            .fontColor(Colors.TEXT_TERTIARY)
-            .margin({ top: 10 })
+          .padding(14)
+          .backgroundColor(Colors.PRIMARY_SOFT)
+          .borderRadius(Radius.MD)
+        }
+
+        // 考试总览
+        Column() {
+          Text('考试总览')
+            .fontSize(14)
+            .fontColor(Colors.TEXT_SECONDARY)
             .width('100%')
+          if (this.examType.length === 0) {
+            Text('还没设置目标考试')
+              .fontSize(22)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ top: 6 })
+              .width('100%')
+            Text('在「我的 → 重新设置称呼与目标」里填写，倒计时才会准确')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .margin({ top: 10 })
+              .width('100%')
+          } else {
+            Row() {
+              Column() {
+                Text(this.examType)
+                  .fontSize(22)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Colors.PRIMARY_DARK)
+                  .margin({ top: 6 })
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+              Column() {
+                Text(`${this.examDays}`)
+                  .fontSize(34)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Colors.TEXT_PRIMARY)
+                Text('天')
+                  .fontSize(12)
+                  .fontColor(Colors.TEXT_SECONDARY)
+              }
+              .alignItems(HorizontalAlign.Center)
+            }
+            .width('100%')
+            .margin({ top: 6 })
+            Text(`距离 ${this.examType} 还有 ${this.examDays} 天，按节奏稳步推进`)
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .margin({ top: 10 })
+              .width('100%')
+          }
         }
         .dashCard()
 

@@ -5,17 +5,25 @@ import { Colors } from '../common/Theme'
 export struct BarChart {
   private settings: RenderingContextSettings = new RenderingContextSettings(true)
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings)
-  @Prop values: number[] = []
+  @Prop @Watch('redraw') values: number[] = []
   @Prop labels: string[] = []
   private chartH: number = 160
+  private ready: boolean = false
 
   build() {
     Canvas(this.ctx)
       .width('100%')
       .height(this.chartH)
       .onReady(() => {
+        this.ready = true
         this.draw()
       })
+  }
+
+  private redraw(): void {
+    if (this.ready) {
+      this.draw()
+    }
   }
 
   private draw(): void {

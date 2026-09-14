@@ -38,6 +38,10 @@ export class Colors {
   static readonly ONLINE_SOFT = '#E4F0DA'    // "AI 助手在线" 徽标底
   static readonly ONLINE_DOT = '#5FA84E'     // "在线" 状态点
 
+  // 答疑页配色：低饱和蓝，与规划页的橄榄绿区分开（避免两页被当成同一个页）
+  static readonly QA_ACCENT = '#6E93B8'
+  static readonly QA_SOFT = '#E8EFF6'
+
   // 柔和阴影
   static readonly SHADOW = '#14000000'
 }

@@ -81,7 +81,7 @@ export class AppStore {
   }
 
   private initAppStorageDefaults(): void {
-    AppStorage.setOrCreate<string>(StorageKey.USER_NICKNAME, '刘灿')
+    AppStorage.setOrCreate<string>(StorageKey.USER_NICKNAME, '')
     AppStorage.setOrCreate<string>(StorageKey.USER_AVATAR, '🧑‍🎓')
     AppStorage.setOrCreate<string>(StorageKey.USER_PERSONALITY, AIPersonality.GENTLE)
     AppStorage.setOrCreate<number>(StorageKey.TODAY_FOCUS_SEC, 0)
@@ -105,26 +105,26 @@ export class AppStore {
 
     const u = new User()
     u.id = IdUtils.uuid()
-    u.nickname = '刘灿'
+    u.nickname = ''
     u.avatar = '🧑‍🎓'
     u.aiPersonality = AIPersonality.GENTLE
     u.createdAt = now
     await StorageService.getInstance().saveUser(u)
     this.user = u
 
+    // 目标与昵称由首次引导页设置，不预置任何假目标（否则首屏倒计时是编造的）
     const g = new LearningGoal()
     g.id = IdUtils.uuid()
-    g.title = '考研上岸'
-    g.examType = '考研'
-    g.targetDate = now + 128 * 24 * 3600 * 1000
-    g.subjects = ['高等数学', '英语', '政治']
+    g.title = ''
+    g.examType = ''
+    g.targetDate = 0
+    g.subjects = []
     await StorageService.getInstance().saveGoal(g)
     this.goal = g
 
     // 画像保持空模板：sampleCount = 0，五维全 0，UI 显示"还在了解你"
     const p = new FocusProfile()
     p.id = IdUtils.uuid()
-    p.bestFocusTime = '09:30 - 11:30'
     p.updatedAt = now
     await StorageService.getInstance().saveProfile(p)
     this.profile = p
@@ -251,6 +251,11 @@ export class AppStore {
     }
   }
 
+  /** 计划内任务被就地修改（如专注页勾选完成）后广播一次响应式刷新 */
+  syncPlan(): void {
+    this.pushAggregates()
+  }
+
   // ---------- 结束会话 → 复盘 → 画像 → 工作台联动 ----------
   async endSession(): Promise<StudyReport | null> {
     const controller = FocusController.getInstance()
@@ -279,7 +284,7 @@ export class AppStore {
 
     this.currentSession = session
     this.currentReport = report
-    this.currentPlan = []
+    // 未完成任务保留在计划中（E1：不静默清空，支持跨会话延续）
     return report
   }
 
@@ -288,16 +293,18 @@ export class AppStore {
     const now = Date.now()
     let todayFocus = 0
     let todayNet = 0
+    let todayStudy = 0
     let weekFocus = 0
     const weekStart = TimeUtils.dayStart(now) - 6 * 24 * 3600 * 1000
 
     for (const s of this.sessions) {
       if (TimeUtils.isSameDay(s.startTime, now)) {
-        todayFocus += s.totalDuration
-        todayNet += s.focusDuration
+        todayFocus += Metrics.wallClock(s)
+        todayNet += Metrics.netFocusSec(s)
+        todayStudy += Metrics.totalStudySec(s)
       }
       if (s.startTime >= weekStart) {
-        weekFocus += s.focusDuration
+        weekFocus += Metrics.netFocusSec(s)
       }
     }
 
@@ -315,7 +322,8 @@ export class AppStore {
     const d = new Dashboard()
     d.todayFocusSeconds = todayFocus
     d.todayNetFocusSeconds = todayNet
-    d.focusRate = todayFocus > 0 ? Math.round(todayNet / todayFocus * 100) : 0
+    // 口径与复盘页一致：净专注率 = 净专注 / 总学习（总学习 = 墙钟 − 休息 − 暂停）
+    d.focusRate = todayStudy > 0 ? Math.round(todayNet / todayStudy * 100) : 0
     d.weekFocusSeconds = weekFocus
     d.weekTrend = this.computeWeekTrend(now)
     d.todayCompletedTasks = done
@@ -387,6 +395,8 @@ export class AppStore {
 
   // ---------- 数据清除（合规） ----------
   async clearAll(): Promise<void> {
+    // E15：先终止正在进行的会话，否则清完数据回专注页点结束会把刚删的数据写回
+    FocusController.getInstance().abort()
     await StorageService.getInstance().clearAll()
     // 重置为「零状态」，但保留一个可用账号，避免下次启动误触种子
     const now = Date.now()
@@ -408,7 +418,6 @@ export class AppStore {
 
     const p = new FocusProfile()
     p.id = IdUtils.uuid()
-    p.bestFocusTime = '09:30 - 11:30'
     p.updatedAt = now
     await StorageService.getInstance().saveProfile(p)
 

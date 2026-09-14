@@ -1,5 +1,6 @@
 import { router } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
+import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { Metrics, Last30DaysSummary, PracticeSummaryItem, HabitInsight, DaySummary } from '../services/Metrics'
 import { AIService } from '../services/AIService'
@@ -1006,7 +1007,8 @@ export struct Review {
       .width('70%')
       .margin({ top: 8, bottom: 24 })
       .onClick(() => {
-        router.pushUrl({ url: 'pages/TaskPlanning' })
+        // 切到「AI 规划」Tab，而不是再 push 一个 TaskPlanning 实例（否则两份对话状态互不同步）
+        AppStorage.setOrCreate<number>(StorageKey.INDEX_TAB_REQUEST, 1)
       })
   }
 

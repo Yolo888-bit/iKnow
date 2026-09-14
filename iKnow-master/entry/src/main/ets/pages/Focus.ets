@@ -5,9 +5,12 @@ import { AppStore } from '../store/AppStore'
 import { FocusController } from '../services/FocusController'
 import { FocusDetectionService } from '../services/FocusDetectionService'
 import { SensorService } from '../services/SensorService'
-import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
 import { FocusStateUi } from '../common/FocusStateUi'
+import { InterventionEngine } from '../services/InterventionEngine'
+import { InterventionEvent } from '../models/InterventionEvent'
+import { FeedbackAction } from '../models/Enums'
+import { CompanionDecision } from '../services/ai/CompanionService'
 import { FocusTimer } from '../components/FocusTimer'
 import { BreathingLight } from '../components/BreathingLight'
 import { AITag } from '../components/AITag'
@@ -18,37 +21,131 @@ import { AITag } from '../components/AITag'
 export struct Focus {
   @StorageProp(StorageKey.FOCUS_ELAPSED) elapsed: number = 0
   @StorageProp(StorageKey.FOCUS_NET) net: number = 0
-  @StorageProp(StorageKey.FOCUS_STATE) focusState: string = 'FOCUSED'
+  @StorageProp(StorageKey.FOCUS_STATE) @Watch('onStateChanged') focusState: string = 'FOCUSED'
   @StorageProp(StorageKey.PERCEPTION_MODE) perceptionMode: string = 'PERCEPTION_FULL'
   @State taskTitle: string = '自由专注'
   @State taskSubject: string = '无任务'
+  @State hasPlan: boolean = false
+  @State planDone: number = 0
+  @State planTotal: number = 0
   @State showEndConfirm: boolean = false
   @State ending: boolean = false
+  /** 当前干预（来自 InterventionEngine，经 FocusController 回调送达） */
+  @State interventionMsg: string = ''
+  @State interventionLevel: string = ''
+  @State interventionChannel: string = ''
+  private interventionEvent: InterventionEvent | null = null
 
   aboutToAppear(): void {
     const controller = FocusController.getInstance()
     if (!controller.isRunning()) {
+      // 只有"主动开始"才新开会话；否则（如从复盘返回）退回根页，避免静默开始一段新专注
+      const raw: number | undefined = AppStorage.get<number>(StorageKey.FOCUS_START_REQUEST)
+      const requested = raw !== undefined ? raw : 0
+      AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 0)
+      if (requested !== 1) {
+        router.back()
+        return
+      }
       controller.start(AppStore.getInstance().getCurrentPlan())
     }
+    // 干预链路接上 UI：引擎决策 → 横幅/卡片（原先 setOnIntervention 无人调用，链路是死的）
+    controller.setOnIntervention((d: CompanionDecision, e: InterventionEvent) => {
+      this.interventionEvent = e
+      this.interventionMsg = d.message
+      this.interventionLevel = d.level
+      this.interventionChannel = d.channel
+    })
     this.refreshTask()
   }
 
+  aboutToDisappear(): void {
+    FocusController.getInstance().setOnIntervention(null)
+  }
+
+  /** 回到专注态即清掉未处理的干预提示，避免红框常驻 */
+  private onStateChanged(): void {
+    if (this.focusState === 'FOCUSED') {
+      this.clearIntervention()
+    }
+  }
+
+  private clearIntervention(): void {
+    this.interventionEvent = null
+    this.interventionMsg = ''
+    this.interventionLevel = ''
+    this.interventionChannel = ''
+  }
+
+  private feedback(action: FeedbackAction, recovered: boolean): void {
+    const e = this.interventionEvent
+    if (e !== null) {
+      InterventionEngine.getInstance().recordUserFeedback(e, action, recovered)
+    }
+    this.clearIntervention()
+  }
+
+  private channelText(): string {
+    if (this.interventionChannel === 'watch-vibrate') {
+      return '手表震动'
+    }
+    if (this.interventionChannel === 'phone-sound') {
+      return '手机提醒'
+    }
+    if (this.interventionChannel === 'screen-select') {
+      return '屏幕提示'
+    }
+    return ''
+  }
+
+  /** 感知依据：让"为什么现在变黄/红了"可解释 */
+  private basisText(): string {
+    const c = FocusController.getInstance()
+    const d = c.getLastDetail()
+    if (d.length === 0) {
+      return this.perceptionMode === 'PERCEPTION_TIMER_ONLY' ? '依据：未开启感知（仅计时）' : '依据：等待感知数据…'
+    }
+    return `依据：${d} · 置信度 ${c.getLastConfidence()}%`
+  }
+
+  onBackPress(): boolean {
+    if (this.showEndConfirm) {
+      this.showEndConfirm = false
+      return true
+    }
+    if (!FocusController.getInstance().isRunning()) {
+      return false
+    }
+    // 保持会话运行返回上一页（根页会显示「继续专注」），避免幽灵会话
+    router.back()
+    return true
+  }
+
   private refreshTask(): void {
-    const plan = AppStore.getInstance().getCurrentPlan()
-    let cur: Task | null = null
-    for (const t of plan) {
-      if (!t.done) {
-        cur = t
-        break
-      }
-    }
-    if (cur === null && plan.length > 0) {
-      cur = plan[0]
-    }
+    const c = FocusController.getInstance()
+    this.hasPlan = c.getTaskCount() > 0
+    this.planTotal = c.getTaskCount()
+    this.planDone = c.getCompletedCount()
+    const cur = c.getCurrentTask()
     if (cur !== null) {
       this.taskTitle = cur.title
       this.taskSubject = cur.subject
+    } else if (this.hasPlan) {
+      this.taskTitle = '今日任务已全部完成'
+      this.taskSubject = '可以结束了'
+    } else {
+      this.taskTitle = '自由专注'
+      this.taskSubject = '未设定任务'
     }
+  }
+
+  private completeTask(): void {
+    if (!FocusController.getInstance().completeCurrentTask()) {
+      return
+    }
+    AppStore.getInstance().setCurrentPlan(FocusController.getInstance().getTasks())
+    AppStore.getInstance().syncPlan()
+    this.refreshTask()
   }
 
   private togglePause(): void {
@@ -61,12 +158,20 @@ export struct Focus {
   }
 
   private rest(): void {
-    FocusController.getInstance().startBreak()
+    const c = FocusController.getInstance()
+    if (!c.isRunning() || c.isResting() || c.isQaMode()) {
+      return
+    }
+    c.startBreak()
     router.pushUrl({ url: 'pages/FocusBreak' })
   }
 
   private openQA(): void {
-    FocusController.getInstance().startQA()
+    const c = FocusController.getInstance()
+    if (!c.isRunning() || c.isPaused() || c.isResting() || c.isQaMode()) {
+      return
+    }
+    c.startQA()
     router.pushUrl({ url: 'pages/AIChat' })
   }
 
@@ -169,8 +274,124 @@ export struct Focus {
             .fontColor(Colors.TEXT_SECONDARY)
             .margin({ top: 6 })
 
+          // 感知依据：说明"为什么现在是这个状态"
+          Text(this.basisText())
+            .fontSize(12)
+            .fontColor(Colors.TEXT_TERTIARY)
+            .margin({ top: 6 })
+
+          // 干预卡片（来自 InterventionEngine：LIGHT 提醒 / HEAVY 主动询问）
+          if (this.interventionLevel.length > 0) {
+            Column() {
+              Row() {
+                Text(this.interventionLevel === 'HEAVY' ? '🔔 需要休息一下吗' : '💡 小伴提醒')
+                  .fontSize(15)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Colors.TEXT_PRIMARY)
+                Blank()
+                Text(this.channelText())
+                  .fontSize(11)
+                  .fontColor(Colors.TEXT_TERTIARY)
+              }
+              .width('100%')
+
+              Text(this.interventionMsg)
+                .fontSize(13)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ top: 6 })
+                .width('100%')
+
+              Row({ space: 10 }) {
+                Button('继续专注')
+                  .fontSize(13)
+                  .fontColor(Color.White)
+                  .backgroundColor(Colors.PRIMARY)
+                  .height(38)
+                  .borderRadius(19)
+                  .onClick(() => {
+                    this.feedback(FeedbackAction.CONTINUE, true)
+                    FocusDetectionService.getInstance().resume()
+                  })
+                Button('休息一下')
+                  .fontSize(13)
+                  .fontColor(Colors.TEXT_PRIMARY)
+                  .backgroundColor(Colors.CARD)
+                  .height(38)
+                  .borderRadius(19)
+                  .onClick(() => {
+                    this.feedback(FeedbackAction.REST, false)
+                    this.rest()
+                  })
+                if (this.interventionLevel === 'HEAVY') {
+                  Button('结束本次')
+                    .fontSize(13)
+                    .fontColor(Colors.TEXT_SECONDARY)
+                    .backgroundColor(Colors.CARD)
+                    .height(38)
+                    .borderRadius(19)
+                    .onClick(() => {
+                      this.feedback(FeedbackAction.END, false)
+                      this.showEndConfirm = true
+                    })
+                }
+              }
+              .margin({ top: 12 })
+            }
+            .width('86%')
+            .padding(14)
+            .backgroundColor(this.interventionLevel === 'HEAVY' ? Colors.RED_SOFT : Colors.YELLOW_SOFT)
+            .borderRadius(Radius.LG)
+            .margin({ top: 20 })
+          }
+
+          // 当前任务：勾选完成（复盘完成率的数据来源）
+          if (this.hasPlan) {
+            Column() {
+              Row() {
+                Checkbox()
+                  .select(this.planDone >= this.planTotal)
+                  .selectedColor(Colors.PRIMARY)
+                  .width(22)
+                  .height(22)
+                  .enabled(this.planDone < this.planTotal)
+                  .onChange(() => {
+                    this.completeTask()
+                  })
+                Column() {
+                  Text(this.taskSubject)
+                    .fontSize(12)
+                    .fontColor(Colors.TEXT_SECONDARY)
+                  Text(this.taskTitle)
+                    .fontSize(15)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Colors.TEXT_PRIMARY)
+                    .margin({ top: 2 })
+                }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                .margin({ left: 12 })
+
+                Text(`${this.planDone}/${this.planTotal}`)
+                  .fontSize(13)
+                  .fontColor(Colors.TEXT_SECONDARY)
+              }
+              .width('100%')
+
+              Text('完成后勾选，复盘会统计完成率')
+                .fontSize(11)
+                .fontColor(Colors.TEXT_TERTIARY)
+                .margin({ top: 8 })
+            }
+            .width('86%')
+            .padding(14)
+            .backgroundColor(Colors.CARD)
+            .borderRadius(Radius.MD)
+            .margin({ top: 24 })
+          }
+
           // 红灯：AI 主动询问（给选择，不指责）
-          if (this.focusState === 'DISTRACTED') {
+          // 干预引擎已给出卡片时不再重复渲染，避免同一件事弹两次
+          if (this.focusState === 'DISTRACTED' && this.interventionLevel.length === 0) {
             Column() {
               Text('注意到你离开有一会儿了。')
                 .fontSize(15)
@@ -271,6 +492,7 @@ export struct Focus {
             .fontColor(Colors.TEXT_PRIMARY)
             .backgroundColor(Colors.CARD)
             .borderRadius(Radius.MD)
+            .enabled(this.focusState !== 'RESTING' && this.focusState !== 'QA_MODE')
             .onClick(() => {
               this.rest()
             })
@@ -299,17 +521,27 @@ export struct Focus {
         .fontWeight(FontWeight.Medium)
         .fontColor(Color.White)
         .backgroundColor(Colors.PRIMARY)
-        .opacity(0.92)
+        .opacity(this.focusState === 'PAUSED' || this.focusState === 'RESTING' ? 0.4 : 0.92)
         .borderRadius(29)
         .margin({ right: 20, bottom: 90 })
         .shadow({ radius: 12, color: Colors.SHADOW, offsetX: 0, offsetY: 4 })
+        .enabled(this.focusState !== 'PAUSED' && this.focusState !== 'RESTING')
         .onClick(() => {
           this.openQA()
         })
 
-      // 结束确认（AI 语气，二次确认）
+      // 结束确认（AI 语气，二次确认 + 可取消）
       if (this.showEndConfirm) {
-        Column() {
+        Stack({ alignContent: Alignment.Center }) {
+          // 遮罩层：点击即取消
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('#66000000')
+            .onClick(() => {
+              this.showEndConfirm = false
+            })
+
           Column() {
             Text('今天这一段辛苦了。')
               .fontSize(17)
@@ -345,6 +577,17 @@ export struct Focus {
                 })
             }
             .margin({ top: 20 })
+
+            Button('继续专注')
+              .width('100%')
+              .height(40)
+              .fontSize(14)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .backgroundColor(Color.Transparent)
+              .margin({ top: 8 })
+              .onClick(() => {
+                this.showEndConfirm = false
+              })
           }
           .width('82%')
           .padding(24)
@@ -353,9 +596,6 @@ export struct Focus {
         }
         .width('100%')
         .height('100%')
-        .backgroundColor('#66000000')
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
       }
     }
     .width('100%')

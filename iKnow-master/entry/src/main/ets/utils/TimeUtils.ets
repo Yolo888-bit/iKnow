@@ -86,4 +86,92 @@ export class TimeUtils {
     const mm = m < 10 ? `0${m}` : `${m}`
     return `${hh}:${mm}`
   }
+
+  /**
+   * 从自然语言里解析时长（分钟），解析不出来返回 0（= 不做时长约束）。
+   * 支持：「2 小时」「两个小时」「半小时」「30 分钟」「1.5 小时」「1 小时 20 分钟」
+   */
+  static parseDurationMinutes(text: string): number {
+    let minutes = 0
+    const hourIdx = text.indexOf('小时')
+    if (hourIdx > 0) {
+      minutes += Math.round(TimeUtils.quantityBefore(text, hourIdx) * 60)
+    }
+    const minIdx = text.indexOf('分钟')
+    if (minIdx > 0) {
+      minutes += Math.round(TimeUtils.quantityBefore(text, minIdx))
+    }
+    return minutes
+  }
+
+  /** 取 pos 之前紧跟的数量（阿拉伯数字 / 一~十 / 半），允许中间夹「个、多、来、空格」 */
+  private static quantityBefore(text: string, pos: number): number {
+    let p = pos
+    while (p > 0) {
+      const ch = text.charAt(p - 1)
+      if (ch === '个' || ch === '多' || ch === '来' || ch === ' ' || ch === '\t') {
+        p--
+      } else {
+        break
+      }
+    }
+    if (p === 0) {
+      return 0
+    }
+    const cn = TimeUtils.cnDigit(text.charAt(p - 1))
+    if (cn > 0) {
+      return cn
+    }
+    let start = p
+    while (start > 0) {
+      const ch = text.charAt(start - 1)
+      if ((ch >= '0' && ch <= '9') || ch === '.') {
+        start--
+      } else {
+        break
+      }
+    }
+    if (start === p) {
+      return 0
+    }
+    const v = Number(text.substring(start, p))
+    return Number.isNaN(v) ? 0 : v
+  }
+
+  private static cnDigit(ch: string): number {
+    if (ch === '一') {
+      return 1
+    }
+    if (ch === '两' || ch === '二') {
+      return 2
+    }
+    if (ch === '三') {
+      return 3
+    }
+    if (ch === '四') {
+      return 4
+    }
+    if (ch === '五') {
+      return 5
+    }
+    if (ch === '六') {
+      return 6
+    }
+    if (ch === '七') {
+      return 7
+    }
+    if (ch === '八') {
+      return 8
+    }
+    if (ch === '九') {
+      return 9
+    }
+    if (ch === '十') {
+      return 10
+    }
+    if (ch === '半') {
+      return 0.5
+    }
+    return 0
+  }
 }

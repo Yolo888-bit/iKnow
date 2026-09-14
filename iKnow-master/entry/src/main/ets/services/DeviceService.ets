@@ -1,6 +1,7 @@
 import { DeviceInfo } from './ServiceTypes'
 import { FocusDetectionService } from './FocusDetectionService'
 import { SensorService } from './SensorService'
+import { PermissionService } from './PermissionService'
 import { FocusState } from '../models/Enums'
 
 /**
@@ -28,21 +29,32 @@ export class DeviceService {
     phone.statusText = '已连接'
     list.push(phone)
 
+    // 摄像头状态以真实授权为准，不再用独立的本地开关冒充
+    const cameraOn = PermissionService.getInstance().snapshot().camera
     const camera = new DeviceInfo()
     camera.type = 'CAMERA'
-    camera.name = '摄像头'
-    camera.connected = this.cameraOn
-    camera.statusText = this.cameraOn ? '感知中' : '已关闭'
+    camera.name = '本机摄像头'
+    camera.connected = cameraOn
+    camera.statusText = cameraOn ? '感知中（本地分析，不上传）' : '已关闭'
     list.push(camera)
 
     const watch = new DeviceInfo()
     watch.type = 'WATCH'
-    watch.name = '华为 WATCH'
+    watch.name = '模拟手表（非真实设备）'
     watch.connected = SensorService.getInstance().isConnected()
-    watch.statusText = watch.connected ? SensorService.getInstance().getStatusText() : '未连接'
+    watch.statusText = SensorService.getInstance().getStatusText()
     list.push(watch)
 
     return list
+  }
+
+  /** 模拟佩戴 / 断开手表（诚实开关：默认未佩戴） */
+  isWatchPresent(): boolean {
+    return SensorService.getInstance().isWristPresent()
+  }
+
+  setWatchPresent(present: boolean): void {
+    SensorService.getInstance().setPresent(present)
   }
 
   isCameraOn(): boolean {

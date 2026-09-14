@@ -1,6 +1,7 @@
-import { FocusState, FocusSource, SessionStatus } from '../models/Enums'
+import { FocusState, FocusSource, SessionStatus, TaskStatus } from '../models/Enums'
 import { FocusSession, FocusEvent, FocusTimelinePoint } from '../models/FocusSession'
 import { SessionSnapshot } from '../models/SessionSnapshot'
+import { TaskTimelinePoint } from '../models/TaskTimeline'
 import { InterventionEvent } from '../models/InterventionEvent'
 import { Task } from '../models/Task'
 import { QuestionRecord } from '../models/QuestionRecord'
@@ -37,6 +38,10 @@ export class FocusController {
   private qaMode: boolean = false
   private resting: boolean = false
   private paused: boolean = false
+  /** 进入答疑前的状态，退出答疑时还原（避免无条件跳回 FOCUSED） */
+  private stateBeforeQA: FocusState = FocusState.FOCUSED
+  /** 本次休息的起始时间戳（0 = 未在休息），休息剩余由它现算 */
+  private breakStartedAt: number = 0
 
   // 计时累加器（秒，浮点；显示时取整）
   private totalSec: number = 0
@@ -47,6 +52,9 @@ export class FocusController {
   private pausedAccum: number = 0
 
   private state: FocusState = FocusState.FOCUSED
+  /** 最近一次感知结果的说明与置信度（用于 UI 呈现「依据」） */
+  private lastDetail: string = ''
+  private lastConfidence: number = 0
   private stateEnteredAt: number = 0
   private lastTickAt: number = 0
   private sampleAccumMs: number = 0
@@ -121,8 +129,78 @@ export class FocusController {
     return this.lastDecision
   }
 
-  /** UI 注册干预回调（Phase 1 用于弹窗/横幅呈现） */
-  setOnIntervention(cb: (d: CompanionDecision, e: import('../models/InterventionEvent').InterventionEvent) => void): void {
+  /** 最近一次感知依据（说明 + 置信度 0~100） */
+  getLastDetail(): string {
+    return this.lastDetail
+  }
+
+  getLastConfidence(): number {
+    return this.lastConfidence
+  }
+
+  /** 休息剩余秒数（0 = 不在休息或已结束） */
+  getBreakRemainSec(): number {
+    if (!this.resting || this.breakStartedAt <= 0) {
+      return 0
+    }
+    const elapsed = Math.floor((Date.now() - this.breakStartedAt) / 1000)
+    return Math.max(0, FocusTuning.BREAK_TOTAL_SEC - elapsed)
+  }
+
+  // ---------- 当前任务（E1 完成闭环 / B3 任务级归因入口） ----------
+
+  getCurrentTask(): Task | null {
+    if (this.currentTaskId.length > 0) {
+      for (const t of this.tasks) {
+        if (t.id === this.currentTaskId && !t.done) {
+          return t
+        }
+      }
+    }
+    for (const t of this.tasks) {
+      if (!t.done) {
+        return t
+      }
+    }
+    return null
+  }
+
+  getTaskCount(): number {
+    return this.tasks.length
+  }
+
+  getCompletedCount(): number {
+    return this.tasks.filter((t: Task): boolean => t.done).length
+  }
+
+  /** 勾选当前任务完成，下一个未完成任务自动成为当前任务 */
+  completeCurrentTask(): boolean {
+    const t = this.getCurrentTask()
+    if (t === null) {
+      return false
+    }
+    t.done = true
+    t.status = TaskStatus.DONE
+    this.currentTaskId = ''
+    this.recordTaskTimeline()
+    return true
+  }
+
+  switchToTask(id: string): void {
+    this.currentTaskId = id
+    this.recordTaskTimeline()
+  }
+
+  private recordTaskTimeline(): void {
+    const p = new TaskTimelinePoint()
+    p.minuteOffset = Math.floor(this.totalSec / 60)
+    p.taskId = this.currentTaskId
+    p.level = this.levelForState(this.state)
+    this.session.taskTimeline.push(p)
+  }
+
+  /** UI 注册干预回调（Phase 1 用于弹窗/横幅呈现）；传 null 取消注册 */
+  setOnIntervention(cb: ((d: CompanionDecision, e: InterventionEvent) => void) | null): void {
     this.onIntervention = cb
   }
 
@@ -197,6 +275,10 @@ export class FocusController {
     this.qaMode = false
     this.resting = false
     this.paused = false
+    this.stateBeforeQA = FocusState.FOCUSED
+    this.breakStartedAt = 0
+    this.lastDetail = ''
+    this.lastConfidence = 0
   }
 
   /** 计时心跳：用 Date.now() 差值累加（硬规则 §7） */
@@ -228,7 +310,7 @@ export class FocusController {
       this.distractionSec += dt
     }
     this.sampleAccumMs += dtMs
-    if (this.sampleAccumMs >= 30000) {
+    if (this.sampleAccumMs >= FocusTuning.TIMELINE_SAMPLE_MS) {
       this.sampleAccumMs = 0
       this.sampleTimeline()
     }
@@ -240,6 +322,8 @@ export class FocusController {
     if (!this.running || this.qaMode || this.resting || this.paused) {
       return
     }
+    this.lastDetail = r.detail
+    this.lastConfidence = Math.round(r.confidence)
     if (r.confidence < FocusTuning.CONFIDENCE_FLOOR) {
       // 采而不信：仅记账，不切换
       this.recordEvent(this.mapState(r.state), r.source, r.confidence, 'below-confidence')
@@ -330,14 +414,15 @@ export class FocusController {
     this.timeline.push(p)
   }
 
+  /** 曲线等级由状态确定性推导 —— 不再用随机数，保证曲线/最佳时段/疲劳点可复现 */
   private levelForState(s: FocusState): number {
     if (s === FocusState.FOCUSED) {
-      return 90 + Math.round(Math.random() * 8)
+      return 92
     }
     if (s === FocusState.SLIGHTLY_DISTRACTED) {
-      return 55 + Math.round(Math.random() * 15)
+      return 62
     }
-    return 25 + Math.round(Math.random() * 15)
+    return 30
   }
 
   /** 评估是否干预（经 InterventionEngine，Phase 0 仅决策+记录，UI 呈现留待第 1 步） */
@@ -363,18 +448,24 @@ export class FocusController {
 
   /** 进入 AI 答疑：停止摄像头监测，计时不中断（计入总时长，不计净专注） */
   startQA(): void {
-    if (!this.running) {
+    // 暂停/休息中不允许进答疑，否则退回时状态会被覆盖
+    if (!this.running || this.qaMode || this.resting || this.paused) {
       return
     }
+    this.stateBeforeQA = this.state
     this.qaMode = true
     this.state = FocusState.QA_MODE
+    this.stateEnteredAt = Date.now()
     FocusDetectionService.getInstance().stop()
     this.pushLive()
   }
 
   endQA(): void {
+    if (!this.running || !this.qaMode) {
+      return
+    }
     this.qaMode = false
-    this.state = FocusState.FOCUSED
+    this.restoreAfterQA()
     this.stateEnteredAt = Date.now()
     if (PermissionService.getInstance().snapshot().camera) {
       FocusDetectionService.getInstance().start((r: FocusDetectionResult) => {
@@ -384,12 +475,25 @@ export class FocusController {
     this.pushLive()
   }
 
+  /** 还原进入答疑前的状态（黄/红不丢失），异常值一律回落 FOCUSED */
+  private restoreAfterQA(): void {
+    const s = this.stateBeforeQA
+    if (s === FocusState.SLIGHTLY_DISTRACTED || s === FocusState.DISTRACTED) {
+      this.state = s
+    } else {
+      this.state = FocusState.FOCUSED
+    }
+  }
+
   addQuestion(q: QuestionRecord): void {
     this.questions.push(q)
   }
 
   /** 暂停 */
   pause(): void {
+    if (!this.running || this.paused || this.resting || this.qaMode) {
+      return
+    }
     this.paused = true
     this.state = FocusState.PAUSED
     FocusDetectionService.getInstance().stop()
@@ -397,6 +501,9 @@ export class FocusController {
   }
 
   resume(): void {
+    if (!this.running || !this.paused) {
+      return
+    }
     this.paused = false
     this.state = FocusState.FOCUSED
     this.stateEnteredAt = Date.now()
@@ -410,14 +517,24 @@ export class FocusController {
 
   /** 休息：停止检测，暂停专注统计（计入墙钟，计入休息） */
   startBreak(): void {
+    if (!this.running || this.resting || this.qaMode) {
+      return
+    }
+    this.paused = false
     this.resting = true
+    this.breakStartedAt = Date.now()
     this.state = FocusState.RESTING
+    this.stateEnteredAt = Date.now()
     FocusDetectionService.getInstance().stop()
     this.pushLive()
   }
 
   endBreak(): void {
+    if (!this.running || !this.resting) {
+      return
+    }
     this.resting = false
+    this.breakStartedAt = 0
     this.state = FocusState.FOCUSED
     this.stateEnteredAt = Date.now()
     if (PermissionService.getInstance().snapshot().camera) {
@@ -425,6 +542,15 @@ export class FocusController {
         this.onDetection(r)
       })
     }
+    this.pushLive()
+  }
+
+  /** 延长休息（「再休息 5 分钟」），休息态由本控制器独占 */
+  extendBreak(sec: number): void {
+    if (!this.resting) {
+      return
+    }
+    this.breakStartedAt = Date.now() - Math.max(0, FocusTuning.BREAK_TOTAL_SEC - sec) * 1000
     this.pushLive()
   }
 
@@ -458,6 +584,8 @@ export class FocusController {
     this.qaSec = snap.qaSec
     this.breakSec = snap.breakSec
     this.state = (snap.state as FocusState)
+    this.resting = (this.state === FocusState.RESTING)
+    this.breakStartedAt = this.resting ? Date.now() : 0
     this.stateEnteredAt = Date.now()
     this.running = true
     this.lastTickAt = Date.now()
@@ -488,6 +616,10 @@ export class FocusController {
     }
     FocusDetectionService.getInstance().stop()
     this.running = false
+    this.qaMode = false
+    this.resting = false
+    this.paused = false
+    this.breakStartedAt = 0
     this.session.endTime = Date.now()
     this.session.totalDuration = Math.floor(this.totalSec)
     this.session.focusDuration = Math.floor(this.focusSec)
@@ -511,6 +643,47 @@ export class FocusController {
     StorageService.getInstance().saveKv(StorageKey.ACTIVE_SESSION_ID, '').catch(() => {})
     this.pushLive()
     return this.session
+  }
+
+  /**
+   * 丢弃当前会话并复位运行时（E15：清数据时调用）。
+   * 与 finalize() 的区别：不落盘、不计入统计，直接把计时与状态清空。
+   */
+  abort(): void {
+    if (this.tickId >= 0) {
+      clearInterval(this.tickId)
+      this.tickId = -1
+    }
+    if (this.snapshotId >= 0) {
+      clearInterval(this.snapshotId)
+      this.snapshotId = -1
+    }
+    FocusDetectionService.getInstance().stop()
+    this.running = false
+    this.qaMode = false
+    this.resting = false
+    this.paused = false
+    this.state = FocusState.FOCUSED
+    this.stateEnteredAt = 0
+    this.currentTaskId = ''
+    this.tasks = []
+    this.questions = []
+    this.timeline = []
+    this.events = []
+    this.session = new FocusSession()
+    this.totalSec = 0
+    this.focusSec = 0
+    this.distractionSec = 0
+    this.qaSec = 0
+    this.breakSec = 0
+    this.pausedAccum = 0
+    this.breakStartedAt = 0
+    StorageService.getInstance().saveKv(StorageKey.ACTIVE_SESSION_ID, '').catch(() => {})
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_ELAPSED, 0)
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_NET, 0)
+    AppStorage.setOrCreate<string>(StorageKey.FOCUS_STATE, FocusState.FOCUSED)
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_QA_ELAPSED, 0)
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_BREAK_REMAIN, 0)
   }
 
   private async writeSnapshot(): Promise<void> {
@@ -543,5 +716,6 @@ export class FocusController {
     AppStorage.setOrCreate<string>(StorageKey.FOCUS_STATE, this.state)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_QA_ELAPSED, Math.floor(this.qaSec))
     AppStorage.setOrCreate<string>(StorageKey.PERCEPTION_MODE, this.perceptionMode)
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_BREAK_REMAIN, this.getBreakRemainSec())
   }
 }

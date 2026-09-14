@@ -31,10 +31,30 @@ export class Prompts {
   static readonly BANNED_CONTENT = BANNED
 
   /**
+   * 已知用户背景 + 硬约束（由页面组装传入）。
+   * 无上下文时返回空串 —— 不注入、不改变原有行为。
+   */
+  private static contextBlock(context: string): string {
+    if (context.length === 0) {
+      return ''
+    }
+    return `
+【已知的用户背景】（请基于这些信息规划，不要凭空假设；信息不足时只追问 1 个最关键的问题）
+${context}
+
+【硬约束】
+- 若给出了「用户可用时间」，任务总时长必须落在它的 ±15% 以内；
+- 每条任务必须点名具体内容（章节名 / 题型 / 题量 / 单词数），禁止"复习一下""巩固练习"这类空话；
+- 不要编造用户的进度、错题或薄弱点，不知道就问。
+`
+  }
+
+  /**
    * task_dialog@1.0.0 —— 对话式任务规划（多轮）
    *
    * 输入变量：
    *  - personality: 用户选择的考伴人格（STRICT / GENTLE / QUIET）
+   *  - context: 已知用户背景（可为空）
    *  - messages[0..n-2]: 历史对话（user / assistant 交替）
    *  - messages[n-1]: 用户当前这句话
    *
@@ -42,8 +62,9 @@ export class Prompts {
    *  { "reply": string, "done": boolean,
    *    "tasks": [{ "title": string, "subject": string, "estimated_minutes": number }] }
    */
-  static taskDialog(personality: string): string {
+  static taskDialog(personality: string, context: string = ''): string {
     return `你是「iKnow」App 里的 AI 考伴，正在陪用户聊今天的学习安排。
+${Prompts.contextBlock(context)}
 
 【说话方式】
 - 像熟悉的朋友一样自然对话，一次只说 2~4 句，短句为主。
@@ -81,12 +102,13 @@ ${BANNED}`
   /**
    * task_plan@1.0.0 —— 单轮生成结构化任务（对话兜底路径）
    *
-   * 输入变量：goal（用户已表达的目标与约束，多句用「；」拼接）
+   * 输入变量：goal（用户已表达的目标与约束，多句用「；」拼接）、context（已知用户背景，可为空）
    * 输出 JSON Schema：{ "summary": string, "tasks": [{...}] }
    */
-  static taskPlan(personality: string): string {
+  static taskPlan(personality: string, context: string = ''): string {
     return `你是「iKnow」App 里的 AI 考伴。请根据用户给出的学习目标，拆出今天可执行的任务清单，并给出时间安排建议。
 ${toneOf(personality)}
+${Prompts.contextBlock(context)}
 
 要求：
 - 拆成 2~5 条具体任务，必须能立刻动手做，不要出现"好好学习""认真复习"这类空话；

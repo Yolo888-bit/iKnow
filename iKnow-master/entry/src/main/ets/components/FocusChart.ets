@@ -6,17 +6,25 @@ import { FocusStateUi } from '../common/FocusStateUi'
 export struct FocusChart {
   private settings: RenderingContextSettings = new RenderingContextSettings(true)
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings)
-  @Prop levels: number[] = []
+  @Prop @Watch('redraw') levels: number[] = []
   @Prop states: string[] = []
   private chartH: number = 180
+  private ready: boolean = false
 
   build() {
     Canvas(this.ctx)
       .width('100%')
       .height(this.chartH)
       .onReady(() => {
+        this.ready = true
         this.draw()
       })
+  }
+
+  private redraw(): void {
+    if (this.ready) {
+      this.draw()
+    }
   }
 
   private yFor(level: number, h: number, pad: number): number {

@@ -1,30 +1,29 @@
 /**
  * 后端 AI 网关配置（PRD §15）
  *
- * ⚠️ 安全说明（与硬规则 §10 的取舍，务必知悉）：
+ * ⚠️ 安全说明（与硬规则 §10，务必知悉）：
  *  - 硬规则 §10 要求「API Key 只放后端，客户端代码不得出现」。
- *  - 当前为**本地联调阶段**：项目暂无后端网关，为让 AI 规划对话真正跑通，
- *    这里直接填入了 PRD §15.2 提供的大模型 Key（仅此一处，页面组件内绝不出现）。
- *  - 上线前必须改为：客户端只持有「网关地址 + 后端下发的短期 token」，
- *    把 AI_API_KEY 留空并直接指向后端 BFF，其余代码零改动即可切换。
+ *  - 本文件**不再包含任何密钥**：令牌从 `BridgeConfig.local.ets` 读取，该文件默认提交空值，
+ *    本地填入后请用 `git update-index --skip-worktree` 让 git 忽略其改动（详见该文件说明）。
+ *  - 后续应改为：客户端只持有「网关地址 + 后端下发的短期 token」，指向后端 BFF。
  *
  * 场景 → 模型映射（来自 PRD §15.2）：
  *  - task_plan / task_dialog / planning / review / memory → 文本大模型（qwen-plus）
  *  - qa_text / qa_image                          → 多模态（qwen-vl-plus）
  *  - companion                                   → 极速模型（qwen-turbo，5s 超时）
  */
+import { LocalSecrets } from './BridgeConfig.local'
+
 export class BridgeConfig {
   /** 后端网关 Base URL（兼容 OpenAI 协议）。非密钥，可保留。 */
   static readonly AI_API_BASE_URL: string =
     'https://ws-2f33030lijt758d4.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'
 
   /**
-   * 大模型访问令牌（来自 PRD §15.2）。
-   * 留空 → GatewayAIService 返回 not_configured，由门面自动回退 MockAIService。
-   * 生产环境请改为由后端在运行时注入短期 token，不要在此硬编码长期 Key。
+   * 大模型访问令牌。留空 → GatewayAIService 返回 not_configured，由门面自动回退 MockAIService。
+   * 真实值只放在本地、不进版本库的 `BridgeConfig.local.ets`。
    */
-  static AI_API_KEY: string =
-    'sk-ws-H.PDYRMEE.hVZE.MEUCIQD7ZvNxCADR07xgmZJp7a8nK1mui78U_XMg8q1MA8SwZAIgYFIr_MHlGr5u93oU8SNpaA3yZq0S7bp0jII7mG-kHEw'
+  static AI_API_KEY: string = LocalSecrets.AI_API_KEY
 
   /** 是否启用真实网关。开启后 dispatch 先试网关，失败/未配置时自动回退 Mock（§4/§14.5） */
   static useGateway: boolean = true

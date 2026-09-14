@@ -92,10 +92,10 @@ export struct StudyReport {
             }
             Row({ space: 12 }) {
               this.stat('净专注率', `${this.focusRate}%`)
-              this.stat('完成率', `${this.completionRate}%`)
+              this.stat('完成率', this.taskTotal > 0 ? `${this.completionRate}%` : '—')
             }
             Row({ space: 12 }) {
-              this.stat('完成任务', `${this.taskDone} / ${this.taskTotal}`)
+              this.stat('完成任务', this.taskTotal > 0 ? `${this.taskDone} / ${this.taskTotal}` : '本次未设定任务')
               this.stat('AI 答疑', `${this.qaCount} 个问题`)
             }
           }

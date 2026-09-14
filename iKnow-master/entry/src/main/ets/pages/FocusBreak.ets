@@ -1,31 +1,33 @@
 import { router } from '@kit.ArkUI'
 import { Colors, Radius } from '../common/Theme'
+import { StorageKey } from '../common/Constants'
+import { AppStore } from '../store/AppStore'
 import { FocusController } from '../services/FocusController'
+import { FocusTuning } from '../common/FocusTuning'
 import { TimeUtils } from '../utils/TimeUtils'
 
-/** 休息页 */
+/** 休息页 —— 休息态由 FocusController 独占，本页只做展示与出口 */
 @Entry
 @Component
 export struct FocusBreak {
-  @State restRemain: number = 300
-  @State finished: boolean = false
-  private timerId: number = -1
-
-  aboutToAppear(): void {
-    this.timerId = setInterval(() => {
-      if (this.restRemain > 0) {
-        this.restRemain--
-        if (this.restRemain === 0) {
-          this.finished = true
-        }
-      }
-    }, 1000)
-  }
+  @StorageProp(StorageKey.FOCUS_BREAK_REMAIN) restRemain: number = FocusTuning.BREAK_TOTAL_SEC
+  @State ending: boolean = false
 
   aboutToDisappear(): void {
-    if (this.timerId >= 0) {
-      clearInterval(this.timerId)
-      this.timerId = -1
+    this.leaveBreak()
+  }
+
+  onBackPress(): boolean {
+    this.leaveBreak()
+    router.back()
+    return true
+  }
+
+  /** 离开休息页即归还状态机，避免 resting 悬空导致计时冻结 */
+  private leaveBreak(): void {
+    const c = FocusController.getInstance()
+    if (c.isResting()) {
+      c.endBreak()
     }
   }
 
@@ -34,9 +36,23 @@ export struct FocusBreak {
     router.back()
   }
 
+  private extend(): void {
+    FocusController.getInstance().extendBreak(FocusTuning.BREAK_EXTEND_SEC)
+  }
+
+  private async endFlow(): Promise<void> {
+    if (this.ending) {
+      return
+    }
+    this.ending = true
+    await AppStore.getInstance().endSession()
+    this.ending = false
+    router.replaceUrl({ url: 'pages/StudyReport' })
+  }
+
   build() {
     Column() {
-      Text(this.finished ? '休息结束啦' : '休息一下吧')
+      Text(this.restRemain <= 0 ? '休息结束啦' : '休息一下吧')
         .fontSize(24)
         .fontWeight(FontWeight.Bold)
         .fontColor(Colors.TEXT_PRIMARY)
@@ -47,7 +63,7 @@ export struct FocusBreak {
         .fontColor(Colors.TEXT_PRIMARY)
         .margin({ top: 24 })
 
-      Text(this.finished ? '准备继续了吗？' : '让眼睛和肩膀放松一下')
+      Text(this.restRemain <= 0 ? '准备继续了吗？' : '让眼睛和肩膀放松一下')
         .fontSize(14)
         .fontColor(Colors.TEXT_SECONDARY)
         .margin({ top: 12 })
@@ -73,8 +89,19 @@ export struct FocusBreak {
         .borderRadius(Radius.LG)
         .margin({ top: 12 })
         .onClick(() => {
-          this.restRemain = 300
-          this.finished = false
+          this.extend()
+        })
+
+      Button('结束本次专注')
+        .width('70%')
+        .height(48)
+        .fontSize(15)
+        .fontColor(Colors.TEXT_SECONDARY)
+        .backgroundColor(Colors.CARD)
+        .borderRadius(Radius.LG)
+        .margin({ top: 12 })
+        .onClick(() => {
+          this.endFlow()
         })
     }
     .width('100%')

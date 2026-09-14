@@ -5,17 +5,25 @@ import { Colors } from '../common/Theme'
 export struct RadarChart {
   private settings: RenderingContextSettings = new RenderingContextSettings(true)
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings)
-  @Prop values: number[] = []
+  @Prop @Watch('redraw') values: number[] = []
   @Prop labels: string[] = []
   @Prop chartSize: number = 260
+  private ready: boolean = false
 
   build() {
     Canvas(this.ctx)
       .width(this.chartSize)
       .height(this.chartSize)
       .onReady(() => {
+        this.ready = true
         this.draw()
       })
+  }
+
+  private redraw(): void {
+    if (this.ready) {
+      this.draw()
+    }
   }
 
   private angle(i: number, n: number): number {

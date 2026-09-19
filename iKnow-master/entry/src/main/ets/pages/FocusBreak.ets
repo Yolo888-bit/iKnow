@@ -78,7 +78,7 @@ export struct FocusBreak {
         .height(48)
         .fontSize(16)
         .fontColor(Color.White)
-        .backgroundColor(Colors.PRIMARY)
+        .backgroundColor(Colors.PRIMARY_STRONG)
         .borderRadius(Radius.LG)
         .margin({ top: 48 })
         .onClick(() => {

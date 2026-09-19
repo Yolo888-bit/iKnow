@@ -2,6 +2,7 @@ import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit'
 import { window } from '@kit.ArkUI'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { AppStore } from '../store/AppStore'
+import { AuthService } from '../services/AuthService'
 
 const DOMAIN = 0x0000
 const TAG = 'iKnow'
@@ -51,12 +52,21 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
-  /** 是否已完成首次引导（本地体验模式：以"是否设置过称呼"为标志，无账号体系） */
+  /**
+   * 入口页门禁：
+   *  未登录 → 登录页；已登录但还没设目标 → 目标设置页；都完成 → 主界面。
+   */
   private async loadStartPage(windowStage: window.WindowStage): Promise<void> {
     let page = 'pages/Login'
     try {
-      const started = AppStore.getInstance().getUser().nickname.length > 0
-      page = started ? 'pages/Index' : 'pages/Login'
+      const loggedIn = await AuthService.getInstance().isLoggedIn()
+      if (!loggedIn) {
+        page = 'pages/Login'
+      } else {
+        // 用显式标记判断是否走过目标引导，避免历史残留的目标数据把引导顶掉
+        const configured = await AppStore.getInstance().isGoalConfigured()
+        page = configured ? 'pages/Index' : 'pages/GoalSetup'
+      }
     } catch (e) {
       page = 'pages/Login'
     }

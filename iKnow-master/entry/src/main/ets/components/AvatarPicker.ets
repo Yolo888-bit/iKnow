@@ -69,7 +69,7 @@ export struct AvatarPicker {
       Column() {}
       .width(38)
       .height(4)
-      .backgroundColor('#E2DCD5')
+      .backgroundColor(Colors.LINE)
       .borderRadius(2)
       .margin({ top: 8, bottom: 14 })
 

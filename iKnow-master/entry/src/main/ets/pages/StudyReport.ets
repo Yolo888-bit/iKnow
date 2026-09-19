@@ -183,7 +183,7 @@ export struct StudyReport {
           Button('返回')
             .fontSize(15)
             .fontColor(Color.White)
-            .backgroundColor(Colors.PRIMARY)
+            .backgroundColor(Colors.PRIMARY_STRONG)
             .height(44)
             .margin({ top: 16 })
             .onClick(() => {
@@ -450,7 +450,7 @@ export struct StudyReport {
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
             .fontColor(Color.White)
-            .backgroundColor(Colors.PRIMARY)
+            .backgroundColor(Colors.PRIMARY_STRONG)
             .borderRadius(Radius.LG)
             .margin({ top: 8 })
             .onClick(() => {

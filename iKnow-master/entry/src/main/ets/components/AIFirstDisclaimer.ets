@@ -33,7 +33,7 @@ export struct AIFirstDisclaimer {
             .height(44)
             .fontSize(15)
             .fontColor(Color.White)
-            .backgroundColor(Colors.PRIMARY)
+            .backgroundColor(Colors.PRIMARY_STRONG)
             .borderRadius(Radius.MD)
             .margin({ top: 20 })
             .onClick(() => {

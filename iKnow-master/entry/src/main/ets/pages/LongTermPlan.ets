@@ -225,7 +225,7 @@ export struct LongTermPlan {
           .height(50)
           .fontSize(16)
           .fontColor(Color.White)
-          .backgroundColor(Colors.PRIMARY)
+          .backgroundColor(Colors.PRIMARY_STRONG)
           .borderRadius(Radius.LG)
           .margin({ top: 8 })
           .onClick(() => {

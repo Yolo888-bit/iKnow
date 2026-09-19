@@ -8,6 +8,8 @@ import { FocusController } from '../services/FocusController'
 import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
 import { TaskCard } from '../components/TaskCard'
+import { UserAvatar } from '../components/UserAvatar'
+import { AIService } from '../services/AIService'
 
 /**
  * 专注首页（tab 0）—— 回答 PRD 第十节的三件事：
@@ -36,6 +38,8 @@ export struct Home {
   @State examType: string = ''
   @State completionRate: number = 0
   @State plan: Task[] = []
+  /** 顶部标语：贴合目标的励志短句（AI 生成，本地文案表兜底） */
+  @State slogan: string = ''
 
   aboutToAppear(): void {
     this.refreshPlan()
@@ -49,10 +53,33 @@ export struct Home {
     this.goalTitle = goal.title
     this.examType = goal.examType
     this.completionRate = this.todayTotal > 0 ? Math.round(this.todayDone / this.todayTotal * 100) : 0
+    this.loadSlogan()
+  }
+
+  /**
+   * 标语：先用本地文案表立即上屏（不出现空白），
+   * 再用大模型生成更贴合的替换；结果由 AIService 缓存，目标变更时失效。
+   */
+  private loadSlogan(): void {
+    const goal = AppStore.getInstance().getGoal()
+    this.slogan = AIService.getInstance().localSlogan(goal.examType)
+    AIService.getInstance().slogan(goal.examType, this.examDays).then((s: string) => {
+      if (s.length > 0) {
+        this.slogan = s
+      }
+    })
   }
 
   private displayName(): string {
     return this.nickname.length > 0 ? this.nickname : '同学'
+  }
+
+  /** 顶部副标题：昵称 + 目标剩余天数（不显示时间问候） */
+  private subLine(): string {
+    if (this.examType.length === 0) {
+      return `${this.displayName()}，先去「我的 → 长期计划与目标」定个目标吧`
+    }
+    return `${this.displayName()} · 距离${this.examType}还有 ${this.examDays} 天`
   }
 
   private cameraOn(): boolean {
@@ -163,29 +190,25 @@ export struct Home {
   build() {
     Scroll() {
       Column({ space: Spacing.LG }) {
-        // 顶部问候
+        // 顶部：贴合目标的励志标语（不再按时间显示问候语）
         Row() {
           Column() {
-            Text(`${TimeUtils.greeting(Date.now())}，${this.displayName()}`)
-              .fontSize(26)
+            Text(this.slogan.length > 0 ? this.slogan : '定个目标，稳步推进')
+              .fontSize(28)
               .fontWeight(FontWeight.Bold)
-              .fontColor(Colors.TEXT_PRIMARY)
-            Text('今天也一起慢慢进入状态吧')
-              .fontSize(14)
+              .fontColor(Colors.PRIMARY_DARK)
+              .width('100%')
+            Text(this.subLine())
+              .fontSize(13)
               .fontColor(Colors.TEXT_SECONDARY)
-              .margin({ top: 6 })
+              .margin({ top: 8 })
+              .width('100%')
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
 
           Stack() {
-            Text(this.avatar)
-              .fontSize(26)
-              .width(48)
-              .height(48)
-              .textAlign(TextAlign.Center)
-              .backgroundColor(Colors.CARD)
-              .borderRadius(24)
+            UserAvatar({ avatar: this.avatar, diameter: 48, bg: Colors.CARD })
             // 摄像头指示灯只在真正开启感知时亮起
             if (this.cameraOn()) {
               Circle()
@@ -197,6 +220,7 @@ export struct Home {
           }
         }
         .width('100%')
+        .alignItems(VerticalAlign.Center)
 
         // 专注进行中：返回键留在后台的会话不丢，从这里继续
         if (this.focusRunningFlag === 1) {
@@ -208,7 +232,7 @@ export struct Home {
             Button('继续专注')
               .fontSize(13)
               .fontColor(Color.White)
-              .backgroundColor(Colors.PRIMARY)
+              .backgroundColor(Colors.PRIMARY_STRONG)
               .height(34)
               .borderRadius(17)
               .onClick(() => {
@@ -274,6 +298,7 @@ export struct Home {
         .padding(20)
         .backgroundColor(Colors.CARD)
         .borderRadius(Radius.LG)
+        .shadow({ radius: 18, color: Colors.SHADOW, offsetX: 0, offsetY: 6 })
 
         // 今日任务
         Column() {
@@ -347,6 +372,7 @@ export struct Home {
         .padding(20)
         .backgroundColor(Colors.CARD)
         .borderRadius(Radius.LG)
+        .shadow({ radius: 18, color: Colors.SHADOW, offsetX: 0, offsetY: 6 })
 
         // 主操作按钮
         Button(this.focusRunningFlag === 1 ? '继续专注' : '开始专注')
@@ -355,7 +381,7 @@ export struct Home {
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
           .fontColor(Color.White)
-          .backgroundColor(Colors.PRIMARY)
+          .backgroundColor(Colors.PRIMARY_STRONG)
           .borderRadius(Radius.LG)
           .onClick(() => {
             this.startFocus()

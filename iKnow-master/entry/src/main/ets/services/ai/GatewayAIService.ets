@@ -1,9 +1,6 @@
 import { http } from '@kit.NetworkKit'
-import { util } from '@kit.ArkTS'
-import { hilog } from '@kit.PerformanceAnalysisKit'
-import { ObservationRecord } from '../../models/WatchSignal'
 import { AIService, AIScene, AIRequest, AIResponse, AIError, AIPayload, AIResult } from './AIService'
-import { QATextPayload, QAImagePayload, QAResp, QAMessage, QA_DISCLAIMER } from './QAService'
+import { QATextPayload, QAImagePayload, QAResp, QA_DISCLAIMER } from './QAService'
 import { CompanionContext, CompanionDecision } from './CompanionService'
 import { ReviewPayload, ReviewData } from './ReviewService'
 import {
@@ -18,26 +15,12 @@ import { BridgeConfig } from './BridgeConfig'
 import { Prompts } from './Prompts'
 import { SchemaValidator } from './SchemaValidator'
 import { PlanTask } from '../../models/StudyPlan'
-
-const DOMAIN = 0x0000
-const TAG = 'iKnow.Gateway'
+import { ObservationRecord } from '../../models/WatchSignal'
 
 /** OpenAI 兼容请求体（PRD §15.2） */
-/** 多模态消息内容段（文本 / 图片），用于"触发时抓拍 → 云端识别在做什么" */
-interface ContentPart {
-  type: string
-  text?: string
-  image_url?: ImageUrlPart
-}
-
-interface ImageUrlPart {
-  url: string
-}
-
 interface ChatMessage {
   role: string
-  /** 纯文本场景传 string；多模态场景传内容段数组（OpenAI 兼容格式） */
-  content: string | ContentPart[]
+  content: string
 }
 
 interface GatewayResponseFormat {
@@ -93,20 +76,11 @@ interface RawQA {
   references?: string[]
 }
 
-/** 多模态识别的原始返回（只允许可观察状态） */
-interface RawActivity {
-  activity?: string
-  handheld?: boolean
-  facingDesk?: boolean
-  confidence?: number
-  evidence?: string
-}
-
 /**
  * 真实大模型网关（PRD §13 / §14 / §15.2）
  *
  *  - 用 `@kit.NetworkKit` 的 http 直接调用兼容 OpenAI 协议的 chat/completions。
- *  - 已开放网关的场景：`task_plan` / `task_dialog`（AI 规划对话与任务拆解）。
+ *  - 已开放网关的场景：`task_plan` / `task_dialog` / `qa_text`；另有非场景化的 `slogan`。
  *    其余场景仍返回 ok:false，由门面自动回退 MockAIService（行为与之前一致）。
  *  - 严格遵循硬规则：页面不直接调 LLM（§1）、输出过 SchemaValidator（§2/§14.2）、
  *    失败时回退不阻塞核心计时（§4/§14.5）。
@@ -162,7 +136,7 @@ export class GatewayAIService implements AIService {
     return this.enabled && BridgeConfig.AI_API_KEY.length > 0
   }
 
-  // ===================== 五个服务接口（未开放场景一律回退 Mock）=====================
+  // ===================== 五个服务接口 =====================
 
   async plan(req: AIRequest<PlanningInput>): Promise<AIResponse<PlanningResult>> {
     if (!this.isReady()) {
@@ -205,10 +179,21 @@ export class GatewayAIService implements AIService {
     return this.fail<MemoryDelta>('memory', req.requestId, 'not_implemented', 'memory 场景暂未开放网关')
   }
 
+  /**
+   * 真实多模态识别（触发时抓拍的帧 → 可观察状态）。
+   *
+   * 隐私约束（PRD §14.7）：**原始影像不上传**，因此这里不接视觉大模型，
+   * 直接返回 null —— 调用方据此降级为「模拟输入源」或如实记为「无法判断」，
+   * 而不是伪造一个识别结果（硬规则 §5：不伪造感知数据）。
+   */
+  async recognizeActivity(frames: ArrayBuffer[]): Promise<ObservationRecord | null> {
+    return null
+  }
+
   // ===================== 场景路由（PRD §14.1 / §14.2）=====================
 
   /**
-   * 场景路由：已开放 task_plan / task_dialog；其余保持 ok:false，
+   * 场景路由：已开放 task_plan / task_dialog / qa_text；其余保持 ok:false，
    * 由门面（services/AIService）自动回退 MockAIService，核心功能不中断。
    */
   async dispatch(req: AIRequest<AIPayload>): Promise<AIResponse<AIResult>> {
@@ -225,7 +210,6 @@ export class GatewayAIService implements AIService {
       const r = await this.runPlan(req.requestId, payload)
       return r as Object as AIResponse<AIResult>
     }
-    // 学习答疑：此前漏接这一支，导致 askText/runQA 全是死代码、答疑永远回退本地模板
     if (req.scene === 'qa_text') {
       const payload: QATextPayload = req.payload as Object as QATextPayload
       const r = await this.runQA(req.requestId, payload)
@@ -242,8 +226,7 @@ export class GatewayAIService implements AIService {
    * 模型信息足够时会直接返回 done=true + tasks（PRD §14.4 任务规划）。
    */
   private async runDialog(requestId: string, input: PlanningDialogInput): Promise<AIResponse<PlanningDialogResult>> {
-    const ctx: string = input.planningContext !== undefined ? input.planningContext : ''
-    const messages: ChatMessage[] = [{ role: 'system', content: Prompts.taskDialog(this.personality, ctx) }]
+    const messages: ChatMessage[] = [{ role: 'system', content: Prompts.taskDialog(this.personality) }]
     const history: string[] = input.history !== undefined ? input.history : []
     for (let i = 0; i < history.length; i++) {
       const role: string = i % 2 === 0 ? 'user' : 'assistant'
@@ -252,7 +235,7 @@ export class GatewayAIService implements AIService {
     messages.push({ role: 'user', content: input.userInput })
 
     const started: number = Date.now()
-    const content: string = await this.chatJson(messages, BridgeConfig.MODEL_TEXT, 0.75, 900,
+    const content: string = await this.chatJson(messages, BridgeConfig.MODEL_TEXT, 0.75, 1100,
       BridgeConfig.timeoutForScene('task_dialog'))
     if (content.length === 0) {
       return this.fail<PlanningDialogResult>('task_dialog', requestId, 'gateway_empty', '大模型无有效返回')
@@ -287,13 +270,12 @@ export class GatewayAIService implements AIService {
 
   /** 单轮生成结构化任务（对话兜底路径） */
   private async runPlan(requestId: string, input: PlanningInput): Promise<AIResponse<PlanningResult>> {
-    const ctx: string = input.planningContext !== undefined ? input.planningContext : ''
     const messages: ChatMessage[] = [
-      { role: 'system', content: Prompts.taskPlan(this.personality, ctx) },
+      { role: 'system', content: Prompts.taskPlan(this.personality) },
       { role: 'user', content: input.goal }
     ]
     const started: number = Date.now()
-    const content: string = await this.chatJson(messages, BridgeConfig.MODEL_TEXT, 0.6, 900,
+    const content: string = await this.chatJson(messages, BridgeConfig.MODEL_TEXT, 0.6, 1100,
       BridgeConfig.timeoutForScene('task_plan'))
     if (content.length === 0) {
       return this.fail<PlanningResult>('task_plan', requestId, 'gateway_empty', '大模型无有效返回')
@@ -322,27 +304,21 @@ export class GatewayAIService implements AIService {
     return this.ok<PlanningResult>('task_plan', requestId, result, Date.now() - started)
   }
 
-  /**
-   * 学习答疑（qa_text）：把会话内历史按 user/assistant 还原，
-   * 并把「正在专注的任务 / 之前问过什么」作为当前情境注入系统提示词。
-   */
-  private async runQA(requestId: string, payload: QATextPayload): Promise<AIResponse<QAResp>> {
-    const parts: string[] = []
-    if (payload.subject !== undefined && payload.subject.length > 0) {
-      parts.push(`- 用户正在专注的任务：${payload.subject}`)
+  /** 学习答疑（qa_text）：返回带免责声明的 QAResp */
+  private async runQA(requestId: string, input: QATextPayload): Promise<AIResponse<QAResp>> {
+    const messages: ChatMessage[] = [{ role: 'system', content: Prompts.qa(this.personality) }]
+    const history = input.history
+    if (history !== undefined) {
+      for (const h of history) {
+        messages.push({ role: h.role === 'ai' || h.role === 'assistant' ? 'assistant' : 'user', content: h.content })
+      }
     }
-    if (payload.recentQuestions !== undefined && payload.recentQuestions.length > 0) {
-      parts.push(`- 他之前问过：${payload.recentQuestions.join('；')}`)
-    }
-    const messages: ChatMessage[] = [{ role: 'system', content: Prompts.qa(this.personality, parts.join('\n')) }]
-    const history: QAMessage[] = payload.history !== undefined ? payload.history : []
-    for (const m of history) {
-      messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })
-    }
-    messages.push({ role: 'user', content: payload.question })
+    const subject: string = input.subject !== undefined && input.subject.length > 0
+      ? `（我目前正在做：${input.subject}）` : ''
+    messages.push({ role: 'user', content: `${input.question}${subject}` })
 
     const started: number = Date.now()
-    const content: string = await this.chatJson(messages, BridgeConfig.MODEL_TEXT, 0.5, 700,
+    const content: string = await this.chatJson(messages, BridgeConfig.MODEL_TEXT, 0.6, 1400,
       BridgeConfig.timeoutForScene('qa_text'))
     if (content.length === 0) {
       return this.fail<QAResp>('qa_text', requestId, 'gateway_empty', '大模型无有效返回')
@@ -370,7 +346,31 @@ export class GatewayAIService implements AIService {
     return this.ok<QAResp>('qa_text', requestId, result, Date.now() - started)
   }
 
-  /** 原始 task → PlanTask（补默认值并夹紧时长，保证 UI 不会拿到脏数据） */
+  /**
+   * 贴合目标的励志标语（首页顶部）。
+   * 非场景化调用：纯文本输出，失败返回空串，由门面回退本地文案表。
+   */
+  async slogan(goalType: string, daysLeft: number): Promise<string> {
+    if (!this.isReady() || goalType.length === 0) {
+      return ''
+    }
+    const messages: ChatMessage[] = [
+      { role: 'system', content: '你是中文文案助手。只输出一句标语本身，不要引号、不要解释。' },
+      { role: 'user', content: Prompts.slogan(goalType, daysLeft) }
+    ]
+    const text: string = await this.chatText(messages, BridgeConfig.MODEL_FAST, 1.0, 40, 8000)
+    const line: string = text.split('\n')[0].trim().split('"').join('').split('「').join('').split('」').join('')
+    // 太短/太长都视为不合格，交由门面回退本地文案表（宁可要短句，不要长口号）
+    if (line.length === 0 || line.length > 16) {
+      return ''
+    }
+    return line
+  }
+
+  /**
+   * 原始 task → PlanTask。
+   * 时长优先用模型给的；缺失时按任务性质推断（不与 30 死绑）。
+   */
   private static toPlanTasks(raw: RawTask[] | undefined): PlanTask[] {
     const out: PlanTask[] = []
     if (raw === undefined) {
@@ -383,22 +383,49 @@ export class GatewayAIService implements AIService {
       }
       const title: string = (t.title !== undefined && t.title.length > 0) ? t.title : '学习任务'
       const subject: string = (t.subject !== undefined && t.subject.length > 0) ? t.subject : '综合'
-      let minutes: number = t.estimated_minutes !== undefined ? t.estimated_minutes : 30
-      if (minutes < 5) {
-        minutes = 5
-      }
-      if (minutes > 240) {
-        minutes = 240
-      }
-      out.push(PlanTask.create(title, subject, Math.round(minutes), order))
+      const minutes: number = GatewayAIService.resolveMinutes(title, t.estimated_minutes)
+      out.push(PlanTask.create(title, subject, minutes, order))
       order += 1
     }
     return out
   }
 
+  /** 时长兜底：模型没给时按任务性质推断，避免所有任务都落到同一个值 */
+  private static resolveMinutes(title: string, raw: number | undefined): number {
+    if (raw !== undefined && raw > 0) {
+      let m = Math.round(raw)
+      if (m < 5) {
+        m = 5
+      }
+      if (m > 180) {
+        m = 180
+      }
+      return m
+    }
+    if (title.indexOf('题') >= 0 || title.indexOf('卷') >= 0) {
+      return 35
+    }
+    if (title.indexOf('背') >= 0 || title.indexOf('单词') >= 0 || title.indexOf('记忆') >= 0) {
+      return 25
+    }
+    if (title.indexOf('预习') >= 0 || title.indexOf('阅读') >= 0 || title.indexOf('看') >= 0) {
+      return 25
+    }
+    if (title.indexOf('课') >= 0 || title.indexOf('视频') >= 0) {
+      return 45
+    }
+    if (title.indexOf('错题') >= 0 || title.indexOf('复盘') >= 0 || title.indexOf('整理') >= 0) {
+      return 20
+    }
+    if (title.indexOf('作文') >= 0 || title.indexOf('写') >= 0) {
+      return 30
+    }
+    return 40
+  }
+
   // ===================== HTTP =====================
 
-  /** 先按 JSON 模式请求；若网关不接受该参数则去掉后重试一次 */
+  /** 先按 JSON 模式请求；若拿不到合法 JSON 则去掉该参数重试一次 */
   private async chatJson(
     messages: ChatMessage[],
     model: string,
@@ -406,71 +433,29 @@ export class GatewayAIService implements AIService {
     maxTokens: number,
     timeoutMs: number
   ): Promise<string> {
-    const first: string = await this.callModel(messages, model, temperature, maxTokens, timeoutMs, true)
-    if (first.length > 0) {
-      return first
+    const first: string = await this.callModelRaw(messages, model, temperature, maxTokens, timeoutMs, true)
+    const parsed: string = GatewayAIService.extractJson(first)
+    if (parsed.length > 0) {
+      return parsed
     }
-    return await this.callModel(messages, model, temperature, maxTokens, timeoutMs, false)
+    const second: string = await this.callModelRaw(messages, model, temperature, maxTokens, timeoutMs, false)
+    return GatewayAIService.extractJson(second)
   }
 
-  /**
-   * 真实多模态识别：把触发时抓拍的若干帧交给视觉模型，返回**可观察状态**。
-   *
-   * 只在这一处做"图片 → 云端"：无帧、未配置 Key、超时、解析失败一律返回 null，
-   * 由 `ObservationQueue` 如实记为「无法判断」——绝不编造 activity。
-   */
-  async recognizeActivity(frames: ArrayBuffer[]): Promise<ObservationRecord | null> {
-    if (!this.isReady() || frames.length === 0) {
-      return null
-    }
-    try {
-      const parts: ContentPart[] = [{ type: 'text', text: Prompts.activity(frames.length) }]
-      for (const f of frames) {
-        parts.push({
-          type: 'image_url',
-          image_url: { url: `data:image/jpeg;base64,${GatewayAIService.toBase64(f)}` }
-        })
-      }
-      const messages: ChatMessage[] = [
-        { role: 'system', content: '你只描述画面中可观察到的状态，不做任何心理或注意力推断。' },
-        { role: 'user', content: parts }
-      ]
-      const content = await this.chatJson(messages, BridgeConfig.MODEL_MULTIMODAL, 0.2, 300,
-        BridgeConfig.timeoutForScene('qa_text'))
-      if (content.length === 0) {
-        return null
-      }
-      let raw: RawActivity | null = null
-      try {
-        raw = JSON.parse(content) as RawActivity
-      } catch (e) {
-        raw = null
-      }
-      if (raw === null || raw.activity === undefined || raw.activity.length === 0) {
-        return null
-      }
-      const o = new ObservationRecord()
-      o.activity = raw.activity
-      o.handheld = raw.handheld !== undefined ? raw.handheld : false
-      o.facingDesk = raw.facingDesk !== undefined ? raw.facingDesk : false
-      o.confidence = raw.confidence !== undefined ? raw.confidence : 0.5
-      o.evidence = raw.evidence !== undefined ? raw.evidence : ''
-      return o
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, 'recognizeActivity failed')
-      return null
-    }
+  /** 纯文本输出（不要求 JSON），用于标语这类一句话生成 */
+  private async chatText(
+    messages: ChatMessage[],
+    model: string,
+    temperature: number,
+    maxTokens: number,
+    timeoutMs: number
+  ): Promise<string> {
+    const text: string = await this.callModelRaw(messages, model, temperature, maxTokens, timeoutMs, false)
+    return text.trim()
   }
 
-  /** ArrayBuffer → base64（多模态消息体需要） */
-  private static toBase64(buf: ArrayBuffer): string {
-    const bytes = new Uint8Array(buf)
-    const helper = new util.Base64Helper()
-    return helper.encodeToStringSync(bytes)
-  }
-
-  /** 真实 HTTP 调用：POST {base}/chat/completions */
-  private async callModel(
+  /** 真实 HTTP 调用：POST {base}/chat/completions，返回 message.content 原文 */
+  private async callModelRaw(
     messages: ChatMessage[],
     model: string,
     temperature: number,
@@ -519,7 +504,7 @@ export class GatewayAIService implements AIService {
       if (msg === undefined || msg.content === undefined) {
         return ''
       }
-      return GatewayAIService.extractJson(msg.content)
+      return msg.content
     } catch (err) {
       return ''
     } finally {

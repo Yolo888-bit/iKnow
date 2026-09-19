@@ -227,6 +227,47 @@ export class AppStore {
     this.pushAggregates()
   }
 
+  /** 是否已走过「目标 + 日期」引导（显式标记，避免被历史残留的目标数据误判） */
+  async isGoalConfigured(): Promise<boolean> {
+    try {
+      return (await StorageService.getInstance().loadKv(StorageKey.GOAL_CONFIGURED)) === '1'
+    } catch (e) {
+      return false
+    }
+  }
+
+  /** 目标引导完成 → 打标，之后启动直接进主界面 */
+  async markGoalConfigured(): Promise<void> {
+    await StorageService.getInstance().saveKv(StorageKey.GOAL_CONFIGURED, '1')
+  }
+
+  /**
+   * 勾选 / 取消勾选某个任务（工作台「总体进度」的未完成清单用）。
+   * 改动全量任务列表里的那一条 → 落库 → 重算聚合，
+   * 这样进度数字、今日统计会跟着一起变（不只是勾上了 UI 不动数据）。
+   */
+  async toggleTaskDone(id: string): Promise<void> {
+    let target: Task | null = null
+    for (const t of this.tasks) {
+      if (t.id === id) {
+        t.done = !t.done
+        t.status = t.done ? TaskStatus.DONE : TaskStatus.TODO
+        target = t
+      }
+    }
+    // 今日常用的「当前计划」里若有同一条，同步勾选状态，避免两处不一致
+    for (const t of this.currentPlan) {
+      if (t.id === id) {
+        t.done = target !== null ? target.done : !t.done
+        t.status = t.done ? TaskStatus.DONE : TaskStatus.TODO
+      }
+    }
+    if (target !== null) {
+      await StorageService.getInstance().saveTask(target)
+    }
+    await this.refreshAggregates()
+  }
+
   // ---------- 规划 ----------
   async planTasks(input: string): Promise<Task[]> {
     return await AIService.getInstance().planTasks(input)

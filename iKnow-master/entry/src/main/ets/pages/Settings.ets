@@ -75,7 +75,7 @@ export struct Settings {
                 if (this.personality === p.key) {
                   Text('✓')
                     .fontSize(18)
-                    .fontColor(Colors.PRIMARY)
+                    .fontColor(Colors.PRIMARY_DARK)
                 }
               }
               .width('100%')

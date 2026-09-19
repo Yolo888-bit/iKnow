@@ -151,7 +151,7 @@ struct Index {
           Button('继续专注')
             .fontSize(12)
             .fontColor(Color.White)
-            .backgroundColor(Colors.PRIMARY)
+            .backgroundColor(Colors.PRIMARY_STRONG)
             .height(30)
             .borderRadius(15)
             .onClick(() => {
@@ -183,7 +183,7 @@ struct Index {
           Button('查看复盘')
             .fontSize(12)
             .fontColor(Color.White)
-            .backgroundColor(Colors.PRIMARY)
+            .backgroundColor(Colors.PRIMARY_STRONG)
             .height(30)
             .borderRadius(15)
             .onClick(() => {
@@ -264,7 +264,7 @@ struct Index {
                 .height(44)
                 .fontSize(14)
                 .fontColor(Color.White)
-                .backgroundColor(Colors.PRIMARY)
+                .backgroundColor(Colors.PRIMARY_STRONG)
                 .borderRadius(Radius.MD)
                 .onClick(() => {
                   if (this.recoverSnap !== null) {

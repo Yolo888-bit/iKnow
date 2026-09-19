@@ -476,7 +476,7 @@ export struct Focus {
                   Button('继续专注')
                     .fontSize(13)
                     .fontColor(Color.White)
-                    .backgroundColor(Colors.PRIMARY)
+                    .backgroundColor(Colors.PRIMARY_STRONG)
                     .height(38)
                     .borderRadius(19)
                     .onClick(() => {
@@ -582,7 +582,7 @@ export struct Focus {
                 Button('继续专注')
                   .fontSize(14)
                   .fontColor(Color.White)
-                  .backgroundColor(Colors.PRIMARY)
+                  .backgroundColor(Colors.PRIMARY_STRONG)
                   .height(40)
                   .borderRadius(20)
                   .margin({ top: 12 })
@@ -695,7 +695,7 @@ export struct Focus {
                 .height(44)
                 .fontSize(15)
                 .fontColor(Color.White)
-                .backgroundColor(Colors.PRIMARY)
+                .backgroundColor(Colors.PRIMARY_STRONG)
                 .borderRadius(Radius.MD)
                 .onClick(() => {
                   this.showEndConfirm = false

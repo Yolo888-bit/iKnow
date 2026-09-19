@@ -7,6 +7,7 @@ import { AIPersonality } from '../models/Enums'
 import { MockAIService } from './ai/MockAIService'
 import { GatewayAIService } from './ai/GatewayAIService'
 import { BridgeConfig } from './ai/BridgeConfig'
+import { StorageKey } from '../common/Constants'
 import { AIPayload, AIResult, AIRequest, AIResponse, AIScene } from './ai/AIService'
 import { PlanningInput, PlanningResult, PlanningDialogInput, PlanningDialogResult } from './ai/PlanningService'
 import { QATextPayload, QAResp } from './ai/QAService'
@@ -120,6 +121,34 @@ export class AIService {
   /** 规划对话没有拿到有效回复时的承接语（AI 文案，硬规则 §1） */
   planningHold(): string {
     return this.mock.planningHold()
+  }
+
+  /**
+   * 贴合目标的励志标语（首页顶部）。
+   * 先用本地文案表兜底保证不为空，再异步用大模型替换；结果按目标缓存在 AppStorage，
+   * 目标变更（GoalSetup 保存）时置空重新生成。
+   */
+  localSlogan(goalType: string): string {
+    return this.mock.slogan(goalType)
+  }
+
+  async slogan(goalType: string, daysLeft: number): Promise<string> {
+    if (goalType.length === 0) {
+      return ''
+    }
+    const cached: string | undefined = AppStorage.get<string>(StorageKey.GOAL_SLOGAN)
+    if (cached !== undefined && cached.length > 0) {
+      return cached
+    }
+    let text = ''
+    if (this.useGateway) {
+      text = await this.gateway.slogan(goalType, daysLeft)
+    }
+    if (text.length === 0) {
+      text = this.mock.slogan(goalType)
+    }
+    AppStorage.setOrCreate<string>(StorageKey.GOAL_SLOGAN, text)
+    return text
   }
 
   /** 规划完成后的时间安排分析（AI 输出，硬规则 §1） */

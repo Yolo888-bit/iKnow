@@ -11,6 +11,7 @@ import { CircularProgress } from '../components/CircularProgress'
 import { FocusSession } from '../models/FocusSession'
 import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
+import { DateChip } from '../components/DateChip'
 import { StorageService } from '../services/StorageService'
 import { StudyPlan } from '../models/StudyPlan'
 import { hilog } from '@kit.PerformanceAnalysisKit'
@@ -315,7 +316,7 @@ export struct Review {
       if (this.mode === m) {
         Text('✓')
           .fontSize(16)
-          .fontColor(Colors.PRIMARY)
+          .fontColor(Colors.PRIMARY_DARK)
       }
     }
     .width('100%')
@@ -408,7 +409,7 @@ export struct Review {
     .padding(12)
     .backgroundColor(Colors.CARD)
     .borderRadius(Radius.LG)
-    .shadow({ radius: 24, color: '#26000000', offsetX: 0, offsetY: 8 })
+    .shadow({ radius: 24, color: Colors.SHADOW_LAYER, offsetX: 0, offsetY: 8 })
   }
 
   private backToLong(): void {
@@ -523,8 +524,8 @@ export struct Review {
     c.lineTo(points[n - 1][0], baseY)
     c.closePath()
     const grad = c.createLinearGradient(0, padTop, 0, baseY)
-    grad.addColorStop(0, 'rgba(127,191,151,0.35)')
-    grad.addColorStop(1, 'rgba(127,191,151,0.02)')
+    grad.addColorStop(0, 'rgba(29,199,138,0.32)')
+    grad.addColorStop(1, 'rgba(29,199,138,0.02)')
     c.fillStyle = grad
     c.fill()
 
@@ -532,7 +533,7 @@ export struct Review {
     c.beginPath()
     c.moveTo(points[0][0], points[0][1])
     this.curveThrough(c, points)
-    c.strokeStyle = '#7FBF97'
+    c.strokeStyle = Colors.PRIMARY
     c.lineWidth = 3
     c.lineJoin = 'round'
     c.lineCap = 'round'
@@ -548,7 +549,7 @@ export struct Review {
       c.beginPath()
       c.moveTo(px, padTop)
       c.lineTo(px, baseY)
-      c.strokeStyle = 'rgba(127,191,151,0.55)'
+      c.strokeStyle = 'rgba(29,199,138,0.5)'
       c.lineWidth = 1
       c.stroke()
 
@@ -558,7 +559,7 @@ export struct Review {
       c.fillStyle = '#FFFFFF'
       c.fill()
       c.lineWidth = 3
-      c.strokeStyle = '#7FBF97'
+      c.strokeStyle = Colors.PRIMARY
       c.stroke()
     }
 
@@ -640,10 +641,15 @@ export struct Review {
     return values[this.activeIndex]
   }
 
-  /** 顶部日期 chip 文案：长期=今天，按天=所选日期 */
+  /** 顶部日历图标里的日期数字：长期=今天，按天=所选日 */
+  private chipDay(): number {
+    return this.mode === 0 ? this.todayD : this.selD
+  }
+
+  /** 顶部 chip 文案：长期模式显示「长期复盘」，只有选中单日才显示具体日期 */
   private chipLabel(): string {
     if (this.mode === 0) {
-      return `${this.todayM + 1}月${this.todayD}日`
+      return '长期复盘'
     }
     return this.dayLabel()
   }
@@ -983,7 +989,7 @@ export struct Review {
           }
           .width(104)
           .padding({ top: 6, bottom: 6 })
-          .backgroundColor('#CC2F2A26')
+          .backgroundColor('#CC22302A')
           .borderRadius(10)
           .alignItems(HorizontalAlign.Center)
           .position({ x: this.bubbleX, y: this.bubbleY })
@@ -1078,15 +1084,15 @@ export struct Review {
           Row({ space: Spacing.SM }) {
             Text(`累计完成 ${this.summary.completedTasks} 个任务`)
               .fontSize(11)
-              .fontColor('#7FBF97')
+              .fontColor(Colors.PRIMARY_DARK)
               .padding({ top: 4, bottom: 4, left: 8, right: 8 })
-              .backgroundColor('#E4F1E9')
+              .backgroundColor(Colors.PRIMARY_SOFT)
               .borderRadius(10)
             Text(`净专注率 ${this.summary.focusRate}%`)
               .fontSize(11)
-              .fontColor('#7FBF97')
+              .fontColor(Colors.PRIMARY_DARK)
               .padding({ top: 4, bottom: 4, left: 8, right: 8 })
-              .backgroundColor('#E4F1E9')
+              .backgroundColor(Colors.PRIMARY_SOFT)
               .borderRadius(10)
           }
           .margin({ top: 6 })
@@ -1232,7 +1238,7 @@ export struct Review {
         .type(ButtonType.Capsule)
         .fontSize(14)
         .fontColor(Colors.TEXT_PRIMARY)
-        .backgroundColor('#E4F1E9')
+        .backgroundColor(Colors.PRIMARY_SOFT)
         .width('70%')
         .margin({ top: 6 })
         .onClick(() => {
@@ -1259,8 +1265,9 @@ export struct Review {
 
       Blank()
 
-      Row({ space: 6 }) {
-        Text('📅').fontSize(15)
+      Row({ space: 8 }) {
+        // 动态日历图标：长期=今天，按天=所选日期
+        DateChip({ day: this.chipDay(), chipSize: 24 })
         Text(this.chipLabel())
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
@@ -1269,9 +1276,10 @@ export struct Review {
           .fontSize(11)
           .fontColor(Colors.TEXT_SECONDARY)
       }
-      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+      .padding({ left: 10, right: 12, top: 6, bottom: 6 })
       .backgroundColor(Colors.CARD)
       .borderRadius(16)
+      .border({ width: 1, color: Colors.LINE })
       .onClick(() => {
         this.pickDay()
       })

@@ -311,6 +311,29 @@ export struct TaskPlanning {
     this.editId = ''
   }
 
+  /**
+   * 行内微调某项任务的时长（5 分钟步进，夹在 5~180）。
+   * AI 给的推荐时长只是起点，用户可随时按自己的节奏改。
+   */
+  private bumpMinutes(id: string, delta: number): void {
+    const next: Task[] = []
+    for (const t of this.tasks) {
+      const c = t.copy()
+      if (c.id === id) {
+        let m = c.estimatedDuration + delta
+        if (m < 5) {
+          m = 5
+        }
+        if (m > 180) {
+          m = 180
+        }
+        c.estimatedDuration = m
+      }
+      next.push(c)
+    }
+    this.tasks = next
+  }
+
   // ---------- 底部：预计时长 / 开始专注 ----------
   private selectedTasks(): Task[] {
     if (this.confirmedIds.length === 0) {
@@ -376,7 +399,7 @@ export struct TaskPlanning {
         Text('iKnow')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.PRIMARY)
+          .fontColor(Colors.PRIMARY_DARK)
           .fontStyle(FontStyle.Italic)
       }
       .width(58)
@@ -467,7 +490,7 @@ export struct TaskPlanning {
 
   @Builder
   planRow(t: Task) {
-    Row({ space: 12 }) {
+    Row({ space: 10 }) {
       // 圆圈确认：点击后变实心
       Stack() {
         Circle()
@@ -487,14 +510,60 @@ export struct TaskPlanning {
         this.toggleConfirm(t.id)
       })
 
-      // 点文字进入编辑（截图里不额外显示按钮，保持简洁）
-      Text(t.title)
-        .fontSize(15)
-        .fontColor(Colors.TEXT_PRIMARY)
-        .layoutWeight(1)
-        .onClick(() => {
-          this.startEdit(t)
-        })
+      // 标题 + 科目/推荐时长；点文字进编辑弹窗
+      Column() {
+        Text(t.title)
+          .fontSize(15)
+          .fontColor(Colors.TEXT_PRIMARY)
+          .width('100%')
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .onClick(() => {
+            this.startEdit(t)
+          })
+        Text(`${t.subject} · 推荐 ${t.estimatedDuration} 分钟`)
+          .fontSize(12)
+          .fontColor(Colors.TEXT_SECONDARY)
+          .margin({ top: 4 })
+          .width('100%')
+          .onClick(() => {
+            this.startEdit(t)
+          })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      // 行内时长微调：不打开编辑弹窗也能改
+      Row({ space: 4 }) {
+        Text('−')
+          .fontSize(16)
+          .fontColor(Colors.PRIMARY_DARK)
+          .width(28)
+          .height(28)
+          .textAlign(TextAlign.Center)
+          .backgroundColor(Colors.PRIMARY_SOFT)
+          .borderRadius(14)
+          .onClick(() => {
+            this.bumpMinutes(t.id, -5)
+          })
+        Text(`${t.estimatedDuration}`)
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Colors.TEXT_PRIMARY)
+          .width(34)
+          .textAlign(TextAlign.Center)
+        Text('＋')
+          .fontSize(15)
+          .fontColor(Colors.PRIMARY_DARK)
+          .width(28)
+          .height(28)
+          .textAlign(TextAlign.Center)
+          .backgroundColor(Colors.PRIMARY_SOFT)
+          .borderRadius(14)
+          .onClick(() => {
+            this.bumpMinutes(t.id, 5)
+          })
+      }
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)

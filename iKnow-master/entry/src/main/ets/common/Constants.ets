@@ -71,6 +71,16 @@ export class StorageKey {
 
   /** 请求 Focus 页新开一个会话（1 = 主动开始；消费后置 0） */
   static readonly FOCUS_START_REQUEST = 'ik_focus_start_request'
+
+  /** 贴合目标的励志标语（AI 生成，进程内缓存；目标变更时置空重新生成） */
+  static readonly GOAL_SLOGAN = 'ik_goal_slogan'
+
+  /**
+   * 用户是否**走过**目标引导（'1' / ''）。
+   * 不能只看 goal.examType 是否为空：老版本 seed 曾预置过「考研」，
+   * 升级后残留会让引导被跳过。用显式标记才可靠。
+   */
+  static readonly GOAL_CONFIGURED = 'ik_goal_configured'
 }
 
 /**

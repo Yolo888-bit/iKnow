@@ -116,7 +116,7 @@ export struct Mine {
       if (this.personality === t.key) {
         Text('✓')
           .fontSize(18)
-          .fontColor(Colors.PRIMARY)
+          .fontColor(Colors.PRIMARY_DARK)
       }
     }
     .width('100%')
@@ -143,7 +143,7 @@ export struct Mine {
               .width(20)
               .height(20)
               .textAlign(TextAlign.Center)
-              .backgroundColor(Colors.PRIMARY)
+              .backgroundColor(Colors.PRIMARY_STRONG)
               .borderRadius(10)
           }
           .onClick(() => {

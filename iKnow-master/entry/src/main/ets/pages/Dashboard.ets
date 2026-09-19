@@ -5,6 +5,8 @@ import { AppStore } from '../store/AppStore'
 import { TimeUtils } from '../utils/TimeUtils'
 import { BarChart } from '../components/BarChart'
 import { SubjectProgress } from '../models/Dashboard'
+import { Task } from '../models/Task'
+import { TaskStatus } from '../models/Enums'
 import { UserAvatar } from '../components/UserAvatar'
 import { AvatarPicker } from '../components/AvatarPicker'
 import { SimWorkbench } from '../components/SimWorkbench'
@@ -15,8 +17,6 @@ export struct Dashboard {
   @StorageProp(StorageKey.EXAM_DAYS) examDays: number = 0
   @StorageProp(StorageKey.USER_NICKNAME) nickname: string = ''
   @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
-  @StorageProp(StorageKey.TODAY_DONE_TASKS) todayDone: number = 0
-  @StorageProp(StorageKey.TODAY_TOTAL_TASKS) todayTotal: number = 0
   @StorageProp(StorageKey.WEEK_FOCUS_SEC) weekFocus: number = 0
   @StorageProp(StorageKey.FOCUS_RATE) focusRate: number = 0
   @StorageProp(StorageKey.DATA_VERSION) @Watch('refresh') dataVersion: number = 0
@@ -26,8 +26,14 @@ export struct Dashboard {
   @State weekTrend: number[] = []
   @State subjects: SubjectProgress[] = []
   @State examType: string = ''
+  @State targetDateText: string = ''
   @State greeting: string = ''
   @State showAvatarSheet: boolean = false
+  /** 总体进度：全部任务（含历史） */
+  @State allDone: number = 0
+  @State allTotal: number = 0
+  @State pending: Task[] = []
+  @State showPending: boolean = false
   private weekLabels: string[] = ['一', '二', '三', '四', '五', '六', '日']
 
   aboutToAppear(): void {
@@ -41,17 +47,50 @@ export struct Dashboard {
   }
 
   refresh(): void {
-    this.greeting = TimeUtils.greeting(Date.now())
+    const now = Date.now()
+    this.greeting = TimeUtils.greeting(now)
     const store = AppStore.getInstance()
     const d = store.getDashboard()
     this.weekTrend = d.weekTrend
     this.subjects = d.subjectProgress
-    this.examType = store.getGoal().examType
+
+    const goal = store.getGoal()
+    this.examType = goal.examType
+    if (goal.targetDate > 0) {
+      const gd = new Date(goal.targetDate)
+      this.targetDateText = `${gd.getFullYear()} 年 ${gd.getMonth() + 1} 月 ${gd.getDate()} 日`
+    } else {
+      this.targetDateText = ''
+    }
+
+    // 总体进度 = 全部任务（含历史），不只看今日
+    const all: Task[] = store.getTasks()
+    let done = 0
+    const pend: Task[] = []
+    for (const t of all) {
+      if (t.done || t.status === TaskStatus.DONE) {
+        done += 1
+      } else {
+        pend.push(t)
+      }
+    }
+    // 未完成：最近的排在前面
+    pend.sort((a: Task, b: Task) => b.createdAt - a.createdAt)
+    this.allTotal = all.length
+    this.allDone = done
+    this.pending = pend
   }
 
   /** 有会话在跑（含被返回键留在后台的）时，首页给出继续入口 */
   private resumeFocus(): void {
     router.pushUrl({ url: 'pages/Focus' })
+  }
+
+  private percent(): string {
+    if (this.allTotal === 0) {
+      return '—'
+    }
+    return `${Math.round(this.allDone / this.allTotal * 100)}%`
   }
 
   @Builder
@@ -64,11 +103,65 @@ export struct Dashboard {
       .margin({ bottom: 12 })
   }
 
+  /** 勾选 / 取消勾选：同时改写任务状态与统计口径 */
+  private async toggleTask(id: string): Promise<void> {
+    await AppStore.getInstance().toggleTaskDone(id)
+    this.refresh()
+  }
+
+  /** 未完成任务的一行：前面带方框，打钩即完成并同步统计数据 */
+  @Builder
+  pendingRow(t: Task) {
+    Row() {
+      // 方框勾选
+      Stack() {
+        Column()
+          .width(20)
+          .height(20)
+          .backgroundColor(t.done ? Colors.PRIMARY : Color.Transparent)
+          .border({ width: 1.5, color: t.done ? Colors.PRIMARY : Colors.TEXT_TERTIARY })
+          .borderRadius(6)
+        if (t.done) {
+          Text('✓')
+            .fontSize(13)
+            .fontColor(Color.White)
+            .fontWeight(FontWeight.Bold)
+        }
+      }
+      .onClick(() => {
+        this.toggleTask(t.id)
+      })
+
+      Column() {
+        Text(t.title)
+          .fontSize(14)
+          .fontColor(t.done ? Colors.TEXT_TERTIARY : Colors.TEXT_PRIMARY)
+          .decoration({ type: t.done ? TextDecorationType.LineThrough : TextDecorationType.None })
+          .width('100%')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(`${t.subject.length > 0 ? t.subject : '未分类'} · 预计 ${t.estimatedDuration} 分钟`)
+          .fontSize(11)
+          .fontColor(Colors.TEXT_TERTIARY)
+          .margin({ top: 3 })
+          .width('100%')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      .margin({ left: 10 })
+      .onClick(() => {
+        this.toggleTask(t.id)
+      })
+    }
+    .width('100%')
+    .padding({ top: 10, bottom: 10 })
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       Scroll() {
         Column({ space: Spacing.LG }) {
-        // 顶部问候（按当前时间生成 + 登录用户名）+ 右上角头像
+        // 顶部：问候 + 动态日历 + 头像
         Row() {
           Column() {
             Text(`${this.greeting}，${this.displayName()}`)
@@ -87,8 +180,9 @@ export struct Dashboard {
 
           // 右上角头像：点击即可更换
           Column() {
-            UserAvatar({ avatar: this.avatar, diameter: 52, bg: Colors.PRIMARY_SOFT })
+            UserAvatar({ avatar: this.avatar, diameter: 48, bg: Colors.PRIMARY_SOFT })
           }
+          .margin({ left: 12 })
           .onClick(() => {
             this.showAvatarSheet = true
           })
@@ -106,7 +200,7 @@ export struct Dashboard {
             Button('继续专注')
               .fontSize(13)
               .fontColor(Color.White)
-              .backgroundColor(Colors.PRIMARY)
+              .backgroundColor(Colors.PRIMARY_STRONG)
               .height(34)
               .borderRadius(17)
               .onClick(() => {
@@ -119,20 +213,32 @@ export struct Dashboard {
           .borderRadius(Radius.MD)
         }
 
-        // 考试总览
+        // 目标总览（按目标类型 + 目标日期算剩余天数）
         Column() {
-          Text('考试总览')
-            .fontSize(14)
-            .fontColor(Colors.TEXT_SECONDARY)
-            .width('100%')
+          Row() {
+            Text('目标总览')
+              .fontSize(14)
+              .fontColor(Colors.TEXT_SECONDARY)
+            Blank()
+            if (this.examType.length > 0) {
+              Text('调整目标 ›')
+                .fontSize(12)
+                .fontColor(Colors.PRIMARY_DARK)
+                .onClick(() => {
+                  router.pushUrl({ url: 'pages/LongTermPlan' })
+                })
+            }
+          }
+          .width('100%')
+
           if (this.examType.length === 0) {
-            Text('还没设置目标考试')
+            Text('还没设置目标')
               .fontSize(22)
               .fontWeight(FontWeight.Bold)
               .fontColor(Colors.TEXT_SECONDARY)
-              .margin({ top: 6 })
+              .margin({ top: 8 })
               .width('100%')
-            Text('在「我的 → 长期计划与目标」里填写，倒计时才会准确')
+            Text('在「我的 → 长期计划与目标」里填写目标与日期，倒计时才会准确')
               .fontSize(12)
               .fontColor(Colors.TEXT_TERTIARY)
               .margin({ top: 10 })
@@ -144,61 +250,124 @@ export struct Dashboard {
                   .fontSize(22)
                   .fontWeight(FontWeight.Bold)
                   .fontColor(Colors.PRIMARY_DARK)
+                  .margin({ top: 8 })
+                Text(this.targetDateText.length > 0 ? `目标日期 ${this.targetDateText}` : '未设置目标日期')
+                  .fontSize(12)
+                  .fontColor(Colors.TEXT_SECONDARY)
                   .margin({ top: 6 })
               }
               .alignItems(HorizontalAlign.Start)
               .layoutWeight(1)
+
               Column() {
                 Text(`${this.examDays}`)
                   .fontSize(34)
                   .fontWeight(FontWeight.Bold)
                   .fontColor(Colors.TEXT_PRIMARY)
-                Text('天')
+                Text('天后开考')
                   .fontSize(12)
                   .fontColor(Colors.TEXT_SECONDARY)
               }
               .alignItems(HorizontalAlign.Center)
             }
             .width('100%')
-            .margin({ top: 6 })
+
+            // 倒计时进度条：按「已度过 / 总周期」展示，未设起始时只显示剩余天数
             Text(`距离 ${this.examType} 还有 ${this.examDays} 天，按节奏稳步推进`)
               .fontSize(12)
               .fontColor(Colors.TEXT_TERTIARY)
-              .margin({ top: 10 })
+              .margin({ top: 12 })
               .width('100%')
           }
         }
         .dashCard()
 
-        // 总体进度
+        // 总体进度（全部任务，含历史）
         Column() {
-          this.sectionTitle('总体进度')
           Row() {
-            Text(`${this.todayDone} / ${this.todayTotal}`)
+            Text('总体进度')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Blank()
+            Text('全部任务')
+              .fontSize(11)
+              .fontColor(Colors.PRIMARY_DARK)
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .backgroundColor(Colors.PRIMARY_SOFT)
+              .borderRadius(9)
+          }
+          .width('100%')
+          .margin({ bottom: 12 })
+
+          Row() {
+            Text(`${this.allDone} / ${this.allTotal}`)
               .fontSize(20)
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)
             Blank()
-            Text(this.todayTotal > 0 ? `${Math.round(this.todayDone / this.todayTotal * 100)}%` : '—')
+            Text(this.percent())
               .fontSize(18)
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.PRIMARY_DARK)
           }
           .width('100%')
           .margin({ bottom: 10 })
+
           Progress({
-            value: this.todayDone,
-            total: Math.max(1, this.todayTotal),
+            value: this.allDone,
+            total: Math.max(1, this.allTotal),
             type: ProgressType.Linear
           })
             .color(Colors.PRIMARY)
             .backgroundColor(Colors.LINE)
             .width('100%')
-          Text('今日任务完成进度')
-            .fontSize(12)
-            .fontColor(Colors.TEXT_TERTIARY)
-            .margin({ top: 8 })
-            .width('100%')
+
+          // 点这里展开未完成任务清单
+          Row() {
+            Text(this.allTotal === 0
+              ? '还没有任何任务，去「AI 规划」拆一份吧'
+              : (this.showPending
+                ? `未完成 ${this.pending.length} 项 · 打钩即完成`
+                : `未完成 ${this.pending.length} 项 · 点击查看`))
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+            Blank()
+            Text(this.showPending ? '▲' : '▼')
+              .fontSize(10)
+              .fontColor(Colors.TEXT_TERTIARY)
+          }
+          .width('100%')
+          .padding({ top: 10, bottom: 2 })
+          .onClick(() => {
+            this.showPending = !this.showPending
+          })
+
+          if (this.showPending) {
+            if (this.pending.length === 0) {
+              Text('太好了，目前没有未完成的任务 🎉')
+                .fontSize(13)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .width('100%')
+                .padding({ top: 12, bottom: 4 })
+            } else {
+              Column() {
+                Divider()
+                  .color(Colors.LINE)
+                  .margin({ top: 6, bottom: 2 })
+                ForEach(this.pending.slice(0, 20), (t: Task) => {
+                  this.pendingRow(t)
+                }, (t: Task) => t.id)
+                if (this.pending.length > 20) {
+                  Text(`还有 ${this.pending.length - 20} 项未完成…`)
+                    .fontSize(12)
+                    .fontColor(Colors.TEXT_TERTIARY)
+                    .margin({ top: 8 })
+                }
+              }
+              .width('100%')
+            }
+          }
         }
         .dashCard()
 
@@ -286,4 +455,5 @@ function dashCard() {
   .backgroundColor(Colors.CARD)
   .borderRadius(Radius.LG)
   .alignItems(HorizontalAlign.Start)
+  .shadow({ radius: 18, color: Colors.SHADOW, offsetX: 0, offsetY: 6 })
 }

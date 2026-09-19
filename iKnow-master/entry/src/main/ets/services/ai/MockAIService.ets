@@ -812,6 +812,36 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     return '我在听，再多说一点你的安排吧，我好帮你把时间和任务都排清楚。'
   }
 
+  /**
+   * 贴合目标的励志标语（离线兜底文案表）。
+   * 网关可用时由 GatewayAIService.slogan() 动态生成；这里只保证断网/未配置时不为空。
+   */
+  slogan(goalType: string): string {
+    const g = goalType
+    if (g.indexOf('公务员') >= 0 || g.indexOf('公考') >= 0 || g.indexOf('考公') >= 0 || g.indexOf('事业编') >= 0) {
+      return '下一站，上岸'
+    }
+    if (g.indexOf('研究生') >= 0 || g.indexOf('考研') >= 0) {
+      return '一路生花'
+    }
+    if (g.indexOf('高考') >= 0) {
+      return '星光不负赶路人'
+    }
+    if (g.indexOf('期末') >= 0 || g.indexOf('期中') >= 0) {
+      return '稳扎稳打，门门过关'
+    }
+    if (g.indexOf('雅思') >= 0 || g.indexOf('托福') >= 0 || g.indexOf('四六级') >= 0) {
+      return '每天都算数'
+    }
+    if (g.indexOf('法考') >= 0 || g.indexOf('司考') >= 0) {
+      return '把法条读成底气'
+    }
+    if (g.indexOf('教资') >= 0 || g.indexOf('教师') >= 0) {
+      return '先站稳讲台下的每一天'
+    }
+    return '定个目标，稳步推进'
+  }
+
   nextPlanningQuestion(step: number): string {
     if (step === 0) {
       return '好的，大概有多少时间可以学习呢？'

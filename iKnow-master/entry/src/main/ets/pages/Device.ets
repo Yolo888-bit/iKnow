@@ -208,7 +208,7 @@ export struct Device {
             Button(this.bleScanning ? '扫描中…' : '扫描设备')
               .fontSize(14)
               .fontColor(Color.White)
-              .backgroundColor(Colors.PRIMARY)
+              .backgroundColor(Colors.PRIMARY_STRONG)
               .height(40)
               .borderRadius(20)
               .onClick(() => {
@@ -246,7 +246,7 @@ export struct Device {
                 Button('连接')
                   .fontSize(12)
                   .fontColor(Color.White)
-                  .backgroundColor(Colors.PRIMARY)
+                  .backgroundColor(Colors.PRIMARY_STRONG)
                   .height(30)
                   .borderRadius(15)
                   .onClick(() => {

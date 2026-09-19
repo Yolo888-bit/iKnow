@@ -6,13 +6,16 @@
     "pages/Focus",
     "pages/FocusBreak",
     "pages/StudyReport",
+    "pages/StudyHistory",
+    "pages/LongTermPlan",
+    "pages/PracticeDetail",
     "pages/FocusProfile",
     "pages/Device",
     "pages/Settings",
     "pages/Privacy",
     "pages/AIChat",
     "pages/Review",
-    "pages/AICompanion",
+    "pages/About",
     "pages/Placeholder"
   ]
 }

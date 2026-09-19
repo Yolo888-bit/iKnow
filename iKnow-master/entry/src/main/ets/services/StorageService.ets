@@ -12,6 +12,7 @@ import { QuestionRecord } from '../models/QuestionRecord'
 import { StudyReport } from '../models/StudyReport'
 import { FocusProfile } from '../models/FocusProfile'
 import { AIPersonality, TaskStatus, SessionStatus, InterventionLevel, FeedbackAction, FocusSource } from '../models/Enums'
+import { ObservationRecord, WatchEvent } from '../models/WatchSignal'
 
 const DB_NAME = 'iKnow.db'
 
@@ -22,6 +23,8 @@ const DB_NAME = 'iKnow.db'
 export class StorageService {
   private static inst: StorageService | null = null
   private rdb: relationalStore.RdbStore | null = null
+  private filesDirPath: string = ''
+  private ctx: common.Context | null = null
 
   static getInstance(): StorageService {
     if (StorageService.inst === null) {
@@ -46,7 +49,20 @@ export class StorageService {
       securityLevel: relationalStore.SecurityLevel.S1
     }
     this.rdb = await relationalStore.getRdbStore(context, config)
+    // 画面片段需要落盘（决策：上传并保存供复盘），这里记住应用文件目录
+    this.filesDirPath = context.filesDir
+    this.ctx = context
     await this.createTables()
+  }
+
+  /** 应用文件目录（画面片段存放根目录） */
+  filesDir(): string {
+    return this.filesDirPath
+  }
+
+  /** 应用上下文：供需要 Context 的服务（相机采集）复用，避免到处传参 */
+  appContext(): common.Context | null {
+    return this.ctx
   }
 
   private async createTables(): Promise<void> {
@@ -66,7 +82,7 @@ export class StorageService {
       events TEXT, interventions TEXT, snapshots_count INTEGER, last_snapshot_at INTEGER,
       perception_mode TEXT, status TEXT, updated_at INTEGER)`)
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS question (
-      id TEXT PRIMARY KEY, session_id TEXT, question TEXT, answer TEXT, created_at INTEGER)`)
+      id TEXT PRIMARY KEY, user_id TEXT, session_id TEXT, question TEXT, answer TEXT, created_at INTEGER)`)
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS study_report (
       session_id TEXT PRIMARY KEY, completion_rate REAL, focus_rate REAL,
       best_focus_period TEXT, fatigue_point INTEGER, distraction_triggers TEXT,
@@ -101,6 +117,15 @@ export class StorageService {
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS app_kv (
       key TEXT PRIMARY KEY, value TEXT)`)
 
+    // 手表事件（合成信号触发的事件；含被节流拦下的）与云端观察记录
+    await this.store.executeSql(`CREATE TABLE IF NOT EXISTS watch_event (
+      id TEXT PRIMARY KEY, session_id TEXT, t_ms INTEGER, kind TEXT,
+      rmssd REAL, hr REAL, accel_var REAL, reason TEXT, triggered INTEGER)`)
+    await this.store.executeSql(`CREATE TABLE IF NOT EXISTS observation (
+      id TEXT PRIMARY KEY, session_id TEXT, event_id TEXT, t_ms INTEGER,
+      activity TEXT, handheld INTEGER, facing_desk INTEGER,
+      confidence REAL, evidence TEXT, image_paths TEXT)`)
+
     // ---- 迁移：为已存在的旧表补列（忽略失败）----
     const alters: string[] = [
       'ALTER TABLE focus_session ADD COLUMN paused_duration INTEGER',
@@ -112,7 +137,8 @@ export class StorageService {
       'ALTER TABLE focus_session ADD COLUMN updated_at INTEGER',
       'ALTER TABLE focus_profile ADD COLUMN sample_count INTEGER',
       'ALTER TABLE focus_profile ADD COLUMN recent_concentrations TEXT',
-      'ALTER TABLE focus_profile ADD COLUMN recent_distraction_rates TEXT'
+      'ALTER TABLE focus_profile ADD COLUMN recent_distraction_rates TEXT',
+      'ALTER TABLE question ADD COLUMN user_id TEXT'
     ]
     for (const sql of alters) {
       try {
@@ -387,6 +413,29 @@ export class StorageService {
     while (rs.goToNextRow()) {
       const q = new QuestionRecord()
       q.id = this.getString(rs, 'id')
+      q.userId = this.getString(rs, 'user_id')
+      q.sessionId = this.getString(rs, 'session_id')
+      q.question = this.getString(rs, 'question')
+      q.answer = this.getString(rs, 'answer')
+      q.createdAt = this.getNum(rs, 'created_at')
+      list.push(q)
+    }
+    rs.close()
+    return list
+  }
+
+  /** 某用户最近问过的问题（新→旧），用于跨会话答疑记忆 */
+  async loadRecentQuestions(userId: string, limit: number): Promise<QuestionRecord[]> {
+    const p = new relationalStore.RdbPredicates('question')
+    p.equalTo('user_id', userId)
+    p.orderByDesc('created_at')
+    p.limitAs(limit)
+    const rs = await this.store.query(p)
+    const list: QuestionRecord[] = []
+    while (rs.goToNextRow()) {
+      const q = new QuestionRecord()
+      q.id = this.getString(rs, 'id')
+      q.userId = this.getString(rs, 'user_id')
       q.sessionId = this.getString(rs, 'session_id')
       q.question = this.getString(rs, 'question')
       q.answer = this.getString(rs, 'answer')
@@ -400,12 +449,81 @@ export class StorageService {
   async saveQuestion(q: QuestionRecord): Promise<void> {
     const v: relationalStore.ValuesBucket = {
       'id': q.id,
+      'user_id': q.userId,
       'session_id': q.sessionId,
       'question': q.question,
       'answer': q.answer,
       'created_at': q.createdAt
     }
     await this.store.insert('question', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE)
+  }
+
+  // ---------- 手表事件 & 观察记录 ----------
+  async saveWatchEvents(list: WatchEvent[]): Promise<void> {
+    for (const e of list) {
+      const v: relationalStore.ValuesBucket = {
+        'id': e.id,
+        'session_id': e.sessionId,
+        't_ms': e.tMs,
+        'kind': e.kind.toString(),
+        'rmssd': e.rmssd,
+        'hr': e.hr,
+        'accel_var': e.accelVar,
+        'reason': e.reason,
+        'triggered': e.triggered ? 1 : 0
+      }
+      await this.store.insert('watch_event', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE)
+    }
+  }
+
+  async saveObservation(o: ObservationRecord): Promise<void> {
+    const v: relationalStore.ValuesBucket = {
+      'id': o.id,
+      'session_id': o.sessionId,
+      'event_id': o.eventId,
+      't_ms': o.tMs,
+      'activity': o.activity,
+      'handheld': o.handheld ? 1 : 0,
+      'facing_desk': o.facingDesk ? 1 : 0,
+      'confidence': o.confidence,
+      'evidence': o.evidence,
+      'image_paths': JSON.stringify(o.imagePaths)
+    }
+    await this.store.insert('observation', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE)
+  }
+
+  /** 某次会话的观察记录（复盘时间线用），按时间升序 */
+  async loadObservations(sessionId: string): Promise<ObservationRecord[]> {
+    const p = new relationalStore.RdbPredicates('observation')
+    p.equalTo('session_id', sessionId)
+    p.orderByAsc('t_ms')
+    const rs = await this.store.query(p)
+    const list: ObservationRecord[] = []
+    while (rs.goToNextRow()) {
+      const o = new ObservationRecord()
+      o.id = this.getString(rs, 'id')
+      o.sessionId = this.getString(rs, 'session_id')
+      o.eventId = this.getString(rs, 'event_id')
+      o.tMs = this.getNum(rs, 't_ms')
+      o.activity = this.getString(rs, 'activity')
+      o.handheld = this.getNum(rs, 'handheld') === 1
+      o.facingDesk = this.getNum(rs, 'facing_desk') === 1
+      o.confidence = this.getNum(rs, 'confidence')
+      o.evidence = this.getString(rs, 'evidence')
+      o.imagePaths = this.parseStringArray(this.getString(rs, 'image_paths'))
+      list.push(o)
+    }
+    rs.close()
+    return list
+  }
+
+  /**
+   * 清空画面片段的图片引用（观察记录本身保留 —— 它们同时是复盘的"干扰事件"）。
+   * 「清除已保存的画面片段」只删帧文件是不够的：库里还留着路径，时间线会渲染出空白图。
+   */
+  async clearObservationImages(): Promise<void> {
+    const v: relationalStore.ValuesBucket = { 'image_paths': '[]' }
+    await this.store.update(v, new relationalStore.RdbPredicates('observation'))
   }
 
   // ---------- StudyReport ----------
@@ -713,10 +831,32 @@ export class StorageService {
   async clearAll(): Promise<void> {
     const tables: string[] = [
       'user', 'learning_goal', 'task', 'focus_session', 'question', 'study_report', 'focus_profile',
-      'authorization', 'session_snapshot', 'intervention_event', 'study_plan', 'task_timeline', 'app_kv'
+      'authorization', 'session_snapshot', 'intervention_event', 'study_plan', 'task_timeline', 'app_kv',
+      // 生理记录与画面观察记录也是实际在写的表：漏掉它们，"一键清除"就清不干净
+      'watch_event', 'observation'
     ]
     for (let i = 0; i < tables.length; i++) {
       await this.store.delete(new relationalStore.RdbPredicates(tables[i]))
     }
+  }
+
+  /**
+   * 只清"学习记录"：会话 / 任务 / 报告 / 画像 / 快照 / 干预 / 时间线 / 生理与观察记录。
+   * 保留 user、learning_goal、authorization、study_plan、app_kv ——
+   * 「清除学习数据」不该动身份、目标与授权（清了身份会直接跳过引导页，那不是这个按钮该干的事）。
+   */
+  async clearLearningTables(): Promise<void> {
+    const tables: string[] = [
+      'task', 'focus_session', 'question', 'study_report', 'focus_profile', 'session_snapshot',
+      'intervention_event', 'task_timeline', 'watch_event', 'observation'
+    ]
+    for (let i = 0; i < tables.length; i++) {
+      await this.store.delete(new relationalStore.RdbPredicates(tables[i]))
+    }
+  }
+
+  /** 清除生理记录（心率 / HRV）。「清除生理数据」用它，不能再靠空实现假装没有数据 */
+  async clearWatchEvents(): Promise<void> {
+    await this.store.delete(new relationalStore.RdbPredicates('watch_event'))
   }
 }

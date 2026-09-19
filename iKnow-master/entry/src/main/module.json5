@@ -15,6 +15,56 @@
       {
         // 调用大模型 API（AI 规划 / 答疑 / 复盘）：system_grant，安装即授予，无需动态申请
         "name": "ohos.permission.INTERNET"
+      },
+      {
+        // 前置摄像头（专注感知）：本机预览 + 信号触发时抓拍短片段做识别。user_grant：必须运行时动态申请，
+        // 申请失败或无可用摄像头时降级为"仅计时模式"并如实标注（此时不抓拍、不上传）。
+        "name": "ohos.permission.CAMERA",
+        "reason": "$string:reason_camera",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
+        // 连接标准 BLE 心率设备（手表/胸带，HRS 0x180D/0x2A37）。user_grant。
+        "name": "ohos.permission.ACCESS_BLUETOOTH",
+        "reason": "$string:reason_bluetooth",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
+        // 云端确认分心时的震动提醒。user_grant。
+        "name": "ohos.permission.VIBRATE",
+        "reason": "$string:reason_vibrate",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      }
+    ],
+    "extensionAbilities": [
+      {
+        // 服务卡片（鸿蒙特性）：桌面查看今日专注 / 净专注率 / 当前建议
+        "name": "EntryFormAbility",
+        "srcEntry": "./ets/entryformability/EntryFormAbility.ets",
+        "label": "$string:EntryFormAbility_label",
+        "description": "$string:EntryFormAbility_desc",
+        "type": "form",
+        "metadata": [
+          {
+            "name": "ohos.extension.form",
+            "resource": "$profile:form_config"
+          }
+        ]
       }
     ],
     "abilities": [

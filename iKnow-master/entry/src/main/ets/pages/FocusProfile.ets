@@ -82,22 +82,31 @@ export struct FocusProfile {
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
 
-          Text(`近 30 天平均专注时长  ${this.trendStart()} min → ${this.trendEnd()} min`)
-            .fontSize(15)
-            .fontColor(Colors.TEXT_PRIMARY)
-            .margin({ top: 12 })
-            .width('100%')
+          if (this.hasTrend()) {
+            Text(`近 30 天平均专注时长  ${this.trendStart()} min → ${this.trendEnd()} min`)
+              .fontSize(15)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .margin({ top: 12 })
+              .width('100%')
 
-          BarChart({ values: this.trend, labels: [] })
-            .margin({ top: 12 })
-            .width('100%')
+            BarChart({ values: this.trend, labels: [] })
+              .margin({ top: 12 })
+              .width('100%')
+          } else {
+            // 近 30 天确实没有记录时如实说明，不给「0 min → 0 min」+ 空柱状图
+            Text('近 30 天还没有专注记录')
+              .fontSize(14)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ top: 12 })
+              .width('100%')
+          }
         }
         .profileCard()
 
-        // AI 长期分析
+        // 长期分析
         Column() {
           Row() {
-            Text('AI 长期分析')
+            Text('长期分析')
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)
@@ -139,6 +148,15 @@ export struct FocusProfile {
     .backgroundColor(Colors.BG)
     .width('100%')
     .height('100%')
+  }
+
+  /** 近 30 天是否有专注记录（全 0 视为没有记录） */
+  private hasTrend(): boolean {
+    let sum = 0
+    for (let i = 0; i < this.trend.length; i++) {
+      sum += this.trend[i]
+    }
+    return sum > 0
   }
 
   private trendStart(): number {

@@ -11,6 +11,34 @@
     {
       "name": "EntryAbility_label",
       "value": "iKnow"
+    },
+    {
+      "name": "reason_camera",
+      "value": "用于在专注时感知你的专注状态，在信号触发时抓拍短片段；不开启则只走计时模式"
+    },
+    {
+      "name": "reason_bluetooth",
+      "value": "用于连接你的蓝牙心率设备（手表/胸带），在专注时读取实时心率辅助判断状态"
+    },
+    {
+      "name": "reason_vibrate",
+      "value": "当识别到你已经离开座位或在使用手机时，用一次震动把你拉回来"
+    },
+    {
+      "name": "widget_display_name",
+      "value": "iKnow 今日专注"
+    },
+    {
+      "name": "widget_desc",
+      "value": "在桌面查看今日专注时长、净专注率与当前建议"
+    },
+    {
+      "name": "EntryFormAbility_label",
+      "value": "iKnow 服务卡片"
+    },
+    {
+      "name": "EntryFormAbility_desc",
+      "value": "提供桌面服务卡片"
     }
   ]
 }

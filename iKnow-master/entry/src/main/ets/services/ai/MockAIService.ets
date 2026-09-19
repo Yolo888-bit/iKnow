@@ -3,6 +3,8 @@ import {
   QATextPayload,
   QAImagePayload,
   QAResp,
+  QAMessage,
+  QA_DISCLAIMER,
   QA_SCHEMA_VERSION,
   QAService
 } from './QAService'
@@ -103,7 +105,7 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
   }
 
   /** §14.7 QA 免责声明（所有 AI 输出必须携带） */
-  private static readonly DISCLAIMER = '（小伴是 AI 考伴，不是真人，回答仅供参考，重要结论请自行核实。）'
+  private static readonly DISCLAIMER = QA_DISCLAIMER
 
   static getInstance(): MockAIService {
     if (MockAIService.inst === null) {
@@ -416,13 +418,41 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
 
   private async produceQAText(payload: QATextPayload): Promise<QAResp> {
     await this.delay(620)
-    const q = payload.question
+    // 会话内历史 + 跨会话"之前问过什么" → 用于短追问的指代消解
+    const ctx: string[] = []
+    const history: QAMessage[] = payload.history !== undefined ? payload.history : []
+    for (const m of history) {
+      ctx.push(m.content)
+    }
+    if (payload.recentQuestions !== undefined) {
+      for (const rq of payload.recentQuestions) {
+        ctx.push(rq)
+      }
+    }
     return {
-      answer: this.knowledgeAnswer(q),
+      answer: this.knowledgeAnswer(MockAIService.effectiveQuestion(payload.question, ctx.join(' '))),
       references: [],
       disclaimer: MockAIService.DISCLAIMER,
       scene: 'qa_text'
     }
+  }
+
+  /**
+   * 指代消解：短追问（如"那它的适用条件呢"）本身没有主题词，
+   * 仅在这类情况下把上文拼进来再匹配，避免正常提问被上下文串味。
+   */
+  private static effectiveQuestion(q: string, context: string): string {
+    if (context.length === 0 || !MockAIService.isFollowUp(q)) {
+      return q
+    }
+    return `${context} ${q}`
+  }
+
+  private static isFollowUp(q: string): boolean {
+    if (q.length <= 12) {
+      return true
+    }
+    return q.indexOf('它') >= 0 || q.indexOf('这个') >= 0 || q.indexOf('上面') >= 0 || q.indexOf('刚才') >= 0
   }
 
   private async produceQAImage(payload: QAImagePayload): Promise<QAResp> {
@@ -526,7 +556,7 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     if (q.indexOf('分心') >= 0 || q.indexOf('走神') >= 0) {
       return '容易分心通常不是意志力的问题，而是任务和节奏没匹配。我建议把任务切成更小的块，每 25-45 分钟安排一次短暂休息。'
     }
-    return '这个问题我记下了。按我目前的模拟知识库，先给你一个方向：把它拆成「定义 → 适用条件 → 典型例题」三步逐步击破。回到专注后，我会把它写进本次复盘。'
+    return '这个问题我先记下来了。给你一个通用的切入方向：把它拆成「定义 → 适用条件 → 典型例题」三步——先确认定义，再看适用条件，最后挑一道典型例题走一遍。如果能把具体题目或卡住的那一步发给我，我可以帮你看得更准。'
   }
 
   // ===================== 5 服务接口实现（canonical）=====================
@@ -679,6 +709,10 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
       profile.averageFocusDuration = Math.round(finished.reduce((a, s) => a + s.focusDuration, 0) / finished.length / 60)
       profile.focusThreshold = Metrics.focusThreshold(finished)
       profile.bestFocusTime = Metrics.goldenWindow(finished)
+      // 近 30 天每日净专注分钟（复用长期复盘的同一份聚合，§3 指标唯一事实源）。
+      // 此前这个字段全项目零赋值，画像页的「专注成长趋势」恒为 0 min → 0 min
+      const noTasks: Task[] = []
+      profile.monthlyTrend = Metrics.last30DaysSummary(finished, noTasks, Date.now()).trend
     } else {
       profile.efficiency = 0
       profile.concentration = 0
@@ -732,30 +766,43 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
    * 单日复盘 AI 洞察（AI 输出，硬规则 §1：动态文案不得写死在页面）。
    * dayLabel 形如「9月12日」；bestPeriod 形如「08:00 - 10:00」。
    */
+  /**
+   * 单日复盘洞察 —— **只讲这一天**。
+   * 与长期分析严格区分：不引用近 30 天趋势、不引用五维画像，避免两处内容雷同。
+   */
   dayInsight(dayLabel: string, focusRate: number, bestPeriod: string, hasData: boolean): string {
     if (!hasData) {
-      return `${dayLabel}还没有专注记录，先从一次 25 分钟的专注开始吧。`
+      return `${dayLabel}没有专注记录，所以这一天没有可分析的内容。`
     }
-    const period = bestPeriod.length > 0 ? bestPeriod : '上午'
+    const period = bestPeriod.length > 0 ? bestPeriod : '当天状态最好的那一段'
     if (focusRate >= 80) {
-      return `${dayLabel}你的净专注率约 ${focusRate}%，在 ${period} 状态最好。建议下次把最难点任务安排在排这个时间段。`
+      return `${dayLabel}这一天净专注率 ${focusRate}%，其中 ${period} 是全天的状态高点，这段时间的产出最扎实。`
     }
     if (focusRate >= 60) {
-      return `${dayLabel}你的净专注率约 ${focusRate}%，整体稳定；在 ${period} 状态相对更好，可以把重点任务优先放这里。`
+      return `${dayLabel}这一天净专注率 ${focusRate}%，属于正常波动范围；${period} 比其它时段更稳。`
     }
-    return `${dayLabel}你的净专注率约 ${focusRate}%，分心偏多。建议把任务切得更小，并在 ${period} 这类状态好的时段集中攻克难点。`
+    return `${dayLabel}这一天净专注率 ${focusRate}%，分心相对偏多，主要集中在 ${period} 之外的时段。`
   }
 
-  /** 单日复盘建议（AI 输出，硬规则 §1） */
+  /**
+   * 单日复盘建议 —— **只针对当天、且是明天就能执行的动作**。
+   * 长期策略类内容归长期视图的 longTermAnalysis，不在此处重复。
+   */
   daySuggestions(studyMinutes: number, focusRate: number): string[] {
-    const out: string[] = ['先复盘当天的错题，弄清错因再合上答案重做一遍']
-    out.push('再做 5 道同类型题，巩固刚掌握的方法')
-    out.push('最后用自己的话总结解题步骤，形成可复用的套路')
-    if (studyMinutes > 0 && focusRate < 70) {
-      out.push('专注率偏低时把单段时长缩短到 25-30 分钟，中间主动休息')
+    const out: string[] = []
+    if (studyMinutes <= 0) {
+      return ['这一天没有有效学习时长，先设定一个 25 分钟的小目标开始']
+    }
+    if (focusRate < 70) {
+      out.push(`这一天分心偏多，明天把单段时长压到 25-30 分钟，中间主动起来活动一次`)
+    } else {
+      out.push(`这一天的节奏可以保持，明天沿用同样的单段时长即可`)
     }
     if (studyMinutes >= 180) {
-      out.push('当天学习量较大，注意用眼与休息，避免连续久坐')
+      out.push('这一天累计学习偏长，注意用眼与久坐，每两段之间留一次真正的休息')
+    }
+    if (studyMinutes < 60) {
+      out.push('这一天总时长偏短，明天优先保证一整段不受打扰的专注')
     }
     return out
   }
@@ -779,7 +826,47 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     return `你通常在 ${goldenTime} 专注效率最高。要不要现在开始一个 45 分钟的专注？`
   }
 
+  /**
+   * 长期分析：**只陈述数据里真实存在的事实**，不再无条件宣称"效率在稳步提升"。
+   * 样本不足时如实说明，不编造趋势。
+   */
   longTermAnalysis(profile: FocusProfile, hardestSubject: string): string {
-    return `最近，你的专注效率在稳步提升。相比阅读类任务，你在${hardestSubject}中更容易出现注意力下降。建议将${hardestSubject}安排在精力最好的时段，并配合 45 分钟左右的专注节奏。`
+    if (profile.sampleCount < 3) {
+      return `目前只累计到 ${profile.sampleCount} 次专注，还不足以做长期分析。再多完成几次，我会按你的真实数据给结论。`
+    }
+    const parts: string[] = []
+    parts.push(`基于 ${profile.sampleCount} 次专注：平均单次净专注 ${profile.averageFocusDuration} 分钟，建议单段不超过 ${profile.focusThreshold} 分钟。`)
+    if (profile.bestFocusTime.length > 0) {
+      parts.push(`高效时段集中在 ${profile.bestFocusTime}。`)
+    }
+
+    // 用五维里的最强/最弱项说明差异，而不是笼统地说"在提升"
+    const names: string[] = ['效率', '专注度', '稳定性', '执行力', '抗干扰']
+    const values: number[] = [
+      profile.efficiency,
+      profile.concentration,
+      profile.stability,
+      profile.execution,
+      profile.antiDistraction
+    ]
+    let lo = 0
+    let hi = 0
+    for (let i = 1; i < values.length; i++) {
+      if (values[i] < values[lo]) {
+        lo = i
+      }
+      if (values[i] > values[hi]) {
+        hi = i
+      }
+    }
+    if (values[hi] - values[lo] >= 5) {
+      parts.push(`五维里「${names[lo]}」相对偏低（${values[lo]}），「${names[hi]}」相对更好（${values[hi]}）。`)
+    } else {
+      parts.push(`五维目前比较均衡（${values[lo]}–${values[hi]}），暂没有明显短板。`)
+    }
+    if (hardestSubject.length > 0) {
+      parts.push(`按完成率看，${hardestSubject}推进得最慢，建议把它安排在高效时段。`)
+    }
+    return parts.join('')
   }
 }

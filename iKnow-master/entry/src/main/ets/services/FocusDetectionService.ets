@@ -12,8 +12,10 @@ export class FocusDetectionService implements FocusSensor {
   private timerId: number = -1
   private callback: ((r: FocusDetectionResult) => void) | null = null
   private startTs: number = 0
-  private manualOverride: FocusState | null = null
-  private manualDetail: string = ''
+  /** 最近一次判定（由云端识别结果经规则组合后 submit；初始无结论，置信度 0 → 被门禁忽略） */
+  private lastState: FocusState = FocusState.FOCUSED
+  private lastDetail: string = ''
+  private lastConfidence: number = 0
 
   static getInstance(): FocusDetectionService {
     if (FocusDetectionService.inst === null) {
@@ -69,78 +71,91 @@ export class FocusDetectionService implements FocusSensor {
     }
   }
 
+  /**
+   * 会话边界复位：**新会话开始时必须清掉上一段留下的结论**。
+   * 否则上一段以"看手机"（红）结束时，下一段一开始就会回放这条红色结论，
+   * 表现为"刚坐下就被提示分心"。
+   */
+  beginSession(): void {
+    this.lastState = FocusState.FOCUSED
+    this.lastDetail = ''
+    this.lastConfidence = 0
+    this.startTs = Date.now()
+  }
+
+  /**
+   * 停止检测（只停轮询，不断开结论回调 —— 回调是手表事件/模拟工作台的唯一出口）。
+   */
   stop(): void {
     if (this.timerId >= 0) {
       clearInterval(this.timerId)
       this.timerId = -1
     }
-    this.callback = null
-    this.manualOverride = null
   }
 
-  /** 手动注入状态（演示用 / Device 模拟设备模式） */
+  /**
+   * 显式注入一次判定结论（演示用）。
+   *
+   * ⚠️ 历史 bug：这里原先把状态写进 `manualOverride` 字段，而 `current()` 从不读它，
+   * 于是「模拟轻度分心 / 重度走神」按钮弹了成功提示却毫无效果。
+   * 现在改为直接 `submit()`，与真实判定共用同一个出口。
+   */
   simulate(state: FocusState): void {
-    if (state === FocusState.DISTRACTED) {
-      this.manualOverride = state
-      this.manualDetail = '长时间离开屏幕'
-    } else if (state === FocusState.SLIGHTLY_DISTRACTED) {
-      this.manualOverride = state
-      this.manualDetail = '频繁低头'
-    } else {
-      this.manualOverride = null
-      this.manualDetail = '视线正常'
-    }
-    if (this.callback !== null) {
-      this.callback(this.current())
-    }
+    const detail = state === FocusState.DISTRACTED
+      ? '模拟注入：长时间离开屏幕'
+      : state === FocusState.SLIGHTLY_DISTRACTED
+        ? '模拟注入：频繁低头'
+        : '模拟注入：状态正常'
+    this.submit(state, detail, 85, FocusSource.CAMERA)
   }
 
+  /**
+   * 恢复专注。**必须同时把最近判定改回"专注"** ——
+   * 否则重新提交的还是上一条"分心"结论，用户点了「继续专注」界面看起来毫无反应。
+   */
   resume(): void {
-    this.manualOverride = null
-    this.manualDetail = ''
     this.startTs = Date.now()
+    this.lastState = FocusState.FOCUSED
+    this.lastDetail = '已确认继续专注'
+    this.lastConfidence = 90
     if (this.callback !== null) {
       this.callback(this.current())
     }
   }
 
+  /**
+   * 产出一次检测结果。
+   *
+   * 判定不在本类里"编造"：结论来自"手表事件 → 摄像头短片段 → 云端可观察状态"
+   * 这条链，经规则组合后通过 `submit()` 注入；本方法只负责取最近一次结论。
+   * 没有输入时状态不变（不产出新结论）。
+   */
   private current(): FocusDetectionResult {
     const r = new FocusDetectionResult()
     r.timestamp = Date.now()
     r.source = FocusSource.CAMERA
-    if (this.manualOverride !== null) {
-      r.state = this.manualOverride
-      r.detail = this.manualDetail
-      r.confidence = 88
-      return r
-    }
-    const elapsed = (Date.now() - this.startTs) / 1000
-    const cycle = elapsed % 160
-    if (cycle < 45) {
-      r.state = FocusState.FOCUSED
-      r.detail = '视线正常'
-      r.confidence = 90 + Math.round(Math.random() * 8)
-    } else if (cycle < 62) {
-      r.state = FocusState.SLIGHTLY_DISTRACTED
-      r.detail = '频繁低头'
-      r.confidence = 70 + Math.round(Math.random() * 10)
-    } else if (cycle < 78) {
-      r.state = FocusState.FOCUSED
-      r.detail = '视线回到屏幕'
-      r.confidence = 85 + Math.round(Math.random() * 8)
-    } else if (cycle < 100) {
-      r.state = FocusState.SLIGHTLY_DISTRACTED
-      r.detail = '视线长时间离开'
-      r.confidence = 66 + Math.round(Math.random() * 10)
-    } else if (cycle < 122) {
-      r.state = FocusState.DISTRACTED
-      r.detail = '长时间离席'
-      r.confidence = 80 + Math.round(Math.random() * 8)
-    } else {
-      r.state = FocusState.FOCUSED
-      r.detail = '重新进入状态'
-      r.confidence = 85 + Math.round(Math.random() * 10)
-    }
+    r.state = this.lastState
+    r.detail = this.lastDetail
+    r.confidence = this.lastConfidence
     return r
+  }
+
+  /**
+   * 由分析器提交一次真实判定结果（视觉/生理融合后的结论）。
+   * 这是**唯一**能改变专注状态的入口。
+   */
+  submit(state: FocusState, detail: string, confidence: number, source: FocusSource): void {
+    this.lastState = state
+    this.lastDetail = detail
+    this.lastConfidence = confidence
+    if (this.callback !== null) {
+      const r = new FocusDetectionResult()
+      r.timestamp = Date.now()
+      r.state = state
+      r.detail = detail
+      r.confidence = confidence
+      r.source = source
+      this.callback(r)
+    }
   }
 }

@@ -1,4 +1,5 @@
 import { Task } from '../models/Task'
+import { ObservationRecord } from '../models/WatchSignal'
 import { FocusSession } from '../models/FocusSession'
 import { StudyReport } from '../models/StudyReport'
 import { FocusProfile } from '../models/FocusProfile'
@@ -8,6 +9,7 @@ import { GatewayAIService } from './ai/GatewayAIService'
 import { BridgeConfig } from './ai/BridgeConfig'
 import { AIPayload, AIResult, AIRequest, AIResponse, AIScene } from './ai/AIService'
 import { PlanningInput, PlanningResult, PlanningDialogInput, PlanningDialogResult } from './ai/PlanningService'
+import { QATextPayload, QAResp } from './ai/QAService'
 import { IdUtils } from '../utils/IdUtils'
 
 /**
@@ -26,6 +28,8 @@ export class AIService {
   private gateway: GatewayAIService = GatewayAIService.getInstance()
   /** 是否启用真实网关；默认 false 走 Mock（硬规则 §8：替换时不改 UI） */
   private useGateway: boolean = false
+  /** 上一次答疑的来源（GATEWAY / MOCK），用于 UI 如实标注 */
+  private lastQaSource: string = 'MOCK'
 
   static getInstance(): AIService {
     if (AIService.inst === null) {
@@ -65,10 +69,15 @@ export class AIService {
       if (r.ok) {
         return r
       }
-      // 网关未配置/失败：回退 Mock，保证核心功能不中断
-      return await this.mock.dispatch(req)
+      // 网关未配置/失败：回退 Mock，保证核心功能不中断。
+      // 必须显式标记 fallback：Mock 同样返回 ok:true，不标就无法区分"大模型回答"与"本地模板回答"
+      const fb: AIResponse<AIResult> = await this.mock.dispatch(req)
+      fb.fallback = true
+      return fb
     }
-    return await this.mock.dispatch(req)
+    const local: AIResponse<AIResult> = await this.mock.dispatch(req)
+    local.fallback = true
+    return local
   }
 
   /**
@@ -166,9 +175,44 @@ export class AIService {
     return await this.mock.chat(input)
   }
 
-  /** 答疑（委托 MockAIService，输出带免责声明） */
-  async answerQuestion(q: string): Promise<string> {
-    return await this.mock.answerQuestion(q)
+  /**
+   * 答疑：走场景路由（qa_text）—— 网关可用时走大模型，未配置或失败时自动回退 Mock，
+   * 并携带会话内 history 与跨会话"之前问过什么"。返回纯文本答案。
+   */
+  async answerQuestion(payload: QATextPayload, userId: string = 'local'): Promise<string> {
+    const r = await this.callScene('qa_text', payload, userId)
+    if (r.ok && r.data !== undefined) {
+      const resp = r.data as Object as QAResp
+      if (resp.answer !== undefined && resp.answer.length > 0) {
+        // 来源以 fallback 标记为准：未配 Key 或网关失败时 dispatch 返回的 Mock 结果也是 ok:true，
+        // 只看 ok 会把本地模板标成「大模型回答」（第四轮加的诚实标注会自己变成假成功）
+        this.lastQaSource = r.fallback === true ? 'MOCK' : 'GATEWAY'
+        return resp.answer
+      }
+    }
+    this.lastQaSource = 'MOCK'
+    return await this.mock.answerQuestion(payload.question)
+  }
+
+  /** 上一次答疑的来源：'GATEWAY' = 走大模型，'MOCK' = 本地模板（UI 据此如实标注） */
+  getLastQaSource(): string {
+    return this.lastQaSource
+  }
+
+  /** 是否已配置真实网关 —— 决定用真实多模态识别还是模拟识别 */
+  isGatewayReady(): boolean {
+    return this.useGateway && BridgeConfig.AI_API_KEY.length > 0
+  }
+
+  /**
+   * 真实多模态识别（触发时抓拍的帧 → 可观察状态）。
+   * 未配置网关时返回 null：由调用方选择模拟输入源或如实记为「无法判断」。
+   */
+  async recognizeActivity(frames: ArrayBuffer[]): Promise<ObservationRecord | null> {
+    if (!this.isGatewayReady()) {
+      return null
+    }
+    return await this.gateway.recognizeActivity(frames)
   }
 
   /** 复盘洞察文案（委托 MockAIService，指标统一走 Metrics） */

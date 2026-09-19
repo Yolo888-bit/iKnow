@@ -1,6 +1,9 @@
 import { http } from '@kit.NetworkKit'
+import { util } from '@kit.ArkTS'
+import { hilog } from '@kit.PerformanceAnalysisKit'
+import { ObservationRecord } from '../../models/WatchSignal'
 import { AIService, AIScene, AIRequest, AIResponse, AIError, AIPayload, AIResult } from './AIService'
-import { QATextPayload, QAImagePayload, QAResp } from './QAService'
+import { QATextPayload, QAImagePayload, QAResp, QAMessage, QA_DISCLAIMER } from './QAService'
 import { CompanionContext, CompanionDecision } from './CompanionService'
 import { ReviewPayload, ReviewData } from './ReviewService'
 import {
@@ -16,10 +19,25 @@ import { Prompts } from './Prompts'
 import { SchemaValidator } from './SchemaValidator'
 import { PlanTask } from '../../models/StudyPlan'
 
+const DOMAIN = 0x0000
+const TAG = 'iKnow.Gateway'
+
 /** OpenAI 兼容请求体（PRD §15.2） */
+/** 多模态消息内容段（文本 / 图片），用于"触发时抓拍 → 云端识别在做什么" */
+interface ContentPart {
+  type: string
+  text?: string
+  image_url?: ImageUrlPart
+}
+
+interface ImageUrlPart {
+  url: string
+}
+
 interface ChatMessage {
   role: string
-  content: string
+  /** 纯文本场景传 string；多模态场景传内容段数组（OpenAI 兼容格式） */
+  content: string | ContentPart[]
 }
 
 interface GatewayResponseFormat {
@@ -68,6 +86,20 @@ interface RawDialog {
   reply?: string
   done?: boolean
   tasks?: RawTask[]
+}
+
+interface RawQA {
+  answer?: string
+  references?: string[]
+}
+
+/** 多模态识别的原始返回（只允许可观察状态） */
+interface RawActivity {
+  activity?: string
+  handheld?: boolean
+  facingDesk?: boolean
+  confidence?: number
+  evidence?: string
 }
 
 /**
@@ -155,7 +187,10 @@ export class GatewayAIService implements AIService {
   }
 
   async askText(req: AIRequest<QATextPayload>): Promise<AIResponse<QAResp>> {
-    return this.fail<QAResp>('qa_text', req.requestId, 'not_implemented', 'qa_text 场景暂未开放网关')
+    if (!this.isReady()) {
+      return this.fail<QAResp>('qa_text', req.requestId, 'not_configured', 'Gateway AI 未配置')
+    }
+    return await this.runQA(req.requestId, req.payload)
   }
 
   async askImage(req: AIRequest<QAImagePayload>): Promise<AIResponse<QAResp>> {
@@ -188,6 +223,12 @@ export class GatewayAIService implements AIService {
     if (req.scene === 'task_plan') {
       const payload: PlanningInput = req.payload as Object as PlanningInput
       const r = await this.runPlan(req.requestId, payload)
+      return r as Object as AIResponse<AIResult>
+    }
+    // 学习答疑：此前漏接这一支，导致 askText/runQA 全是死代码、答疑永远回退本地模板
+    if (req.scene === 'qa_text') {
+      const payload: QATextPayload = req.payload as Object as QATextPayload
+      const r = await this.runQA(req.requestId, payload)
       return r as Object as AIResponse<AIResult>
     }
     return this.fail<AIResult>(req.scene, req.requestId, 'not_implemented',
@@ -281,6 +322,54 @@ export class GatewayAIService implements AIService {
     return this.ok<PlanningResult>('task_plan', requestId, result, Date.now() - started)
   }
 
+  /**
+   * 学习答疑（qa_text）：把会话内历史按 user/assistant 还原，
+   * 并把「正在专注的任务 / 之前问过什么」作为当前情境注入系统提示词。
+   */
+  private async runQA(requestId: string, payload: QATextPayload): Promise<AIResponse<QAResp>> {
+    const parts: string[] = []
+    if (payload.subject !== undefined && payload.subject.length > 0) {
+      parts.push(`- 用户正在专注的任务：${payload.subject}`)
+    }
+    if (payload.recentQuestions !== undefined && payload.recentQuestions.length > 0) {
+      parts.push(`- 他之前问过：${payload.recentQuestions.join('；')}`)
+    }
+    const messages: ChatMessage[] = [{ role: 'system', content: Prompts.qa(this.personality, parts.join('\n')) }]
+    const history: QAMessage[] = payload.history !== undefined ? payload.history : []
+    for (const m of history) {
+      messages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })
+    }
+    messages.push({ role: 'user', content: payload.question })
+
+    const started: number = Date.now()
+    const content: string = await this.chatJson(messages, BridgeConfig.MODEL_TEXT, 0.5, 700,
+      BridgeConfig.timeoutForScene('qa_text'))
+    if (content.length === 0) {
+      return this.fail<QAResp>('qa_text', requestId, 'gateway_empty', '大模型无有效返回')
+    }
+
+    let raw: RawQA | null = null
+    try {
+      raw = JSON.parse(content) as RawQA
+    } catch (e) {
+      raw = null
+    }
+    if (raw === null || raw.answer === undefined || raw.answer.length === 0) {
+      return this.fail<QAResp>('qa_text', requestId, 'gateway_bad_json', '返回缺少 answer 字段')
+    }
+    const result: QAResp = {
+      answer: raw.answer,
+      references: raw.references !== undefined ? raw.references : [],
+      disclaimer: QA_DISCLAIMER,
+      scene: 'qa_text'
+    }
+    const v = SchemaValidator.for('qa_text').validate(result as Object)
+    if (!v.ok) {
+      return this.fail<QAResp>('qa_text', requestId, 'schema_invalid', '返回不符合 Schema')
+    }
+    return this.ok<QAResp>('qa_text', requestId, result, Date.now() - started)
+  }
+
   /** 原始 task → PlanTask（补默认值并夹紧时长，保证 UI 不会拿到脏数据） */
   private static toPlanTasks(raw: RawTask[] | undefined): PlanTask[] {
     const out: PlanTask[] = []
@@ -322,6 +411,62 @@ export class GatewayAIService implements AIService {
       return first
     }
     return await this.callModel(messages, model, temperature, maxTokens, timeoutMs, false)
+  }
+
+  /**
+   * 真实多模态识别：把触发时抓拍的若干帧交给视觉模型，返回**可观察状态**。
+   *
+   * 只在这一处做"图片 → 云端"：无帧、未配置 Key、超时、解析失败一律返回 null，
+   * 由 `ObservationQueue` 如实记为「无法判断」——绝不编造 activity。
+   */
+  async recognizeActivity(frames: ArrayBuffer[]): Promise<ObservationRecord | null> {
+    if (!this.isReady() || frames.length === 0) {
+      return null
+    }
+    try {
+      const parts: ContentPart[] = [{ type: 'text', text: Prompts.activity(frames.length) }]
+      for (const f of frames) {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: `data:image/jpeg;base64,${GatewayAIService.toBase64(f)}` }
+        })
+      }
+      const messages: ChatMessage[] = [
+        { role: 'system', content: '你只描述画面中可观察到的状态，不做任何心理或注意力推断。' },
+        { role: 'user', content: parts }
+      ]
+      const content = await this.chatJson(messages, BridgeConfig.MODEL_MULTIMODAL, 0.2, 300,
+        BridgeConfig.timeoutForScene('qa_text'))
+      if (content.length === 0) {
+        return null
+      }
+      let raw: RawActivity | null = null
+      try {
+        raw = JSON.parse(content) as RawActivity
+      } catch (e) {
+        raw = null
+      }
+      if (raw === null || raw.activity === undefined || raw.activity.length === 0) {
+        return null
+      }
+      const o = new ObservationRecord()
+      o.activity = raw.activity
+      o.handheld = raw.handheld !== undefined ? raw.handheld : false
+      o.facingDesk = raw.facingDesk !== undefined ? raw.facingDesk : false
+      o.confidence = raw.confidence !== undefined ? raw.confidence : 0.5
+      o.evidence = raw.evidence !== undefined ? raw.evidence : ''
+      return o
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'recognizeActivity failed')
+      return null
+    }
+  }
+
+  /** ArrayBuffer → base64（多模态消息体需要） */
+  private static toBase64(buf: ArrayBuffer): string {
+    const bytes = new Uint8Array(buf)
+    const helper = new util.Base64Helper()
+    return helper.encodeToStringSync(bytes)
   }
 
   /** 真实 HTTP 调用：POST {base}/chat/completions */

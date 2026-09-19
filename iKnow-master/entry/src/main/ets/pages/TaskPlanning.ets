@@ -1,4 +1,5 @@
 import { router, promptAction } from '@kit.ArkUI'
+import { hilog } from '@kit.PerformanceAnalysisKit'
 import { Colors, Radius } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
@@ -11,14 +12,16 @@ import { Task } from '../models/Task'
 import { MessageRole } from '../models/Enums'
 import { IdUtils } from '../utils/IdUtils'
 import { Metrics } from '../services/Metrics'
+import { StorageService } from '../services/StorageService'
+import { StudyPlan } from '../models/StudyPlan'
 import { TimeUtils } from '../utils/TimeUtils'
 import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
 import { UserAvatar } from '../components/UserAvatar'
 
 /**
- * AI 任务规划 —— 微信式一问一答的对话规划
+ * 任务规划 —— 微信式一问一答的对话规划
  *
- *  顶部：iKnow 品牌 + 居中「AI 任务规划 / AI 助手在线」+ 右上角用户头像
+ *  顶部：iKnow 品牌 + 居中「任务规划 / 在线」+ 右上角用户头像
  *  消息：AI 在左（深色 AI 圆头像 + 暖米色气泡），用户在右（浅绿气泡 + 用户头像）
  *  下方：居中「待确认任务」+ 圆圈列表（可点选、点文字可编辑）
  *  底部：✓ 进入 X 分钟专注学习 + 绿色大按钮 + 提示文案
@@ -39,6 +42,8 @@ export struct TaskPlanning {
   @State confirmedIds: string[] = []
   @State thinking: boolean = false
   @State inputValue: string = ''
+  /** 网关是否就绪（未配置 Key 时如实显示本地模板，不假装在线） */
+  @State gatewayReady: boolean = false
   /** 正在编辑的任务 id（空串表示未编辑） */
   @State editId: string = ''
   @State draftTitle: string = ''
@@ -50,9 +55,25 @@ export struct TaskPlanning {
   private history: string[] = []
   /** 用户说过的原话，兜底生成计划时拼成目标 */
   private userTexts: string[] = []
+  /** 长期计划摘要（来自 study_plan；作为规划的背景参考，随上下文注入提示词） */
+  private longPlanText: string = ''
 
   aboutToAppear(): void {
+    // 徽标要如实反映"这次到底是走大模型还是本地模板"，不能无条件亮绿灯
+    this.gatewayReady = AIService.getInstance().isGatewayReady()
     this.pushAI(AIService.getInstance().planningIntro())
+    // 长期计划：在「复盘 → 长期计划」里设置，这里读出来当背景参考
+    StorageService.getInstance().loadStudyPlan().then((p: StudyPlan | null) => {
+      if (p === null || p.title.length === 0) {
+        return
+      }
+      const hours = p.totalEstimatedMinutes > 0 ? ` · 目标 ${Math.round(p.totalEstimatedMinutes / 60)} 小时` : ''
+      const exam = p.examType.length > 0 ? ` · ${p.examType}` : ''
+      this.longPlanText = `${p.title}${exam}${hours}`
+      this.pushAI(`你的长期计划是「${this.longPlanText}」，我会按这个来安排。`)
+    }).catch(() => {
+      // 没有长期计划就正常聊，不硬提
+    })
   }
 
   // ---------- 消息 ----------
@@ -167,6 +188,10 @@ export struct TaskPlanning {
     const profile = store.getProfile()
     const lines: string[] = []
 
+    // 长期计划：让规划有"这一段时间要做成什么"的背景，而不是只看今天
+    if (this.longPlanText.length > 0) {
+      lines.push(`- 长期计划：${this.longPlanText}`)
+    }
     if (goal.examType.length > 0) {
       const tail = goal.targetDate > 0 ? `，距考试 ${TimeUtils.daysUntil(goal.targetDate, Date.now())} 天` : ''
       lines.push(`- 备考目标：${goal.examType}${tail}`)
@@ -316,7 +341,13 @@ export struct TaskPlanning {
     }
     // 上一段会话仍在跑：先落库再载入新计划，避免幽灵会话静默吞掉新计划（E4）
     if (FocusController.getInstance().isRunning()) {
-      await AppStore.getInstance().endSession()
+      // 落库失败也必须继续往下走：否则下面三行全被跳过，表现为"点了开始专注没反应"
+      // （Focus / FocusBreak 的退出路径已用 try/catch/finally 兜住，这里对齐）
+      try {
+        await AppStore.getInstance().endSession()
+      } catch (e) {
+        hilog.error(0x0000, 'iKnow.Planning', '结束上一段会话出错，仍继续载入新计划：%{public}s', e.message)
+      }
     }
     AppStore.getInstance().setCurrentPlan(selected)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
@@ -353,7 +384,7 @@ export struct TaskPlanning {
 
       // 中：标题 + 在线徽标
       Column() {
-        Text('AI 任务规划')
+        Text('任务规划')
           .fontSize(19)
           .fontWeight(FontWeight.Bold)
           .fontColor(Colors.TEXT_PRIMARY)
@@ -361,14 +392,14 @@ export struct TaskPlanning {
           Circle()
             .width(6)
             .height(6)
-            .fill(Colors.ONLINE_DOT)
-          Text('AI 助手在线')
+            .fill(this.gatewayReady ? Colors.ONLINE_DOT : Colors.TEXT_TERTIARY)
+          Text(this.gatewayReady ? '在线' : '本地模板')
             .fontSize(11)
             .fontColor(Colors.TEXT_SECONDARY)
             .margin({ left: 5 })
         }
         .padding({ left: 10, right: 12, top: 3, bottom: 3 })
-        .backgroundColor(Colors.ONLINE_SOFT)
+        .backgroundColor(this.gatewayReady ? Colors.ONLINE_SOFT : Colors.BG)
         .borderRadius(10)
         .margin({ top: 5 })
       }
@@ -490,7 +521,7 @@ export struct TaskPlanning {
 
       // 出计划后仍可回到对话，继续让 AI 调整安排
       if (!this.showComposer) {
-        Text('💬 继续和 AI 考伴调整')
+        Text('💬 继续调整')
           .fontSize(12)
           .fontColor(Colors.TEXT_SECONDARY)
           .width('100%')
@@ -683,7 +714,7 @@ export struct TaskPlanning {
           this.confirmStart()
         })
 
-      Text('AI 将在学习过程中提醒你节奏与复盘节点')
+      Text('学习过程中会提醒你节奏与复盘节点')
         .fontSize(12)
         .fontColor(Colors.TEXT_TERTIARY)
         .margin({ top: 10 })

@@ -3,11 +3,12 @@ import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { NavParams } from '../models/NavParams'
 import { AppStore } from '../store/AppStore'
+import { StorageService } from '../services/StorageService'
 import { AIPersonality } from '../models/Enums'
 import { UserAvatar } from '../components/UserAvatar'
 import { AvatarPicker } from '../components/AvatarPicker'
 
-/** AI 考伴类型（取自需求文档「页面 13：AI 考伴人格设置」的 3 种类型） */
+/** 考伴类型（取自需求文档「页面 13：考伴人格设置」的 3 种类型） */
 interface CompanionType {
   key: AIPersonality
   emoji: string
@@ -22,6 +23,8 @@ export struct Mine {
   @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
   @State personality: AIPersonality = AIPersonality.GENTLE
   @State showAvatarSheet: boolean = false
+  /** 模拟模式（默认开：当前无真机/真表，靠合成信号驱动演示） */
+  @State simMode: boolean = true
   private types: CompanionType[] = [
     { key: AIPersonality.STRICT, emoji: '🎯', label: '严格教练型', desc: '直接 · 高执行力 · 适合拖延严重' },
     { key: AIPersonality.GENTLE, emoji: '🌤️', label: '温和陪伴型', desc: '鼓励 · 温和 · 低压力' },
@@ -29,6 +32,21 @@ export struct Mine {
   ]
   aboutToAppear(): void {
     this.personality = AppStore.getInstance().getUser().aiPersonality
+    StorageService.getInstance().loadKv(StorageKey.SIM_MODE).then((v: string) => {
+      this.simMode = v !== '0'
+      AppStorage.setOrCreate<number>(StorageKey.SIM_MODE, this.simMode ? 1 : 0)
+    }).catch(() => {
+      // 读不到按默认（开）处理
+    })
+  }
+
+  private setSimMode(on: boolean): void {
+    this.simMode = on
+    AppStorage.setOrCreate<number>(StorageKey.SIM_MODE, on ? 1 : 0)
+    StorageService.getInstance().saveKv(StorageKey.SIM_MODE, on ? '1' : '0').catch(() => {})
+    promptAction.showToast({
+      message: on ? '已开启模拟模式：专注页出现信号控制台' : '已关闭：不再产生合成信号（连接真表后直接用真表）'
+    })
   }
 
   private selectPersona(key: AIPersonality): void {
@@ -149,9 +167,9 @@ export struct Mine {
         .backgroundColor(Colors.CARD)
         .borderRadius(Radius.LG)
 
-        // AI 考伴：3 种类型
+        // 考伴：3 种类型
         Column() {
-          Text('AI 考伴')
+          Text('考伴')
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.TEXT_PRIMARY)
@@ -175,19 +193,50 @@ export struct Mine {
         .borderRadius(Radius.LG)
         .alignItems(HorizontalAlign.Start)
 
+        // 模拟模式（无硬件时靠它驱动演示；连接真表后自动走真实信号）
+        Column() {
+          Row() {
+            Column() {
+              Text('模拟模式')
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text(this.simMode
+                ? '已开启：专注页出现信号控制台，可手动调心率/HRV/血氧/动作'
+                : '已关闭：不产生合成信号（连接真机手表后直接使用真实数据）')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ top: 4 })
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+
+            Toggle({ type: ToggleType.Switch, isOn: this.simMode })
+              .selectedColor(Colors.PRIMARY)
+              .onChange((v: boolean) => {
+                this.setSimMode(v)
+              })
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .padding(18)
+        .backgroundColor(Colors.CARD)
+        .borderRadius(Radius.LG)
+
         // 菜单
         Column({ space: Spacing.SM }) {
-          this.menuItem('💬', '和考伴聊聊', '长期陪伴 · 智能答疑', 'pages/AICompanion', '')
-          this.menuItem('⌚', '设备', '摄像头 · 智能手表', 'pages/Device', '')
-          this.menuItem('🔔', '通知', '专注提醒与消息', 'pages/Placeholder', '通知')
+          this.menuItem('🎯', '长期计划与目标', '考试倒计时 · 科目 · 长期计划', 'pages/LongTermPlan', '')
+          this.menuItem('🗂️', '学习记录', '历史专注复盘', 'pages/StudyHistory', '')
+          this.menuItem('⌚', '设备', '摄像头 · 智能手表 · 模拟状态', 'pages/Device', '')
           this.menuItem('🔒', '隐私', '授权与数据权限', 'pages/Privacy', '')
           this.menuItem('🗂️', '数据管理', '导出 · 清除学习数据', 'pages/Privacy', '')
-          this.menuItem('ℹ️', '关于', '版本与开发者信息', 'pages/Placeholder', '关于')
+          this.menuItem('ℹ️', '关于', '版本 · 能力说明 · 隐私入口', 'pages/About', '')
         }
         .width('100%')
 
-        // 重新设置称呼与目标（本地体验模式，无账号体系）
-        Button('重新设置称呼与目标')
+        // 只改称呼：目标与长期计划统一在「长期计划与目标」里配置
+        Button('编辑称呼')
           .width('100%')
           .height(48)
           .fontSize(15)

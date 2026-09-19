@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI'
+import { common } from '@kit.AbilityKit'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
@@ -12,7 +13,7 @@ import { TaskCard } from '../components/TaskCard'
  * 专注首页（tab 0）—— 回答 PRD 第十节的三件事：
  * 「今天学什么 / 现在状态如何 / 是否开始专注」
  *
- * 开始专注有两条路：已有今日计划 → 直接进；没有计划 → 让用户选「AI 帮我规划」或「自由专注」，
+ * 开始专注有两条路：已有今日计划 → 直接进；没有计划 → 让用户选「帮我规划」或「自由专注」，
  * 不再强制先聊完规划。
  */
 @Component
@@ -25,6 +26,11 @@ export struct Home {
   @StorageProp(StorageKey.TODAY_DONE_TASKS) todayDone: number = 0
   @StorageProp(StorageKey.TODAY_TOTAL_TASKS) todayTotal: number = 0
   @StorageProp(StorageKey.FOCUS_ELAPSED) focusElapsed: number = 0
+  /** 实时净专注 / 总学习（进行中时用于现算净专注率） */
+  @StorageProp(StorageKey.FOCUS_NET) focusNet: number = 0
+  @StorageProp(StorageKey.FOCUS_STUDY) focusStudy: number = 0
+  /** 1 = 会话进行中（响应式；之前用普通方法读单例，导致 UI 不刷新） */
+  @StorageProp(StorageKey.FOCUS_RUNNING) focusRunningFlag: number = 0
   @StorageProp(StorageKey.DATA_VERSION) @Watch('refreshPlan') dataVersion: number = 0
   @State goalTitle: string = ''
   @State examType: string = ''
@@ -36,7 +42,9 @@ export struct Home {
   }
 
   refreshPlan(): void {
-    this.plan = AppStore.getInstance().getCurrentPlan()
+    // 必须 slice 出新数组：赋同一个引用不会触发 @State 重绘，
+    // 会导致结束后按钮文案与「继续专注」条不更新
+    this.plan = AppStore.getInstance().getCurrentPlan().slice()
     const goal = AppStore.getInstance().getGoal()
     this.goalTitle = goal.title
     this.examType = goal.examType
@@ -47,17 +55,13 @@ export struct Home {
     return this.nickname.length > 0 ? this.nickname : '同学'
   }
 
-  private focusRunning(): boolean {
-    return FocusController.getInstance().isRunning()
-  }
-
   private cameraOn(): boolean {
     return PermissionService.getInstance().isCameraOn()
   }
 
   /** 开始专注：有计划直接进；没有计划先问一句（可跳过规划） */
   private startFocus(): void {
-    if (AppStore.getInstance().getCurrentPlan().length > 0 || this.focusRunning()) {
+    if (AppStore.getInstance().getCurrentPlan().length > 0 || this.focusRunningFlag === 1) {
       this.beginFocus()
       return
     }
@@ -65,7 +69,7 @@ export struct Home {
       title: '今天还没有计划',
       message: '要我按你的目标帮你拆一份今日任务，还是直接开始自由专注（不设定任务）？',
       primaryButton: {
-        value: 'AI 帮我规划',
+        value: '帮我规划',
         action: () => {
           this.openAIPlanning()
         }
@@ -79,20 +83,23 @@ export struct Home {
     })
   }
 
-  /** 进专注页前确认感知授权；拒绝则降级为仅计时模式（诚实告知） */
+  /** 进专注页前确认感知授权；拒绝或申请失败则降级为仅计时模式（诚实告知） */
   private beginFocus(): void {
     if (this.cameraOn()) {
       this.enterFocus()
       return
     }
+    const ctx = getContext(this) as common.UIAbilityContext
     AlertDialog.show({
       title: '开启摄像头感知？',
-      message: '开启后，我会用前置摄像头在本地感知你的专注状态，全程不出端、不上传。你也可以选择仅计时模式。',
+      message: '开启后，我会用前置摄像头感知你的专注状态（仅在触发时抓拍短片段）。你也可以选择仅计时模式。',
       primaryButton: {
         value: '开启感知',
         action: () => {
-          PermissionService.getInstance().grant('camera')
-          this.enterFocus()
+          // 真正申请系统相机权限（user_grant）；失败也照常进入专注，降级为仅计时模式
+          PermissionService.getInstance().ensureCamera(ctx).then(() => {
+            this.enterFocus()
+          })
         }
       },
       secondaryButton: {
@@ -119,6 +126,22 @@ export struct Home {
   /** 切到「AI 规划」Tab（不在首页再开一个规划实例） */
   private openAIPlanning(): void {
     AppStorage.setOrCreate<number>(StorageKey.INDEX_TAB_REQUEST, 1)
+  }
+
+  /**
+   * 今日专注时长（**实时**）= 已结束会话累计 + 进行中会话的实时增量。
+   * 之前只读落库累计值，进行中不动，所以看着"今日数据不更新"。
+   */
+  private liveFocusSec(): number {
+    return this.todayFocus + (this.focusRunningFlag === 1 ? this.focusElapsed : 0)
+  }
+
+  /** 净专注率（实时）：进行中用「净专注 / 总学习」现算，结束后用落库值 */
+  private liveRate(): number {
+    if (this.focusRunningFlag === 1 && this.focusStudy > 0) {
+      return Math.round(this.focusNet / this.focusStudy * 100)
+    }
+    return this.focusRate
   }
 
   @Builder
@@ -176,7 +199,7 @@ export struct Home {
         .width('100%')
 
         // 专注进行中：返回键留在后台的会话不丢，从这里继续
-        if (this.focusRunning()) {
+        if (this.focusRunningFlag === 1) {
           Row() {
             Text(`专注进行中 · ${TimeUtils.formatClock(this.focusElapsed)}`)
               .fontSize(14)
@@ -212,7 +235,7 @@ export struct Home {
               .fontColor(Colors.TEXT_SECONDARY)
               .margin({ top: 10 })
               .width('100%')
-            Text('在「我的 → 重新设置称呼与目标」里填写')
+            Text('在「我的 → 长期计划与目标」里填写')
               .fontSize(12)
               .fontColor(Colors.TEXT_TERTIARY)
               .margin({ top: 6 })
@@ -272,7 +295,7 @@ export struct Home {
               Text('还没有今日计划')
                 .fontSize(15)
                 .fontColor(Colors.TEXT_PRIMARY)
-              Text('可以直接开始自由专注，或让 AI 帮你拆一份任务')
+              Text('可以直接开始自由专注，或帮你拆一份任务')
                 .fontSize(13)
                 .fontColor(Colors.TEXT_SECONDARY)
                 .margin({ top: 6 })
@@ -292,7 +315,9 @@ export struct Home {
                   showCheckbox: true,
                   onToggle: () => {
                     AppStore.getInstance().togglePlanTask(task.id)
-                    this.plan = AppStore.getInstance().getCurrentPlan()
+                    // 必须 slice 出新数组：赋同一个引用不会触发 @State 重绘（勾选状态不更新）
+                    this.plan = AppStore.getInstance().getCurrentPlan().slice()
+                    this.refreshPlan()
                   }
                 })
               }, (task: Task) => task.id)
@@ -312,8 +337,8 @@ export struct Home {
             .margin({ bottom: 14 })
 
           Row({ space: 8 }) {
-            this.statTile(`${this.focusRate}%`, '净专注率')
-            this.statTile(TimeUtils.formatHMin(this.todayFocus), '今日专注时长')
+            this.statTile(`${this.liveRate()}%`, '净专注率')
+            this.statTile(TimeUtils.formatHMin(this.liveFocusSec()), '今日专注时长')
             this.statTile(this.todayTotal > 0 ? `${this.completionRate}%` : '—', '任务完成率')
           }
           .width('100%')
@@ -324,7 +349,7 @@ export struct Home {
         .borderRadius(Radius.LG)
 
         // 主操作按钮
-        Button(this.focusRunning() ? '继续专注' : '开始专注')
+        Button(this.focusRunningFlag === 1 ? '继续专注' : '开始专注')
           .width('100%')
           .height(52)
           .fontSize(17)
@@ -346,7 +371,7 @@ export struct Home {
             .backgroundColor(Colors.CARD)
             .borderRadius(18)
           Column() {
-            Text('AI 智能规划')
+            Text('规划今天的学习')
               .fontSize(15)
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)

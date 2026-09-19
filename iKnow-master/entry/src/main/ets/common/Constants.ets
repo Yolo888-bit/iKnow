@@ -21,14 +21,32 @@ export class StorageKey {
   // 专注实时状态
   static readonly FOCUS_ELAPSED = 'ik_focus_elapsed'
   static readonly FOCUS_NET = 'ik_focus_net'
+  /** 总学习秒数 = 墙钟 − 休息 − 暂停（与复盘页「总学习时长」同口径） */
+  static readonly FOCUS_STUDY = 'ik_focus_study'
   static readonly FOCUS_STATE = 'ik_focus_state'
   static readonly FOCUS_QA_ELAPSED = 'ik_focus_qa_elapsed'
   /** 休息剩余秒数（休息态由 FocusController 独占，页面只读此值） */
   static readonly FOCUS_BREAK_REMAIN = 'ik_focus_break_remain'
+  /** 是否有会话正在运行（1/0）：供根页/首页以 @StorageProp 响应式读取 */
+  static readonly FOCUS_RUNNING = 'ik_focus_running'
   static readonly CAMERA_ON = 'ik_camera_on'
 
   // 当前计划
   static readonly CURRENT_PLAN = 'ik_current_plan_json'
+  /** 从「学习记录」进入单次复盘时要加载的会话 id（一次性，读完即清） */
+  static readonly REPORT_SESSION_ID = 'ik_report_session_id'
+
+  /** 模拟模式（1 = 开；默认开，因为当前无硬件）。关闭且无真表连接时不产生任何信号 */
+  static readonly SIM_MODE = 'ik_sim_mode'
+  /** 分心确认后的震动提醒（1 = 开，默认开） */
+  static readonly VIBRATE_ON = 'ik_vibrate_on'
+  /** 分心确认后的语音提醒（1 = 开，默认关；依赖 HMS，环境不支持时静默） */
+  static readonly VOICE_ON = 'ik_voice_on'
+
+  // 服务卡片快照（主界面写、卡片进程读；卡片不读主进程内存）
+  static readonly CARD_TODAY = 'ik_card_today'
+  static readonly CARD_RATE = 'ik_card_rate'
+  static readonly CARD_ADVICE = 'ik_card_advice'
 
   // 分项授权（PRD §17 全局唯一事实源，落库）
   static readonly AUTHORIZATION = 'ik_authorization_json'
@@ -68,7 +86,7 @@ export class AuthKey {
 
 export class Product {
   static readonly COMPANION_NAME = '小伴'
-  static readonly AI_TAG = '💡 AI 智能体'
+
 }
 
 export class DemoFlag {

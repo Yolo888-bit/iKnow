@@ -5,52 +5,23 @@ import { AppStore } from '../store/AppStore'
 /**
  * 首次使用引导（无账号体系）
  *
- * 竞赛 Demo 取舍：本地体验模式，不做注册/登录。只需填一个称呼；
- * 目标考试与日期可留空（稍后可在「我的」或工作台再设）。
+ * 竞赛 Demo 取舍：本地体验模式，不做注册/登录，只需要一个称呼。
+ * 目标考试 / 日期 / 长期计划统一在「我的 → 长期计划与目标」配置
+ * （此前在引导页与长期计划页各写一份，语义重复且入口分散）。
  * 引导只在首次启动（尚无称呼）时出现。
  */
 @Entry
 @Component
 struct Login {
   @State nickname: string = ''
-  @State examType: string = ''
-  @State dateText: string = ''
   @State errorMsg: string = ''
   @State saving: boolean = false
 
   aboutToAppear(): void {
-    const store = AppStore.getInstance()
-    const u = store.getUser()
+    const u = AppStore.getInstance().getUser()
     if (u.nickname.length > 0) {
       this.nickname = u.nickname
     }
-    const g = store.getGoal()
-    if (g.examType.length > 0) {
-      this.examType = g.examType
-    }
-    if (g.targetDate > 0) {
-      const d = new Date(g.targetDate)
-      this.dateText = `${d.getFullYear()}-${this.pad(d.getMonth() + 1)}-${this.pad(d.getDate())}`
-    }
-  }
-
-  private pad(n: number): string {
-    return n < 10 ? `0${n}` : `${n}`
-  }
-
-  /** 解析 YYYY-MM-DD；不合法或留空返回 0（= 不设置） */
-  private parseDate(text: string): number {
-    const parts = text.split('-')
-    if (parts.length !== 3) {
-      return 0
-    }
-    const y = Number(parts[0])
-    const m = Number(parts[1])
-    const d = Number(parts[2])
-    if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d) || y < 2000 || m < 1 || m > 12 || d < 1 || d > 31) {
-      return 0
-    }
-    return new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
   }
 
   private async start(): Promise<void> {
@@ -66,22 +37,6 @@ struct Login {
     this.saving = true
 
     await AppStore.getInstance().applyLoginUser(name)
-
-    const exam = this.examType.trim()
-    const target = this.parseDate(this.dateText.trim())
-    if (exam.length > 0 || target > 0) {
-      const g = AppStore.getInstance().getGoal()
-      if (exam.length > 0) {
-        g.examType = exam
-        if (g.title.length === 0) {
-          g.title = exam
-        }
-      }
-      if (target > 0) {
-        g.targetDate = target
-      }
-      await AppStore.getInstance().saveGoal(g)
-    }
 
     this.saving = false
     router.replaceUrl({ url: 'pages/Index' })
@@ -108,7 +63,7 @@ struct Login {
           .fontColor(Colors.TEXT_PRIMARY)
           .width('100%')
 
-        Text('不需要注册账号，数据只存在本机')
+        Text('不需要注册账号，学习记录存在本机')
           .fontSize(12)
           .fontColor(Colors.TEXT_TERTIARY)
           .width('100%')
@@ -122,26 +77,6 @@ struct Login {
           .borderRadius(Radius.MD)
           .onChange((v: string) => {
             this.nickname = v
-          })
-
-        TextInput({ placeholder: '目标考试，如 考研 / 期末（可跳过）', text: this.examType })
-          .fontSize(15)
-          .height(48)
-          .margin({ top: 12 })
-          .backgroundColor(Colors.BG)
-          .borderRadius(Radius.MD)
-          .onChange((v: string) => {
-            this.examType = v
-          })
-
-        TextInput({ placeholder: '考试日期，如 2026-12-20（可跳过）', text: this.dateText })
-          .fontSize(15)
-          .height(48)
-          .margin({ top: 12 })
-          .backgroundColor(Colors.BG)
-          .borderRadius(Radius.MD)
-          .onChange((v: string) => {
-            this.dateText = v
           })
 
         if (this.errorMsg.length > 0) {
@@ -166,7 +101,7 @@ struct Login {
             this.start()
           })
 
-        Text('目标考试与日期可以留空，之后在「我的」里再设')
+        Text('目标考试、日期与长期计划，之后在「我的 → 长期计划与目标」里设置')
           .fontSize(12)
           .fontColor(Colors.TEXT_TERTIARY)
           .width('100%')

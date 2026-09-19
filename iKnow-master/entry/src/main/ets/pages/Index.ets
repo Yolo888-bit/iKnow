@@ -10,6 +10,7 @@ import { StorageService } from '../services/StorageService'
 import { FocusController } from '../services/FocusController'
 import { AppStore } from '../store/AppStore'
 import { SessionSnapshot } from '../models/SessionSnapshot'
+import { TimeUtils } from '../utils/TimeUtils'
 
 /**
  * 根容器：5 个底部 Tab（专注 / AI 规划 / 复盘 / 工作台 / 我的）
@@ -25,10 +26,40 @@ struct Index {
   @State showRecover: boolean = false
   @State recoverSnap: SessionSnapshot | null = null
   @StorageProp(StorageKey.INDEX_TAB_REQUEST) @Watch('onTabRequest') tabRequest: number = -1
+  /** 全局「专注进行中」横幅：任意 Tab 可见，避免"会话在跑却没有出口" */
+  @StorageProp(StorageKey.FOCUS_RUNNING) focusRunningFlag: number = 0
+  @StorageProp(StorageKey.FOCUS_ELAPSED) focusElapsed: number = 0
+  @State showSaved: boolean = false
   private controller: TabsController = new TabsController()
 
   aboutToAppear(): void {
     this.checkRecovery()
+  }
+
+  private resumeFocus(): void {
+    router.pushUrl({ url: 'pages/Focus' })
+  }
+
+  /** 从根页直接结束会话（横幅上的「结束」） */
+  private async endFocusFromRoot(): Promise<void> {
+    try {
+      await AppStore.getInstance().endSession()
+    } catch (e) {
+      // 结束失败也必须让统计与界面跟上，否则今日数据会停在旧值
+      await AppStore.getInstance().syncAfterSession()
+    }
+    this.showSaved = true
+  }
+
+  /**
+   * 切 Tab 时重算一次聚合。
+   * 首页/工作台是 Tabs 的常驻子页，退出专注后不会重新走 aboutToAppear；
+   * 这里补一道"看之前先刷新"，从根上避免"退出了但今日数据没变"。
+   */
+  private refreshOnTabSwitch(index: number): void {
+    if (index === 0 || index === 3) {
+      AppStore.getInstance().refreshAggregates()
+    }
   }
 
   /** 子页面请求切 Tab（如"AI 帮我规划"） */
@@ -39,6 +70,7 @@ struct Index {
     }
     this.controller.changeIndex(t)
     this.currentTab = t
+    this.refreshOnTabSwitch(t)
     AppStorage.setOrCreate<number>(StorageKey.INDEX_TAB_REQUEST, -1)
   }
 
@@ -79,7 +111,7 @@ struct Index {
   }
 
   build() {
-    Stack() {
+    Stack({ alignContent: Alignment.TopStart }) {
       Tabs({ barPosition: BarPosition.End, controller: this.controller }) {
         TabContent() {
           Home()
@@ -106,7 +138,73 @@ struct Index {
       .backgroundColor(Colors.BG)
       .onChange((index: number) => {
         this.currentTab = index
+        this.refreshOnTabSwitch(index)
       })
+
+      // 全局「专注进行中」横幅：任意 Tab 可见，永远有出口（继续 / 结束）
+      if (this.focusRunningFlag === 1) {
+        Row() {
+          Text(`专注进行中 · ${TimeUtils.formatClock(this.focusElapsed)}`)
+            .fontSize(13)
+            .fontColor(Colors.TEXT_PRIMARY)
+            .layoutWeight(1)
+          Button('继续专注')
+            .fontSize(12)
+            .fontColor(Color.White)
+            .backgroundColor(Colors.PRIMARY)
+            .height(30)
+            .borderRadius(15)
+            .onClick(() => {
+              this.resumeFocus()
+            })
+          Button('结束')
+            .fontSize(12)
+            .fontColor(Colors.TEXT_SECONDARY)
+            .backgroundColor(Colors.CARD)
+            .height(30)
+            .borderRadius(15)
+            .margin({ left: 8 })
+            .onClick(() => {
+              this.endFocusFromRoot()
+            })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 12, bottom: 10 })
+        .backgroundColor(Colors.PRIMARY_SOFT)
+      }
+
+      // 结束后给一个复盘入口，避免「直接结束」看不到结果
+      if (this.showSaved) {
+        Row() {
+          Text('已保存本次专注')
+            .fontSize(13)
+            .fontColor(Colors.TEXT_PRIMARY)
+            .layoutWeight(1)
+          Button('查看复盘')
+            .fontSize(12)
+            .fontColor(Color.White)
+            .backgroundColor(Colors.PRIMARY)
+            .height(30)
+            .borderRadius(15)
+            .onClick(() => {
+              this.showSaved = false
+              router.pushUrl({ url: 'pages/StudyReport' })
+            })
+          Button('知道了')
+            .fontSize(12)
+            .fontColor(Colors.TEXT_SECONDARY)
+            .backgroundColor(Colors.CARD)
+            .height(30)
+            .borderRadius(15)
+            .margin({ left: 8 })
+            .onClick(() => {
+              this.showSaved = false
+            })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 12, bottom: 10 })
+        .backgroundColor(Colors.GREEN_SOFT)
+      }
 
       // 中断恢复弹窗（覆盖层，不影响 Tabs 布局）
       if (this.showRecover && this.recoverSnap !== null) {

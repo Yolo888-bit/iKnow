@@ -9,7 +9,7 @@ interface PersonaOption {
   desc: string
 }
 
-/** 设置：AI 考伴人格 + 一键清除数据（合规） */
+/** 设置：考伴人格 + 一键清除数据（合规） */
 @Entry
 @Component
 export struct Settings {
@@ -49,9 +49,9 @@ export struct Settings {
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
 
-          // AI 考伴人格
+          // 考伴人格
           Column() {
-            Text('AI 考伴人格')
+            Text('考伴人格')
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)

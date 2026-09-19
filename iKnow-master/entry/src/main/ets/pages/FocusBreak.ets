@@ -45,8 +45,13 @@ export struct FocusBreak {
       return
     }
     this.ending = true
-    await AppStore.getInstance().endSession()
-    this.ending = false
+    try {
+      await AppStore.getInstance().endSession()
+    } catch (e) {
+      await AppStore.getInstance().syncAfterSession()
+    } finally {
+      this.ending = false
+    }
     router.replaceUrl({ url: 'pages/StudyReport' })
   }
 

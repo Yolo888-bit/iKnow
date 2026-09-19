@@ -30,8 +30,8 @@ export class BridgeConfig {
 
   /** 文本大模型（任务规划 / 复盘 / 长期规划） */
   static readonly MODEL_TEXT: string = 'qwen-plus'
-  /** 多模态（拍题答疑） */
-  static readonly MODEL_MULTIMODAL: string = 'qwen-vl-plus'
+  /** 多模态（画面识别 / 拍题答疑） */
+  static readonly MODEL_MULTIMODAL: string = 'qwen3-vl-235b-a22b-thinking'
   /** 极速模型（Companion 干预文案） */
   static readonly MODEL_FAST: string = 'qwen-turbo'
 

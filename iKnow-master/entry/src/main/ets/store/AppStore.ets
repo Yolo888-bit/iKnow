@@ -1,4 +1,6 @@
 import { common } from '@kit.AbilityKit'
+import { fileIo } from '@kit.CoreFileKit'
+import { hilog } from '@kit.PerformanceAnalysisKit'
 import { User } from '../models/User'
 import { Task, LearningGoal } from '../models/Task'
 import { FocusSession } from '../models/FocusSession'
@@ -11,6 +13,7 @@ import { AIService } from '../services/AIService'
 import { ReportService } from '../services/ReportService'
 import { FocusController } from '../services/FocusController'
 import { PermissionService } from '../services/PermissionService'
+import { SensorService } from '../services/SensorService'
 import { Metrics } from '../services/Metrics'
 import { StorageKey } from '../common/Constants'
 import { IdUtils } from '../utils/IdUtils'
@@ -44,7 +47,12 @@ export class AppStore {
 
   async init(context: common.Context): Promise<void> {
     if (this.initPromise === null) {
-      this.initPromise = this.doInit(context)
+      // 失败必须把缓存清掉：否则一次异常就让 initPromise 永久 rejected，
+      // 同一进程内再调 init() 只是把同一个失败原样抛回，永远没有重试的机会
+      this.initPromise = this.doInit(context).catch((e: Error) => {
+        this.initPromise = null
+        throw e
+      })
     }
     return this.initPromise
   }
@@ -55,6 +63,8 @@ export class AppStore {
     }
     await StorageService.getInstance().init(context)
     await PermissionService.getInstance().init()
+    // 读回手表佩戴状态（否则用户切了开关，重启就变回未佩戴）
+    await SensorService.getInstance().init()
     AppStorage.setOrCreate<number>(StorageKey.METRICS_MIN_SAMPLES, Metrics.MIN_SAMPLES)
     this.initAppStorageDefaults()
     const user = await StorageService.getInstance().loadUser()
@@ -137,6 +147,11 @@ export class AppStore {
   // ---------- Getters ----------
   getUser(): User {
     return this.user
+  }
+
+  /** 本地体验模式下的用户标识（问答记忆按它归属；预留多档案隔离） */
+  getUserId(): string {
+    return this.user.id
   }
 
   getGoal(): LearningGoal {
@@ -260,32 +275,77 @@ export class AppStore {
   async endSession(): Promise<StudyReport | null> {
     const controller = FocusController.getInstance()
     if (!controller.isRunning()) {
+      // 没有进行中的会话也要刷新一次：否则调用方以为"结束过了"，界面上还是旧统计
+      await this.syncAfterSession()
       return this.currentReport
     }
     const session = controller.finalize()
     const questions = controller.getQuestions()
     const tasks = controller.getTasks()
-    const report = await ReportService.getInstance().buildReport(session, questions)
+    let report: StudyReport | null = null
 
-    await StorageService.getInstance().saveSession(session)
-    for (const t of tasks) {
-      await StorageService.getInstance().saveTask(t)
+    // 注意：这一段里任何一步失败都不能让"同步统计"被跳过 ——
+    // 之前没有 try/finally，一次落库异常就会导致退出专注后今日数据仍是旧值。
+    try {
+      report = await ReportService.getInstance().buildReport(session, questions)
+      await StorageService.getInstance().saveSession(session)
+      for (const t of tasks) {
+        await StorageService.getInstance().saveTask(t)
+      }
+      for (const q of questions) {
+        await StorageService.getInstance().saveQuestion(q)
+      }
+      await StorageService.getInstance().saveReport(report)
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Store', '保存本次专注失败：%{public}s', e.message)
     }
-    for (const q of questions) {
-      await StorageService.getInstance().saveQuestion(q)
+
+    // 无论保存是否完整成功，统计都要跟着本次会话更新（数据以库里实际存到的为准）
+    await this.syncAfterSession()
+    // 画像更新依赖最新会话列表，因此必须排在 syncAfterSession 之后；失败不影响统计
+    try {
+      this.profile = AIService.getInstance().updateProfile(this.profile, this.sessions)
+      await StorageService.getInstance().saveProfile(this.profile)
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Store', '画像更新失败：%{public}s', e.message)
     }
-    await StorageService.getInstance().saveReport(report)
-
-    this.sessions = await StorageService.getInstance().loadSessions()
-    this.tasks = await StorageService.getInstance().loadTasks()
-    this.profile = AIService.getInstance().updateProfile(this.profile, this.sessions)
-    await StorageService.getInstance().saveProfile(this.profile)
-    await this.refreshAggregates()
-
     this.currentSession = session
     this.currentReport = report
     // 未完成任务保留在计划中（E1：不静默清空，支持跨会话延续）
     return report
+  }
+
+  /**
+   * 会话结束后的统一同步：重读会话 / 任务 / 今日计划 → 重算聚合 → 广播响应式刷新。
+   *
+   * 为什么要单独抽出来：退出专注的入口有 4 个（专注页结束、休息页结束、根页横幅结束、
+   * 规划页结束），任何一条路径漏掉同步，用户看到的就是"退出了但今日数据没变"。
+   * 计划也要重读 —— 专注中勾选完成的任务必须立刻反映到首页/工作台的今日任务上。
+   */
+  async syncAfterSession(): Promise<void> {
+    try {
+      this.sessions = await StorageService.getInstance().loadSessions()
+      this.tasks = await StorageService.getInstance().loadTasks()
+      // 今日计划重读：专注中勾选完成的任务必须立刻反映到首页/工作台的今日任务上。
+      // 库里是权威副本，按 id 换成本次读回来的对象（找不到就保留原对象）。
+      if (this.currentPlan.length > 0) {
+        const byId: Map<string, Task> = new Map<string, Task>()
+        for (const t of this.tasks) {
+          byId.set(t.id, t)
+        }
+        const next: Task[] = []
+        for (const old of this.currentPlan) {
+          const fresh = byId.get(old.id)
+          next.push(fresh !== undefined ? fresh : old)
+        }
+        this.currentPlan = next
+      }
+      hilog.info(0x0000, 'iKnow.Store', '会话结束同步：%{public}d 条会话 / %{public}d 个任务',
+        this.sessions.length, this.tasks.length)
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Store', '重读数据失败，仍继续重算统计：%{public}s', e.message)
+    }
+    await this.refreshAggregates()
   }
 
   // ---------- 聚合 & 响应式刷新 ----------
@@ -308,13 +368,24 @@ export class AppStore {
       }
     }
 
+    // 今日任务口径：优先按「今日计划」（跨天延续的任务也算今天要做的事），
+    // 之前只按 createdAt 是今天的任务统计，导致昨天建的计划今天显示 0/0
     let done = 0
     let total = 0
-    for (const t of this.tasks) {
-      if (TimeUtils.isSameDay(t.createdAt, now)) {
+    if (this.currentPlan.length > 0) {
+      for (const t of this.currentPlan) {
         total += 1
         if (t.done) {
           done += 1
+        }
+      }
+    } else {
+      for (const t of this.tasks) {
+        if (TimeUtils.isSameDay(t.createdAt, now)) {
+          total += 1
+          if (t.done) {
+            done += 1
+          }
         }
       }
     }
@@ -351,7 +422,12 @@ export class AppStore {
 
   private computeSubjectProgress(): SubjectProgress[] {
     const map: Map<string, SubjectProgress> = new Map<string, SubjectProgress>()
+    // 只统计近 30 天的任务：之前遍历全部历史任务，分母无限增长，进度几乎不动
+    const since = TimeUtils.dayStart(Date.now()) - 29 * 24 * 3600 * 1000
     for (const t of this.tasks) {
+      if (t.createdAt < since) {
+        continue
+      }
       let sp = map.get(t.subject)
       if (sp === undefined) {
         sp = new SubjectProgress()
@@ -391,6 +467,29 @@ export class AppStore {
       ver = cur
     }
     AppStorage.setOrCreate<number>(StorageKey.DATA_VERSION, ver + 1)
+
+    // 服务卡片快照：卡片进程读不到主进程内存，只能靠落库的这几个键
+    const svc = StorageService.getInstance()
+    svc.saveKv(StorageKey.CARD_TODAY, TimeUtils.formatHMin(this.dashboard.todayFocusSeconds)).catch(() => {})
+    svc.saveKv(StorageKey.CARD_RATE, `${this.dashboard.focusRate}%`).catch(() => {})
+    svc.saveKv(StorageKey.CARD_ADVICE, this.cardAdvice()).catch(() => {})
+  }
+
+  /** 桌面上卡片给的一句建议：由真实数据推导，不写死 */
+  private cardAdvice(): string {
+    let left = 0
+    for (const t of this.currentPlan) {
+      if (!t.done) {
+        left += 1
+      }
+    }
+    if (left > 0) {
+      return `今天还有 ${left} 个任务没完成`
+    }
+    if (this.dashboard.todayFocusSeconds <= 0) {
+      return '开始一段专注吧'
+    }
+    return '今天的任务都完成了，休息一下'
   }
 
   // ---------- 数据清除（合规） ----------
@@ -398,34 +497,12 @@ export class AppStore {
     // E15：先终止正在进行的会话，否则清完数据回专注页点结束会把刚删的数据写回
     FocusController.getInstance().abort()
     await StorageService.getInstance().clearAll()
-    // 重置为「零状态」，但保留一个可用账号，避免下次启动误触种子
-    const now = Date.now()
-    const u = new User()
-    u.id = IdUtils.uuid()
-    u.nickname = '刘灿'
-    u.avatar = '🧑‍🎓'
-    u.aiPersonality = AIPersonality.GENTLE
-    u.createdAt = now
-    await StorageService.getInstance().saveUser(u)
-
-    const g = new LearningGoal()
-    g.id = IdUtils.uuid()
-    g.title = '考研上岸'
-    g.examType = '考研'
-    g.targetDate = now + 128 * 24 * 3600 * 1000
-    g.subjects = ['高等数学', '英语', '政治']
-    await StorageService.getInstance().saveGoal(g)
-
-    const p = new FocusProfile()
-    p.id = IdUtils.uuid()
-    p.updatedAt = now
-    await StorageService.getInstance().saveProfile(p)
-
-    this.user = u
-    this.goal = g
-    this.profile = p
-    this.tasks = []
-    this.sessions = []
+    // 帧文件放在记录之后删：反过来一旦删文件失败，库里会留下指向不存在图片的记录，
+    // 复盘时间线渲染出空白图 —— "销毁了但还能看到残留"是最差的观感
+    AppStore.removeObservationDir()
+    // 重置为与首次启动完全一致的空模板（复用 seed()，不再另写一套"陌生人的默认值"）。
+    // 原先这里写回 nickname='刘灿' + '考研上岸' 128 天，用户清完数据重启会看到别人的目标。
+    await this.seed()
     this.currentPlan = []
     this.currentReport = null
     this.currentSession = null
@@ -433,11 +510,44 @@ export class AppStore {
     this.pushAggregates()
   }
 
+  /** 删除已保存的画面片段目录（合规：一键清除必须连带删掉帧文件） */
+  static removeObservationDir(): void {
+    try {
+      const dir = `${StorageService.getInstance().filesDir()}/obs`
+      if (fileIo.accessSync(dir)) {
+        fileIo.rmdirSync(dir)
+      }
+    } catch (e) {
+      // 目录不存在或删除失败都不影响主流程
+    }
+  }
+
   async clearLearningData(): Promise<void> {
-    await this.clearAll()
+    // 只清学习记录：原先这里直接走 clearAll()，会连身份与授权一起清掉，
+    // 并写回一个陌生人的默认昵称与目标（'刘灿' / '考研上岸' 128 天）。
+    // 用户点了「清除学习数据」重启，看到的是"这 App 里有别人的数据"。
+    FocusController.getInstance().abort()
+    await StorageService.getInstance().clearLearningTables()
+    AppStore.removeObservationDir()
+    this.sessions = []
+    this.tasks = []
+    this.currentPlan = []
+    this.currentReport = null
+    this.currentSession = null
+    // 画像由会话派生：会话清了，画像必须跟着回到空模板，否则页面显示的还是旧结论
+    this.profile = new FocusProfile()
+    await this.refreshAggregates()
+  }
+
+  /** 清除画面片段：先清空库里的图片引用，再删帧文件（顺序反了会留下指向不存在图片的记录） */
+  async clearImages(): Promise<void> {
+    await StorageService.getInstance().clearObservationImages()
+    AppStore.removeObservationDir()
   }
 
   async clearPhysioData(): Promise<void> {
-    // MVP 阶段生理数据为模拟，不落盘；此方法预留真实实现位
+    // 手表事件（rmssd / hr）是**真实落库**的（FocusController.finalize → saveWatchEvents），
+    // 之前这里是空实现 + "无持久化生理数据"的提示，属于不实
+    await StorageService.getInstance().clearWatchEvents()
   }
 }

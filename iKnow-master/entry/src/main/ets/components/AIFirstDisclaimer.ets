@@ -13,9 +13,8 @@ export struct AIFirstDisclaimer {
   @StorageProp(StorageKey.AI_DISCLAIMER_SHOWN) shown: boolean = false
 
   build() {
-    if (this.shown) {
-      Column() {}
-    } else {
+    // 已展示过 → 零节点（不占用父布局；此前用空 Column 占位）
+    if (!this.shown) {
       Column() {
         Column() {
           Text('关于小伴')

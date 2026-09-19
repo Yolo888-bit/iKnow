@@ -1,5 +1,8 @@
 import { FocusState, FocusSource } from '../models/Enums'
 import { FocusDetectionResult, MotionData, FocusSensor } from './ServiceTypes'
+import { StorageService } from './StorageService'
+import { BleWatchService } from './BleWatchService'
+import { WatchSignalSource } from './WatchSignalSource'
 
 /**
  * 传感器服务 —— 模拟智能手表（心率 / HRV / 手腕动作）
@@ -10,6 +13,7 @@ import { FocusDetectionResult, MotionData, FocusSensor } from './ServiceTypes'
  */
 export class SensorService implements FocusSensor {
   private static inst: SensorService | null = null
+  private static readonly KV_PRESENT = 'ik_watch_present'
   private connected: boolean = false
   /** 稳定的生理基线：仅在"佩戴"时生成一次，避免每次刷新数字乱跳 */
   private baseHeartRate: number = 0
@@ -22,6 +26,18 @@ export class SensorService implements FocusSensor {
     return SensorService.inst
   }
 
+  /** 启动时读回佩戴状态（否则用户切了开关，重启就变回未佩戴） */
+  async init(): Promise<void> {
+    try {
+      const v = await StorageService.getInstance().loadKv(SensorService.KV_PRESENT)
+      if (v === '1') {
+        this.setPresent(true)
+      }
+    } catch (e) {
+      // 读取失败保持默认（未佩戴）
+    }
+  }
+
   getVisualState(): FocusDetectionResult {
     const r = new FocusDetectionResult()
     r.state = FocusState.FOCUSED
@@ -31,11 +47,30 @@ export class SensorService implements FocusSensor {
     return r
   }
 
+  /**
+   * 真实 BLE 心率优先；没有真实设备时取**合成信号源的当前心率**（未佩戴则为 0）。
+   *
+   * 原来这里返回的是"佩戴那一刻随机生成的固定基线"，与驱动算法的合成信号是两个数：
+   * 同屏会出现一个整段会话纹丝不动的"实时心率"和一个在 62/74/92 之间跳的心率，一眼假。
+   */
   getHeartRate(): number {
-    return this.connected ? this.baseHeartRate : 0
+    const realBle = BleWatchService.getInstance()
+    if (realBle.isConnected() && realBle.getHeartRate() > 0) {
+      return realBle.getHeartRate()
+    }
+    if (!this.connected) {
+      return 0
+    }
+    return WatchSignalSource.getInstance().currentBpm()
+  }
+
+  /** 心率是否来自模拟设备（真实 BLE 未连接）—— UI 据此如实标注，不把模拟值当真实测量 */
+  isSimulatedWrist(): boolean {
+    return !BleWatchService.getInstance().isConnected()
   }
 
   getHRV(): number {
+    // HRV 目前只有模拟来源；真实设备不提供时如实返回 0
     return this.connected ? this.baseHrv : 0
   }
 
@@ -50,12 +85,15 @@ export class SensorService implements FocusSensor {
     return this.connected
   }
 
-  /** 当前是否佩戴手表（PRD §12：无手表时 RED 干预走手机声音+屏幕，不假装震动） */
+  /**
+   * 当前是否有可用的手腕设备（PRD §12：没有时 RED 干预走手机声音+屏幕，不假装震动）。
+   * 真实 BLE 心率设备连上也算"佩戴"。
+   */
   isWristPresent(): boolean {
-    return this.connected
+    return this.connected || BleWatchService.getInstance().isConnected()
   }
 
-  /** 模拟佩戴 / 断开（演示用；真实实现应由 BLE 连接状态驱动） */
+  /** 模拟佩戴 / 断开（演示用；真实实现应由 BLE 连接状态驱动），并持久化 */
   setPresent(present: boolean): void {
     if (present && !this.connected) {
       this.baseHeartRate = 68 + Math.round(Math.random() * 8)
@@ -66,6 +104,7 @@ export class SensorService implements FocusSensor {
       this.baseHrv = 0
     }
     this.connected = present
+    StorageService.getInstance().saveKv(SensorService.KV_PRESENT, present ? '1' : '0').catch(() => {})
   }
 
   connect(): void {

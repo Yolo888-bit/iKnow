@@ -17,6 +17,16 @@ export interface PracticeSummaryItem {
   count: number
 }
 
+/** 练习明细的一项（供"点开看全部练习内容"用） */
+export interface PracticeDetailItem {
+  subject: string
+  title: string
+  /** 最近一次完成该任务的会话开始时间 */
+  lastDoneMs: number
+  /** 被完成过的次数（同一任务跨会话通常为 1） */
+  times: number
+}
+
 export interface HabitInsight {
   bestWindow: string
   bestRate: number
@@ -37,6 +47,10 @@ export interface DaySummary {
   bestPeriod: string
   levels: number[]
   states: string[]
+  /** 与 levels 一一对应的横轴位置（当天累计分钟），供曲线按真实时间排布 */
+  minutes: number[]
+  /** 一天内多次专注时，相邻会话之间的分钟分界（供曲线画虚线分隔） */
+  separators: number[]
 }
 
 /**
@@ -49,11 +63,6 @@ export interface DaySummary {
  *  - 除零一律返回 0，避免 NaN 污染 UI。
  *  - ArkTS 合规：静态方法内一律用 Metrics.xxx 而非 this.xxx。
  */
-export interface DistractionSubject {
-  subject: string
-  rate: number
-}
-
 export interface FiveDim {
   efficiency: number
   concentration: number
@@ -185,26 +194,6 @@ export class Metrics {
   }
 
   /**
-   * §5 易分心任务：近似为"分心率最高的会话"（MVP 占位）。
-   * 后续接入任务级分心次数归因后，改为 分心次数 / 任务时长(分钟)。
-   */
-  static easyDistractionTask(sessions: FocusSession[]): DistractionSubject {
-    let best: FocusSession | null = null
-    let bestRate = -1
-    for (const s of sessions) {
-      const r = Metrics.distractionRate(s)
-      if (r > bestRate) {
-        bestRate = r
-        best = s
-      }
-    }
-    if (best === null) {
-      return { subject: '', rate: 0 }
-    }
-    return { subject: best.title, rate: bestRate }
-  }
-
-  /**
    * §5 专注阈值：最近 N(>=3) 次会话中，每次"最长连续 GREEN 段（分钟）"的中位数。
    * 样本不足返回 0。
    */
@@ -328,6 +317,9 @@ export class Metrics {
     let qaSessions = 0
     const levels: number[] = []
     const states: string[] = []
+    const minutes: number[] = []
+    const separators: number[] = []
+    let dayOffset = 0
 
     for (const s of daySessions) {
       netSec += s.focusDuration
@@ -340,7 +332,14 @@ export class Metrics {
       for (const p of s.timeline) {
         levels.push(p.level)
         states.push(p.state)
+        minutes.push(dayOffset + p.minute)
       }
+      dayOffset += Math.round(Metrics.totalStudySec(s) / 60)
+      separators.push(dayOffset)
+    }
+    // 末尾那根就是曲线终点，不需要画分隔线
+    if (separators.length > 0) {
+      separators.pop()
     }
 
     const focusRate = studySec > 0 ? Math.round(netSec / studySec * 100) : 0
@@ -355,8 +354,53 @@ export class Metrics {
       sessionCount: daySessions.length,
       bestPeriod: best,
       levels: levels,
-      states: states
+      states: states,
+      minutes: minutes,
+      separators: separators
     }
+  }
+
+  /**
+   * 练习明细：列出所有被完成过的任务（按学科分组、按最近完成时间倒序）。
+   * 与 `practiceSummary` 的区别：summary 只给每科"一个代表标题 + 次数"（用在窄卡片里），
+   * 这里给**完整列表**，供"点开看全部练习内容"。
+   */
+  static practiceDetail(sessions: FocusSession[], tasks: Task[]): PracticeDetailItem[] {
+    const taskMap = new Map<string, Task>()
+    for (const t of tasks) {
+      taskMap.set(t.id, t)
+    }
+    const map = new Map<string, PracticeDetailItem>()
+    // 会话按时间升序处理，最后一次会覆盖 lastDoneMs，得到"最近完成"
+    const sorted = sessions.slice()
+    sorted.sort((a: FocusSession, b: FocusSession): number => a.startTime - b.startTime)
+    for (const s of sorted) {
+      for (const id of s.completedTaskIds) {
+        const t = taskMap.get(id)
+        if (t === undefined) {
+          continue
+        }
+        const key = `${t.subject}|${id}`
+        const exist = map.get(key)
+        if (exist === undefined) {
+          map.set(key, {
+            subject: t.subject,
+            title: t.title,
+            lastDoneMs: s.startTime,
+            times: 1
+          })
+        } else {
+          exist.lastDoneMs = s.startTime
+          exist.times += 1
+        }
+      }
+    }
+    const list: PracticeDetailItem[] = []
+    map.forEach((v: PracticeDetailItem) => {
+      list.push(v)
+    })
+    list.sort((a: PracticeDetailItem, b: PracticeDetailItem): number => b.lastDoneMs - a.lastDoneMs)
+    return list
   }
 
   /** 练习内容总结：按学科统计已完成任务次数，返回前 5 项 */
@@ -366,8 +410,14 @@ export class Metrics {
       taskMap.set(t.id, t)
     }
     const groups = new Map<string, PracticeSummaryItem>()
+    // 同一个任务可能跨多个会话都被标记完成，这里按任务 id 去重，避免"次数"被重复放大
+    const counted = new Set<string>()
     for (const s of sessions) {
       for (const id of s.completedTaskIds) {
+        if (counted.has(id)) {
+          continue
+        }
+        counted.add(id)
         const t = taskMap.get(id)
         if (t !== undefined) {
           let g = groups.get(t.subject)
@@ -387,28 +437,78 @@ export class Metrics {
     return result.slice(0, 5)
   }
 
-  /** 学习习惯洞察：黄金时段、低谷时段与可操作建议 */
+  /**
+   * 学习习惯洞察：黄金时段、低谷时段与可操作建议。
+   * 全部由真实数据推导（无硬编码）；样本不足时返回空串，由页面显示空态。
+   */
   static habitInsights(sessions: FocusSession[]): HabitInsight {
-    const bestWindow = Metrics.goldenWindow(sessions)
-    let bestRate = 0
-    if (bestWindow.length > 0) {
-      let sum = 0
-      let count = 0
-      for (const s of sessions) {
-        if (Metrics.totalStudySec(s) > 0) {
-          sum += Metrics.netFocusRate(s) * 100
-          count++
-        }
+    const bucketsStudy = new Array<number>(12).fill(0)
+    const bucketsNet = new Array<number>(12).fill(0)
+    const used: number[] = []
+    for (const s of sessions) {
+      const study = Metrics.totalStudySec(s)
+      if (study <= 0) {
+        continue
       }
-      bestRate = count > 0 ? Math.round(sum / count) : 0
+      const d = new Date(s.startTime)
+      const idx = Math.floor((d.getHours() * 60 + d.getMinutes()) / 120)
+      if (idx < 0 || idx >= 12) {
+        continue
+      }
+      if (bucketsStudy[idx] === 0) {
+        used.push(idx)
+      }
+      bucketsStudy[idx] += study
+      bucketsNet[idx] += Metrics.netFocusSec(s)
     }
+    if (used.length === 0) {
+      return { bestWindow: '', bestRate: 0, lowWindow: '', lowNote: '', advice: '' }
+    }
+
+    let peak = used[0]
+    let low = used[0]
+    for (const i of used) {
+      if (bucketsStudy[i] > bucketsStudy[peak]) {
+        peak = i
+      }
+      if (bucketsStudy[i] < bucketsStudy[low]) {
+        low = i
+      }
+    }
+    const bestWindow = Metrics.bucketWindow(peak)
+    const bestRate = Metrics.bucketRate(bucketsStudy[peak], bucketsNet[peak])
+
+    if (used.length === 1) {
+      return {
+        bestWindow: bestWindow,
+        bestRate: bestRate,
+        lowWindow: '',
+        lowNote: '',
+        advice: `目前只统计到 ${bestWindow} 这一个时段（专注率 ${bestRate}%）。` +
+          '再多几次其他时段的专注，我才能比较出低谷。'
+      }
+    }
+    const lowWindow = Metrics.bucketWindow(low)
+    const lowRate = Metrics.bucketRate(bucketsStudy[low], bucketsNet[low])
+    const lowNote = lowRate + 10 < bestRate ? '容易分心' : '投入偏少'
     return {
-      bestWindow: bestWindow.length > 0 ? bestWindow : '08:00 - 10:00',
+      bestWindow: bestWindow,
       bestRate: bestRate,
-      lowWindow: '晚间 21 点后',
-      lowNote: '容易分心',
-      advice: '难题优先安排上午攻克，晚间以复习和轻量整理为主。'
+      lowWindow: lowWindow,
+      lowNote: lowNote,
+      advice: `你的高效时段集中在 ${bestWindow}（专注率 ${bestRate}%）；${lowWindow} 偏低（${lowRate}%），` +
+        `建议把需要深度思考的任务放在 ${bestWindow}，${lowWindow} 留给复习与轻量整理。`
     }
+  }
+
+  /** 第 i 个 2 小时桶的时钟区间 */
+  private static bucketWindow(i: number): string {
+    return `${Metrics.clock(i * 120)} - ${Metrics.clock(i * 120 + 120)}`
+  }
+
+  /** 桶内净专注率（%） */
+  private static bucketRate(studySec: number, netSec: number): number {
+    return studySec > 0 ? Math.round(netSec / studySec * 100) : 0
   }
 
   // ===================== 复盘辅助（§5 派生，统一走 Metrics）=====================
@@ -441,10 +541,14 @@ export class Metrics {
     if (bestLen === 0) {
       return ''
     }
-    const startClock = Metrics.clock(bestStart)
-    // bestLen 是采样点个数，必须按采样间隔折算成分钟，否则时长被放大（30s 采样时会翻倍）
-    const spanMinutes = Math.max(1, Math.round(bestLen * FocusTuning.TIMELINE_SAMPLE_MS / 60000))
-    const endClock = Metrics.clock(bestStart + spanMinutes)
+    // p.minute 是"会话内相对分钟"，必须叠加会话起始的当天分钟数才是真实时钟，
+    // 否则会输出 00:25 - 00:30 这类错值。
+    const started = new Date(s.startTime)
+    const baseMin = started.getHours() * 60 + started.getMinutes()
+    // bestLen 是采样点个数，按采样间隔折算成分钟（否则 30s 采样时长度翻倍）
+    const spanMinutes = Math.max(1, Math.round(Metrics.samplesToMinutes(bestLen)))
+    const startClock = Metrics.clock(baseMin + bestStart)
+    const endClock = Metrics.clock(baseMin + bestStart + spanMinutes)
     return `${startClock} - ${endClock}`
   }
 

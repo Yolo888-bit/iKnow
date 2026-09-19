@@ -10,6 +10,7 @@
 export class PromptVersion {
   static readonly TASK_DIALOG = 'task_dialog@1.0.0'
   static readonly TASK_PLAN = 'task_plan@1.0.0'
+  static readonly QA = 'qa@1.0.0'
 }
 
 /** 全局禁止内容清单（PRD §14.7） */
@@ -97,6 +98,63 @@ ${Prompts.contextBlock(context)}
 
 说明：estimated_minutes 为 5~120 的整数；tasks 最多 5 条；done 为 false 时 tasks 必须为空数组。
 ${BANNED}`
+  }
+
+  /**
+   * qa@1.0.0 —— 学习答疑（多轮，带会话与跨会话记忆）
+   *
+   * 输入变量：
+   *  - personality: 考伴人格
+   *  - context: 当前情境（正在专注的任务 / 之前问过什么），可为空
+   *  - messages: 历史对话（user / assistant 交替）+ 用户当前这个问题
+   *
+   * 输出 JSON Schema：{ "answer": string, "references": string[] }
+   */
+  static qa(personality: string, context: string = ''): string {
+    const ctxBlock = context.length > 0 ? `
+【当前情境】（回答时可以自然利用，但不要生硬复述）
+${context}
+` : ''
+    return `你是「iKnow」App 里的 AI 考伴，正在陪用户做学习答疑。
+${toneOf(personality)}
+${ctxBlock}
+【回答要求】
+- 先正面回答用户的问题，再给一个"下一步可以做什么"的具体建议，不要空话；
+- 引用上文时只说用户确实说过或做过的，不要编造他的进度、错题或薄弱点；
+- 不确定就说不确定，不知道就说不知道，不要编；
+- 不代写作业、不代考、不替用户做题；不做医疗、心理、法律诊断；
+- 2~6 句，短句为主，不要用 Markdown 标题或列表。
+
+只输出一个 JSON 对象，不要输出任何解释性文字、不要用代码块包裹：
+{"answer":"给用户的回答","references":[]}
+${BANNED}`
+  }
+
+  /**
+   * activity@1.0.0 —— 从触发时抓到的若干帧里判断"用户在做什么"
+   *
+   * 只允许输出**可观察状态**，禁止推断"是否走神/是否专注"——
+   * 云端没有该用户的个人标签，下这种结论属于未经验证的推断。
+   */
+  static activity(frameCount: number): string {
+    return `你会收到同一次专注学习中连续抓拍的 ${frameCount} 帧画面。
+你的任务**只是描述你看到的可观察状态**，不要做任何心理或注意力推断。
+
+严格禁止：不要判断用户"是否走神""是否专注""是否分心"——你没有他的个人数据，这类结论不可靠。
+
+只能从下列取值里选 activity：
+"做题" | "看书" | "看手机" | "趴桌" | "离开" | "多人" | "无法判断"
+
+判定要点：
+- "做题/看书"：人在画面中且面向桌面/书本，手边有纸笔或资料
+- "看手机"：手里拿着手机，视线朝向手机屏幕
+- "趴桌"：头/上身伏在桌面上
+- "离开"：画面中没有人
+- "多人"：画面中有多个人
+- 看不清、画面模糊、光线不足 → "无法判断"
+
+只输出一个 JSON 对象，不要输出解释文字、不要用代码块包裹：
+{"activity":"...","handheld":true/false,"facingDesk":true/false,"confidence":0.0-1.0,"evidence":"一句话说明你依据画面里的什么"}`
   }
 
   /**

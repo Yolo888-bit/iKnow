@@ -12,7 +12,12 @@ export interface QATextPayload {
   question: string
   subject?: string
   history?: Array<QAMessage>
+  /** 该用户最近问过的问题（跨会话记忆，用于"能接着上次聊"） */
+  recentQuestions?: string[]
 }
+
+/** §14.7 QA 输出必须携带的免责声明（单一来源，Mock 与网关共用） */
+export const QA_DISCLAIMER = '（小伴是 AI 考伴，不是真人，回答仅供参考，重要结论请自行核实。）'
 
 /** 图片答疑：仅传端侧 OCR 后的文本引用 / 资源句柄，绝不传原始影像（§14.7） */
 export interface QAImagePayload {

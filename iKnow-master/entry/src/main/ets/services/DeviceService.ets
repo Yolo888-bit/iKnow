@@ -1,8 +1,6 @@
 import { DeviceInfo } from './ServiceTypes'
-import { FocusDetectionService } from './FocusDetectionService'
 import { SensorService } from './SensorService'
 import { PermissionService } from './PermissionService'
-import { FocusState } from '../models/Enums'
 
 /**
  * 设备服务 —— 管理手机 / 摄像头 / 手表连接状态与模拟设备模式
@@ -35,7 +33,7 @@ export class DeviceService {
     camera.type = 'CAMERA'
     camera.name = '本机摄像头'
     camera.connected = cameraOn
-    camera.statusText = cameraOn ? '感知中（本地分析，不上传）' : '已关闭'
+    camera.statusText = cameraOn ? '感知中（信号触发时抓拍）' : '已关闭'
     list.push(camera)
 
     const watch = new DeviceInfo()
@@ -71,19 +69,5 @@ export class DeviceService {
 
   setSimulateMode(on: boolean): void {
     this.simulateMode = on
-  }
-
-  /** 模拟一次分心（供模拟设备模式演示） */
-  simulateDistraction(heavy: boolean): void {
-    if (heavy) {
-      FocusDetectionService.getInstance().simulate(FocusState.DISTRACTED)
-    } else {
-      FocusDetectionService.getInstance().simulate(FocusState.SLIGHTLY_DISTRACTED)
-    }
-  }
-
-  /** 恢复专注（清除模拟覆盖） */
-  resumeFocus(): void {
-    FocusDetectionService.getInstance().resume()
   }
 }

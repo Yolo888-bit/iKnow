@@ -4,10 +4,10 @@ import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { TimeUtils } from '../utils/TimeUtils'
 import { BarChart } from '../components/BarChart'
-import { FocusController } from '../services/FocusController'
 import { SubjectProgress } from '../models/Dashboard'
 import { UserAvatar } from '../components/UserAvatar'
 import { AvatarPicker } from '../components/AvatarPicker'
+import { SimWorkbench } from '../components/SimWorkbench'
 
 /** 我的工作台 —— 学习全局看板 */
 @Component
@@ -21,6 +21,8 @@ export struct Dashboard {
   @StorageProp(StorageKey.FOCUS_RATE) focusRate: number = 0
   @StorageProp(StorageKey.DATA_VERSION) @Watch('refresh') dataVersion: number = 0
   @StorageProp(StorageKey.FOCUS_ELAPSED) focusElapsed: number = 0
+  /** 1 = 会话进行中（响应式） */
+  @StorageProp(StorageKey.FOCUS_RUNNING) focusRunningFlag: number = 0
   @State weekTrend: number[] = []
   @State subjects: SubjectProgress[] = []
   @State examType: string = ''
@@ -48,10 +50,6 @@ export struct Dashboard {
   }
 
   /** 有会话在跑（含被返回键留在后台的）时，首页给出继续入口 */
-  private focusRunning(): boolean {
-    return FocusController.getInstance().isRunning()
-  }
-
   private resumeFocus(): void {
     router.pushUrl({ url: 'pages/Focus' })
   }
@@ -99,7 +97,7 @@ export struct Dashboard {
         .alignItems(VerticalAlign.Center)
 
         // 专注进行中：返回键留在后台的会话不丢，从这里继续（E4）
-        if (this.focusRunning()) {
+        if (this.focusRunningFlag === 1) {
           Row() {
             Text(`专注进行中 · ${TimeUtils.formatClock(this.focusElapsed)}`)
               .fontSize(14)
@@ -134,7 +132,7 @@ export struct Dashboard {
               .fontColor(Colors.TEXT_SECONDARY)
               .margin({ top: 6 })
               .width('100%')
-            Text('在「我的 → 重新设置称呼与目标」里填写，倒计时才会准确')
+            Text('在「我的 → 长期计划与目标」里填写，倒计时才会准确')
               .fontSize(12)
               .fontColor(Colors.TEXT_TERTIARY)
               .margin({ top: 10 })
@@ -206,7 +204,7 @@ export struct Dashboard {
 
         // 科目进度
         Column() {
-          this.sectionTitle('科目进度')
+          this.sectionTitle('科目进度（近 30 天）')
           if (this.subjects.length === 0) {
             Text('开始学习后，这里会显示各学科的完成进度')
               .fontSize(13)
@@ -255,6 +253,9 @@ export struct Dashboard {
             .width('100%')
         }
         .dashCard()
+
+        // 模拟状态（原在「设备连接」页的模拟工作台，统一移到这里）
+        SimWorkbench()
 
         Blank().height(20)
         }

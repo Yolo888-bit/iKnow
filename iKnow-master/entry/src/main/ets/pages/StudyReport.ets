@@ -47,6 +47,10 @@ export struct StudyReport {
   @State levels: number[] = []
   @State states: string[] = []
   @State minutes: number[] = []
+  /** 本次专注得分 = 100 − 走神占比（取整，夹 0~100） */
+  @State score: number = 0
+  /** 走神时间占总学习时间的百分比（取整） */
+  @State distractRatio: number = 0
   /** 本次会话里**真正算干扰**的观察记录（看手机 / 离开 / 趴桌） */
   @State interference: ObservationRecord[] = []
   /** 云端确认为"在做题/看书"的次数 —— 属于学习确认，不该混进干扰事件 */
@@ -100,6 +104,20 @@ export struct StudyReport {
     this.wallStr = TimeUtils.formatDuration(Metrics.wallClock(session))
     this.netStr = TimeUtils.formatDuration(Metrics.netFocusSec(session))
     this.distractStr = TimeUtils.formatDuration(Metrics.distractionSec(session))
+    // 本次专注得分：走神占比越低分越高；无数据时按满分处理（避免显示 0 分误导）
+    const totalStudy: number = Metrics.totalStudySec(session)
+    const ratio: number = totalStudy > 0
+      ? Math.round(Metrics.distractionSec(session) / totalStudy * 100)
+      : 0
+    this.distractRatio = ratio
+    let sc: number = 100 - ratio
+    if (sc < 0) {
+      sc = 0
+    }
+    if (sc > 100) {
+      sc = 100
+    }
+    this.score = sc
     this.qaStr = TimeUtils.formatDuration(Metrics.qaSec(session))
     this.breakStr = TimeUtils.formatDuration(Metrics.restSec(session))
     this.pauseStr = TimeUtils.formatDuration(Metrics.pauseSec(session))
@@ -204,9 +222,6 @@ export struct StudyReport {
           .alignItems(HorizontalAlign.Start)
 
           // ① 专注数据总览（口径自解释，可验算）
-          // 统一 4 行 × 2 列的网格：原来是 2/2/2/3 混排，最后一行每格只有前几行一半宽，
-          // 值又是 20 号字，直接溢出到相邻卡片上。完成率并进「完成任务」格（同一件事的两个说法），
-          // 让 8 个指标刚好排满 8 格。
           Column() {
             this.sectionTitle('专注数据总览')
             Row({ space: 12 }) {
@@ -284,9 +299,9 @@ export struct StudyReport {
           }
           .reportCard()
 
-          // ③ 专注状态时间轴（色带：横轴时间、颜色=状态；见 FocusChart 头部说明）
+          // ③ 专注曲线
           Column() {
-            this.sectionTitle('专注状态时间轴')
+            this.sectionTitle('专注曲线')
             FocusChart({ levels: this.levels, states: this.states, minutes: this.minutes })
           }
           .reportCard()

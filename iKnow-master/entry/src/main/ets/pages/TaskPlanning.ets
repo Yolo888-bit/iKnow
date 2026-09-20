@@ -41,6 +41,9 @@ export struct TaskPlanning {
   /** 已点击确认（圆圈变实心）的任务 id */
   @State confirmedIds: string[] = []
   @State thinking: boolean = false
+  /** 流式输出中：AI 回复逐段写入 streamingText，流结束后再落到消息列表 */
+  @State streaming: boolean = false
+  @State streamingText: string = ''
   @State inputValue: string = ''
   /** 网关是否就绪（未配置 Key 时如实显示本地模板，不假装在线） */
   @State gatewayReady: boolean = false
@@ -123,16 +126,27 @@ export struct TaskPlanning {
     this.turns += 1
 
     this.thinking = true
+    this.streaming = true
+    this.streamingText = ''
     const input: PlanningDialogInput = {
       step: this.turns,
       userInput: text,
       history: this.history,
       planningContext: this.buildPlanningContext()
     }
-    const r = await AIService.getInstance().dialogByScene(input)
+    // 流式：reply 逐段上屏；结构化结果（done / tasks）等流结束后一起拿到
+    const r = await AIService.getInstance().dialogStream(input, (delta: string) => {
+      this.streamingText += delta
+      this.scrollToBottom()
+    })
     this.thinking = false
+    this.streaming = false
 
-    const reply: string = r.reply.length > 0 ? r.reply : AIService.getInstance().planningHold()
+    const streamed: string = this.streamingText
+    this.streamingText = ''
+    const reply: string = r.reply.length > 0
+      ? r.reply
+      : (streamed.length > 0 ? streamed : AIService.getInstance().planningHold())
     this.pushAI(reply)
     this.history.push(text)
     this.history.push(reply)
@@ -150,18 +164,50 @@ export struct TaskPlanning {
     }
   }
 
-  /** 把 AI 给出的结构化任务落到「待确认任务」列表 */
-  private applyPlan(list: PlanTask[]): void {
-    const out: Task[] = []
-    for (const p of list) {
-      out.push(this.toTask(p))
+  /** 标题归一化：去空格与常见标点后比较，避免同一任务被当成两条 */
+  private titleKey(s: string): string {
+    const skip: string = ' 　，。、；：,.;()（）【】[]'
+    let out = ''
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charAt(i)
+      if (skip.indexOf(c) < 0) {
+        out += c
+      }
     }
-    if (out.length === 0) {
+    return out
+  }
+
+  /**
+   * 把 AI 给出的任务**追加**到「待确认任务」列表，而不是整体替换。
+   *  - 已有任务原样保留（含用户手动调过的时长、已勾选状态）；
+   *  - 标题重复的视为同一条，跳过 —— 多轮对话不会把清单越聊越乱；
+   *  - 有新增才收起输入框，方便用户接着补充需求。
+   */
+  private applyPlan(list: PlanTask[]): void {
+    const next: Task[] = this.tasks.slice()
+    const keys: string[] = []
+    for (const t of next) {
+      keys.push(this.titleKey(t.title))
+    }
+    let added = 0
+    for (const p of list) {
+      const k = this.titleKey(p.title)
+      if (keys.indexOf(k) >= 0) {
+        continue
+      }
+      const t = this.toTask(p)
+      t.sortOrder = next.length
+      keys.push(k)
+      next.push(t)
+      added += 1
+    }
+    if (next.length === 0) {
       return
     }
-    this.tasks = out
-    this.confirmedIds = []
-    this.showComposer = false
+    this.tasks = next
+    if (added > 0) {
+      this.showComposer = false
+    }
   }
 
   private composeGoal(): string {
@@ -588,9 +634,11 @@ export struct TaskPlanning {
         .margin({ top: 6, bottom: 16 })
 
       Column({ space: 16 }) {
+        // key 里带上时长与勾选态：只用 t.id 时，改了时长 ArkUI 会复用旧节点，
+        // 导致行内的时长数字不刷新（± 点了没反应）
         ForEach(this.tasks, (t: Task) => {
           this.planRow(t)
-        }, (t: Task) => t.id)
+        }, (t: Task) => `${t.id}_${t.estimatedDuration}_${t.done ? 1 : 0}`)
       }
       .width('100%')
       .padding({ left: 12, right: 12 })
@@ -840,7 +888,10 @@ export struct TaskPlanning {
               }
             }, (m: AIMessage) => m.id)
 
-            if (this.thinking) {
+            // 流式输出：reply 实时逐段上屏（不放进 messages，避免 ForEach key 不变导致不刷新）
+            if (this.streaming) {
+              this.aiBubble(this.streamingText.length > 0 ? this.streamingText : '正在思考…')
+            } else if (this.thinking) {
               this.aiBubble('正在思考…')
             }
 

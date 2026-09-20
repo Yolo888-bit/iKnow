@@ -62,11 +62,27 @@ export struct Dashboard {
       this.targetDateText = ''
     }
 
-    // 总体进度 = 全部任务（含历史），不只看今日
-    const all: Task[] = store.getTasks()
+    // 总体进度 = 「AI 规划中的任务」+「专注里实际用过的任务」，按 id 去重累加。
+    // 只统计这两个来源，不把无关任务算进来，口径与用户预期一致。
+    const merged: Task[] = []
+    const seen: string[] = []
+    const planned: Task[] = store.getCurrentPlan()
+    for (const t of planned) {
+      if (seen.indexOf(t.id) < 0) {
+        seen.push(t.id)
+        merged.push(t)
+      }
+    }
+    const fromFocus: Task[] = store.getTasks()
+    for (const t of fromFocus) {
+      if (seen.indexOf(t.id) < 0) {
+        seen.push(t.id)
+        merged.push(t)
+      }
+    }
     let done = 0
     const pend: Task[] = []
-    for (const t of all) {
+    for (const t of merged) {
       if (t.done || t.status === TaskStatus.DONE) {
         done += 1
       } else {
@@ -75,7 +91,7 @@ export struct Dashboard {
     }
     // 未完成：最近的排在前面
     pend.sort((a: Task, b: Task) => b.createdAt - a.createdAt)
-    this.allTotal = all.length
+    this.allTotal = merged.length
     this.allDone = done
     this.pending = pend
   }
@@ -330,7 +346,7 @@ export struct Dashboard {
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)
             Blank()
-            Text('全部任务')
+            Text('规划 + 专注')
               .fontSize(11)
               .fontColor(Colors.PRIMARY_DARK)
               .padding({ left: 8, right: 8, top: 3, bottom: 3 })

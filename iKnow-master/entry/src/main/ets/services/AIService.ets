@@ -234,6 +234,47 @@ export class AIService {
   }
 
   /**
+   * 流式答疑：`onDelta` 逐段把文本推给 UI。
+   * 网关不可用或流失败时自动回退非流式（整段一次性回调），保证 UI 一定拿到内容。
+   */
+  async answerQuestionStream(
+    payload: QATextPayload,
+    userId: string,
+    onDelta: (t: string) => void
+  ): Promise<string> {
+    if (this.useGateway) {
+      const streamed = await this.gateway.streamQA(payload, onDelta)
+      if (streamed.length > 0) {
+        this.lastQaSource = 'GATEWAY'
+        return streamed
+      }
+    }
+    const full = await this.answerQuestion(payload, userId)
+    if (full.length > 0) {
+      onDelta(full)
+    }
+    return full
+  }
+
+  /**
+   * 流式规划对话：reply 逐段上屏，结构化结果（done / tasks）在流结束后返回。
+   * 网关不可用时回退非流式。
+   */
+  async dialogStream(input: PlanningDialogInput, onDelta: (t: string) => void): Promise<PlanningDialogResult> {
+    if (this.useGateway) {
+      const r = await this.gateway.streamDialog(input, onDelta)
+      if (r !== null && r.reply.length > 0) {
+        return r
+      }
+    }
+    const fallback = await this.dialogByScene(input)
+    if (fallback.reply.length > 0) {
+      onDelta(fallback.reply)
+    }
+    return fallback
+  }
+
+  /**
    * 真实多模态识别（触发时抓拍的帧 → 可观察状态）。
    * 未配置网关时返回 null：由调用方选择模拟输入源或如实记为「无法判断」。
    */

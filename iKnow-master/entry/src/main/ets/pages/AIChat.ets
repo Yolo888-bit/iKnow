@@ -25,9 +25,26 @@ export struct AIChat {
   private priorQuestions: string[] = []
   @State inputValue: string = ''
   @State answering: boolean = false
+  /** 流式输出中：正文逐段写入 streamingText，流结束后再落到消息列表 */
+  @State streaming: boolean = false
+  @State streamingText: string = ''
   /** 最后一条 AI 消息与其来源，用于如实标注「大模型回答 / 本地模板回答」 */
   @State lastAiMsgId: string = ''
   @State lastAiSource: string = ''
+
+  // ---------- 悬浮球（返回专注）----------
+  @State fabX: number = 320
+  @State fabY: number = 420
+  /** 展开态：按住/拖动时放大并完全不透明；停靠时收起为小圆点 */
+  @State fabExpanded: boolean = false
+  /** 正在拖拽（拖拽结束由 PanGesture 负责收起，避免和 onTouch 抢先后） */
+  private panning: boolean = false
+  @State stageW: number = 360
+  @State stageH: number = 640
+  private fabInit: boolean = false
+  private panBaseX: number = 0
+  private panBaseY: number = 0
+  private scroller: Scroller = new Scroller()
 
   aboutToAppear(): void {
     this.pushAI('我在答疑模式，想问什么都可以。计时还在继续，安心问。')
@@ -82,6 +99,7 @@ export struct AIChat {
     m.timestamp = Date.now()
     this.messages.push(m)
     this.lastAiMsgId = m.id
+    this.scrollToBottom()
   }
 
   private pushUser(content: string): void {
@@ -91,6 +109,14 @@ export struct AIChat {
     m.content = content
     m.timestamp = Date.now()
     this.messages.push(m)
+    this.scrollToBottom()
+  }
+
+  /** 新内容后滚到底部，保持「聊天跟手」（流式输出时尤其需要） */
+  private scrollToBottom(): void {
+    setTimeout(() => {
+      this.scroller.scrollEdge(Edge.Bottom)
+    }, 60)
   }
 
   private async send(): Promise<void> {
@@ -101,6 +127,8 @@ export struct AIChat {
     this.inputValue = ''
     this.pushUser(text)
     this.answering = true
+    this.streaming = true
+    this.streamingText = ''
 
     // 会话内历史（不含刚推入的这条用户消息），只带最近 8 条
     const all: QAMessage[] = []
@@ -121,15 +149,24 @@ export struct AIChat {
     let source = 'MOCK'
     try {
       answer = await AIService.getInstance()
-        .answerQuestion(payload, AppStore.getInstance().getUserId())
+        .answerQuestionStream(payload, AppStore.getInstance().getUserId(), (delta: string) => {
+          this.streamingText += delta
+          this.scrollToBottom()
+        })
       source = AIService.getInstance().getLastQaSource()
     } catch (e) {
-      answer = '刚才没答上来，可能是网络或服务的问题。你可以再问一次，或者换个说法。'
+      // 必须复位，否则一次异常会让输入框永久锁死
       source = 'MOCK'
     } finally {
-      // 必须复位，否则一次异常会让输入框永久锁死
       this.answering = false
+      this.streaming = false
     }
+    if (answer.length === 0) {
+      answer = this.streamingText.length > 0
+        ? this.streamingText
+        : '刚才没答上来，可能是网络或服务的问题。你可以再问一次，或者换个说法。'
+    }
+    this.streamingText = ''
     this.pushAI(answer)
     this.lastAiSource = source
 
@@ -150,146 +187,250 @@ export struct AIChat {
     router.back()
   }
 
+  // ---------- 悬浮球：拖拽 + 自动吸边 ----------
+
+  private fabSize(): number {
+    return this.fabExpanded ? 66 : 48
+  }
+
+  /**
+   * 吸附到最近的左/右边缘，并把纵向夹在可视区内。
+   * 按**收起尺寸**对齐，这样球停在边缘时是贴边的（展开只是原地变大）。
+   */
+  private snapFab(): void {
+    const rest = 48
+    const edge = 10
+    const mid = this.fabX + this.fabSize() / 2
+    const targetX = mid < this.stageW / 2 ? edge : this.stageW - rest - edge
+    let targetY = this.fabY
+    if (targetY < 8) {
+      targetY = 8
+    }
+    const maxY = this.stageH - rest - 8
+    if (targetY > maxY) {
+      targetY = maxY > 8 ? maxY : 8
+    }
+    animateTo({ duration: 220, curve: Curve.EaseOut }, () => {
+      this.fabX = targetX
+      this.fabY = targetY
+    })
+  }
+
   @Builder
-  bubble(m: AIMessage) {
-    if (m.role === MessageRole.AI) {
-      Row() {
-        Text('💡').fontSize(16)
-        Column() {
-          Text(m.content)
-            .fontSize(15)
-            .fontColor(Colors.TEXT_PRIMARY)
-            .backgroundColor(Colors.CARD)
-            .padding(12)
-            .borderRadius(16)
-            .constraintSize({ maxWidth: '78%' })
-          // 如实标注来源：让"当前是不是真的走了大模型"一眼可见（排查用）
-          if (m.id === this.lastAiMsgId && this.lastAiSource.length > 0) {
-            Text(this.lastAiSource === 'GATEWAY' ? '大模型回答' : '本地模板回答')
-              .fontSize(11)
-              .fontColor(Colors.TEXT_TERTIARY)
-              .margin({ top: 4, left: 4 })
-          }
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-        .margin({ left: 8 })
+  backFab() {
+    Column() {
+      Text('←')
+        .fontSize(this.fabExpanded ? 22 : 19)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Color.White)
+      if (this.fabExpanded) {
+        Text('返回专注')
+          .fontSize(11)
+          .fontColor(Color.White)
+          .margin({ top: 2 })
       }
-      .width('100%')
-      .alignItems(VerticalAlign.Top)
-      .justifyContent(FlexAlign.Start)
-    } else {
-      Row() {
-        Text(m.content)
+    }
+    .width(this.fabSize())
+    .height(this.fabSize())
+    .borderRadius(this.fabSize() / 2)
+    .backgroundColor(Colors.PRIMARY_STRONG)
+    .justifyContent(FlexAlign.Center)
+    .shadow({ radius: 16, color: Colors.SHADOW, offsetX: 0, offsetY: 6 })
+    // 停靠时半透明"隐身"，触碰/拖拽时完全显形
+    .opacity(this.fabExpanded ? 1.0 : 0.72)
+    .position({ x: this.fabX, y: this.fabY })
+    .onTouch((e: TouchEvent) => {
+      if (e.type === TouchType.Down) {
+        this.fabExpanded = true
+      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+        // 只点不拖时，PanGesture 不会触发，这里兜底把球收回停靠态
+        // （拖拽结束时吸附动画约 220ms，稍等再收起，视觉更顺）
+        setTimeout(() => {
+          if (!this.panning) {
+            this.fabExpanded = false
+          }
+        }, 260)
+      }
+    })
+    .onClick(() => {
+      this.backToFocus()
+    })
+    .gesture(
+      PanGesture({ fingers: 1, distance: 4 })
+        .onActionStart(() => {
+          this.panning = true
+          this.fabExpanded = true
+          this.panBaseX = this.fabX
+          this.panBaseY = this.fabY
+        })
+        .onActionUpdate((e: GestureEvent) => {
+          this.fabX = this.panBaseX + e.offsetX
+          this.fabY = this.panBaseY + e.offsetY
+        })
+        .onActionEnd(() => {
+          this.panning = false
+          this.snapFab()
+          this.fabExpanded = false
+        })
+        .onActionCancel(() => {
+          this.panning = false
+          this.snapFab()
+          this.fabExpanded = false
+        })
+    )
+  }
+
+  @Builder
+  aiBubble(content: string, source: string) {
+    Row() {
+      Text('💡').fontSize(16)
+      Column() {
+        Text(content)
           .fontSize(15)
           .fontColor(Colors.TEXT_PRIMARY)
-          .backgroundColor(Colors.PRIMARY_SOFT)
+          .backgroundColor(Colors.CARD)
           .padding(12)
           .borderRadius(16)
           .constraintSize({ maxWidth: '78%' })
+        // 如实标注来源：让"当前是不是真的走了大模型"一眼可见（排查用）
+        if (source.length > 0) {
+          Text(source === 'GATEWAY' ? '大模型回答' : '本地模板回答')
+            .fontSize(11)
+            .fontColor(Colors.TEXT_TERTIARY)
+            .margin({ top: 4, left: 4 })
+        }
       }
-      .width('100%')
-      .justifyContent(FlexAlign.End)
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      .margin({ left: 8 })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+    .justifyContent(FlexAlign.Start)
+  }
+
+  @Builder
+  userBubble(content: string) {
+    Row() {
+      Text(content)
+        .fontSize(15)
+        .fontColor(Colors.TEXT_PRIMARY)
+        .backgroundColor(Colors.PRIMARY_SOFT)
+        .padding(12)
+        .borderRadius(16)
+        .constraintSize({ maxWidth: '78%' })
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.End)
+  }
+
+  @Builder
+  bubble(m: AIMessage) {
+    if (m.role === MessageRole.AI) {
+      this.aiBubble(m.content, m.id === this.lastAiMsgId ? this.lastAiSource : '')
+    } else {
+      this.userBubble(m.content)
     }
   }
 
   build() {
-    // 免责弹层挂在根 Stack（不参与内容 Column 的布局）
+    // 免责弹层与悬浮球挂在根 Stack（不参与内容 Column 的布局）
     Stack() {
       Column() {
-      // 顶部：场景标识（我在专注会话里）+ 返回
-      Row() {
-        Column() {
-          Text('正在答疑')
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Colors.TEXT_PRIMARY)
-          Text(this.sceneLine())
-            .fontSize(12)
-            .fontColor(Colors.TEXT_SECONDARY)
-            .margin({ top: 4 })
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
+          // 顶部：场景标识（我在专注会话里）
+          Row() {
+            Column() {
+              Text('正在答疑')
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text(this.sceneLine())
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ top: 4 })
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
 
-        AITag()
-      }
-      .width('100%')
-      .padding({ left: 20, right: 20, top: 14, bottom: 10 })
-      .backgroundColor(Colors.QA_SOFT)
-
-      Scroll() {
-        Column({ space: Spacing.MD }) {
-          ForEach(this.messages, (m: AIMessage) => {
-            this.bubble(m)
-          }, (m: AIMessage) => m.id)
-
-          if (this.answering) {
-            Text('小伴思考中…')
-              .fontSize(13)
-              .fontColor(Colors.TEXT_TERTIARY)
-              .margin({ left: 24 })
+            AITag()
           }
-        }
-        .padding(20)
-        .width('100%')
-      }
-      .layoutWeight(1)
-      .align(Alignment.Top)
-
-      // 左右缩进统一用外层 padding（width('100%') 与 margin 叠加会溢出）
-      Row() {
-        Button('← 回到专注（继续计时）')
           .width('100%')
-          .height(44)
-          .fontSize(15)
-          .fontColor(Color.White)
-          .backgroundColor(Colors.QA_ACCENT)
-          .borderRadius(Radius.MD)
-          .onClick(() => {
-            this.backToFocus()
-          })
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, bottom: 8 })
+          .padding({ left: 20, right: 20, top: 14, bottom: 10 })
+          .backgroundColor(Colors.QA_SOFT)
 
-      Row() {
-        TextInput({ placeholder: '输入你的问题…' })
-          .fontSize(15)
-          .height(44)
+          Scroll(this.scroller) {
+            Column({ space: Spacing.MD }) {
+              ForEach(this.messages, (m: AIMessage) => {
+                this.bubble(m)
+              }, (m: AIMessage) => m.id)
+
+              // 流式输出：正文实时逐段写入（不放进 messages，避免 ForEach key 不变导致不刷新）
+              if (this.streaming) {
+                if (this.streamingText.length > 0) {
+                  this.aiBubble(this.streamingText, '')
+                } else {
+                  Text('小伴思考中…')
+                    .fontSize(13)
+                    .fontColor(Colors.TEXT_TERTIARY)
+                    .margin({ left: 24 })
+                }
+              }
+            }
+            .padding(20)
+            .width('100%')
+          }
           .layoutWeight(1)
-          .backgroundColor(Colors.CARD)
-          .borderRadius(22)
-          .onChange((v: string) => {
-            this.inputValue = v
-          })
-          .onSubmit(() => {
-            this.send()
-          })
+          .align(Alignment.Top)
 
-        Button('发送')
-          .height(44)
-          .fontSize(15)
-          .fontColor(Color.White)
-          .backgroundColor(Colors.QA_ACCENT)
-          .borderRadius(22)
-          .margin({ left: 10 })
-          .onClick(() => {
-            this.send()
-          })
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+          Row() {
+            TextInput({ placeholder: '输入你的问题…' })
+              .fontSize(15)
+              .height(44)
+              .layoutWeight(1)
+              .backgroundColor(Colors.CARD)
+              .borderRadius(22)
+              .onChange((v: string) => {
+                this.inputValue = v
+              })
+              .onSubmit(() => {
+                this.send()
+              })
+
+            Button('发送')
+              .height(44)
+              .fontSize(15)
+              .fontColor(Color.White)
+              .backgroundColor(Colors.QA_ACCENT)
+              .borderRadius(22)
+              .margin({ left: 10 })
+              .onClick(() => {
+                this.send()
+              })
+          }
+          .width('100%')
+          .padding({ left: 16, right: 16, top: 10, bottom: 16 })
       }
       .width('100%')
       .height('100%')
       .backgroundColor(Colors.BG)
 
+      // 返回专注：悬浮球（可拖拽、自动吸边、触碰显形）
+      this.backFab()
+
       AIFirstDisclaimer()
     }
     .width('100%')
     .height('100%')
+    .onAreaChange((oldArea: Area, newArea: Area) => {
+      this.stageW = newArea.width as number
+      this.stageH = newArea.height as number
+      if (!this.fabInit && this.stageW > 0) {
+        this.fabInit = true
+        this.fabX = this.stageW - 66 - 10
+        this.fabY = this.stageH * 0.62
+      }
+    })
   }
 }

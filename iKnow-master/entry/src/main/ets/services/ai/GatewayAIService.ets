@@ -1,4 +1,5 @@
 import { http } from '@kit.NetworkKit'
+import { util } from '@kit.ArkTS'
 import { AIService, AIScene, AIRequest, AIResponse, AIError, AIPayload, AIResult } from './AIService'
 import { QATextPayload, QAImagePayload, QAResp, QA_DISCLAIMER } from './QAService'
 import { CompanionContext, CompanionDecision } from './CompanionService'
@@ -74,6 +75,38 @@ interface RawDialog {
 interface RawQA {
   answer?: string
   references?: string[]
+}
+
+/** 流式请求体（SSE，附加 stream:true） */
+interface GatewayStreamBody {
+  model: string
+  messages: ChatMessage[]
+  temperature: number
+  max_tokens: number
+  stream: boolean
+}
+
+/** SSE 分片：choices[0].delta.content */
+interface StreamDelta {
+  content?: string
+}
+
+interface StreamChoice {
+  delta?: StreamDelta
+}
+
+interface StreamChunk {
+  choices?: StreamChoice[]
+}
+
+/** 一次流式调用的结果 */
+interface StreamOutcome {
+  /** 目标字段（reply / answer）已收到的完整文本 */
+  visible: string
+  /** 拼回来的完整 JSON 原文 */
+  raw: string
+  /** 是否真的收到过内容 */
+  ok: boolean
 }
 
 /**
@@ -227,6 +260,10 @@ export class GatewayAIService implements AIService {
    */
   private async runDialog(requestId: string, input: PlanningDialogInput): Promise<AIResponse<PlanningDialogResult>> {
     const messages: ChatMessage[] = [{ role: 'system', content: Prompts.taskDialog(this.personality) }]
+    const ctx: string = input.planningContext !== undefined ? input.planningContext : ''
+    if (ctx.length > 0) {
+      messages.push({ role: 'system', content: `【用户的备考背景】\n${ctx}` })
+    }
     const history: string[] = input.history !== undefined ? input.history : []
     for (let i = 0; i < history.length; i++) {
       const role: string = i % 2 === 0 ? 'user' : 'assistant'
@@ -365,6 +402,298 @@ export class GatewayAIService implements AIService {
       return ''
     }
     return line
+  }
+
+  // ===================== 流式（SSE）=====================
+
+  /**
+   * 流式答疑：`onDelta` 逐段给出 answer 文本，返回完整 answer。
+   * 未配置网关或流失败返回空串，由门面回退非流式。
+   */
+  async streamQA(input: QATextPayload, onDelta: (t: string) => void): Promise<string> {
+    if (!this.isReady()) {
+      return ''
+    }
+    const messages: ChatMessage[] = [{ role: 'system', content: Prompts.qa(this.personality) }]
+    const history = input.history
+    if (history !== undefined) {
+      for (const h of history) {
+        messages.push({ role: h.role === 'ai' || h.role === 'assistant' ? 'assistant' : 'user', content: h.content })
+      }
+    }
+    const subject: string = input.subject !== undefined && input.subject.length > 0
+      ? `（我目前正在做：${input.subject}）` : ''
+    messages.push({ role: 'user', content: `${input.question}${subject}` })
+
+    const out: StreamOutcome = await this.streamJson(messages, BridgeConfig.MODEL_TEXT, 0.6, 1400,
+      BridgeConfig.timeoutForScene('qa_text'), 'answer', onDelta)
+    if (!out.ok) {
+      return ''
+    }
+    let raw: RawQA | null = null
+    try {
+      raw = JSON.parse(out.raw) as RawQA
+    } catch (e) {
+      raw = null
+    }
+    if (raw !== null && raw.answer !== undefined && raw.answer.length > 0) {
+      return raw.answer
+    }
+    // JSON 没收全时，用户已经看到的文本就是答案（别让它凭空消失）
+    return out.visible
+  }
+
+  /**
+   * 流式规划对话：`onDelta` 逐段给出 reply 文本，返回完整结构化结果。
+   * 未配置网关或流失败返回 null，由门面回退非流式。
+   */
+  async streamDialog(input: PlanningDialogInput, onDelta: (t: string) => void): Promise<PlanningDialogResult | null> {
+    if (!this.isReady()) {
+      return null
+    }
+    const messages: ChatMessage[] = [{ role: 'system', content: Prompts.taskDialog(this.personality) }]
+    const ctx: string = input.planningContext !== undefined ? input.planningContext : ''
+    if (ctx.length > 0) {
+      messages.push({ role: 'system', content: `【用户的备考背景】\n${ctx}` })
+    }
+    const history: string[] = input.history !== undefined ? input.history : []
+    for (let i = 0; i < history.length; i++) {
+      messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: history[i] })
+    }
+    messages.push({ role: 'user', content: input.userInput })
+
+    const out: StreamOutcome = await this.streamJson(messages, BridgeConfig.MODEL_TEXT, 0.75, 1100,
+      BridgeConfig.timeoutForScene('task_dialog'), 'reply', onDelta)
+    if (!out.ok) {
+      return null
+    }
+    let raw: RawDialog | null = null
+    try {
+      raw = JSON.parse(out.raw) as RawDialog
+    } catch (e) {
+      raw = null
+    }
+    if (raw === null) {
+      // JSON 没收全：把已流出的文本当作对话回复，不出任务（避免半截 JSON）
+      if (out.visible.length === 0) {
+        return null
+      }
+      const partial: PlanningDialogResult = { reply: out.visible, done: false, tasks: [] }
+      return partial
+    }
+    const reply: string = (raw.reply !== undefined && raw.reply.length > 0) ? raw.reply : out.visible
+    if (reply.length === 0) {
+      return null
+    }
+    const done: boolean = raw.done === true
+    const result: PlanningDialogResult = {
+      reply: reply,
+      done: done,
+      tasks: done ? GatewayAIService.toPlanTasks(raw.tasks) : []
+    }
+    return result
+  }
+
+  /**
+   * SSE 流式调用。
+   *
+   * 模型仍按 JSON 模式输出，但 SSE 是一段段吐 JSON 文本的；
+   * 直接把裸 JSON 流给用户看会很难看，所以这里**实时从半截 JSON 里抽取目标字段**
+   * （reply / answer）再回调出去 —— 既保留 JSON 结构化与 Schema 校验，又能逐字上屏。
+   */
+  private async streamJson(
+    messages: ChatMessage[],
+    model: string,
+    temperature: number,
+    maxTokens: number,
+    timeoutMs: number,
+    visibleField: string,
+    onDelta: (t: string) => void
+  ): Promise<StreamOutcome> {
+    const outcome: StreamOutcome = { visible: '', raw: '', ok: false }
+    const body: GatewayStreamBody = {
+      model: model,
+      messages: messages,
+      temperature: temperature,
+      max_tokens: maxTokens,
+      stream: true
+    }
+    const headers: GatewayHeaders = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${BridgeConfig.AI_API_KEY}`
+    }
+    const options: http.HttpRequestOptions = {
+      method: http.RequestMethod.POST,
+      header: headers,
+      extraData: JSON.stringify(body),
+      connectTimeout: timeoutMs,
+      readTimeout: timeoutMs
+    }
+
+    const request = http.createHttp()
+    // 字节先攒着，只解码到最后一个换行 —— 否则多字节汉字会被从中间截断成乱码
+    let bytes: number[] = []
+    let lineBuf = ''
+    let raw = ''
+    let emitted = 0
+
+    const handleLine = (line: string): void => {
+      if (!line.startsWith('data:')) {
+        return
+      }
+      const payload = line.substring(5).trim()
+      if (payload.length === 0 || payload === '[DONE]') {
+        return
+      }
+      const delta = GatewayAIService.extractDelta(payload)
+      if (delta.length === 0) {
+        return
+      }
+      raw += delta
+      const visible = GatewayAIService.partialField(raw, visibleField)
+      if (visible.length > emitted) {
+        onDelta(visible.substring(emitted))
+        emitted = visible.length
+      }
+    }
+
+    const drainLines = (): void => {
+      let idx = lineBuf.indexOf('\n')
+      while (idx >= 0) {
+        const line = lineBuf.substring(0, idx).trim()
+        lineBuf = lineBuf.substring(idx + 1)
+        handleLine(line)
+        idx = lineBuf.indexOf('\n')
+      }
+    }
+
+    const drainBytes = (): void => {
+      let lastNl = -1
+      for (let i = bytes.length - 1; i >= 0; i--) {
+        if (bytes[i] === 10) {
+          lastNl = i
+          break
+        }
+      }
+      if (lastNl < 0) {
+        return
+      }
+      const head = new Uint8Array(bytes.slice(0, lastNl + 1))
+      bytes = bytes.slice(lastNl + 1)
+      lineBuf += util.TextDecoder.create('utf-8').decodeToString(head)
+      drainLines()
+    }
+
+    try {
+      request.on('dataReceive', (data: ArrayBuffer) => {
+        const u8 = new Uint8Array(data)
+        for (let i = 0; i < u8.length; i++) {
+          bytes.push(u8[i])
+        }
+        drainBytes()
+      })
+      await request.request(`${BridgeConfig.AI_API_BASE_URL}/chat/completions`, options)
+      // 收尾：流已结束，剩下不足一行的字节也可以安全解码
+      if (bytes.length > 0) {
+        lineBuf += util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(bytes))
+        bytes = []
+      }
+      drainLines()
+      if (lineBuf.trim().length > 0) {
+        handleLine(lineBuf.trim())
+        lineBuf = ''
+      }
+      outcome.raw = raw
+      outcome.visible = GatewayAIService.partialField(raw, visibleField)
+      outcome.ok = raw.length > 0
+      return outcome
+    } catch (e) {
+      // 已经吐出去的内容仍然可用（调用方据此决定要不要回退）
+      outcome.raw = raw
+      outcome.visible = GatewayAIService.partialField(raw, visibleField)
+      outcome.ok = raw.length > 0
+      return outcome
+    } finally {
+      request.off('dataReceive')
+      request.destroy()
+    }
+  }
+
+  /** 从 SSE data 分片里取出增量文本 */
+  private static extractDelta(payload: string): string {
+    let obj: StreamChunk | null = null
+    try {
+      obj = JSON.parse(payload) as StreamChunk
+    } catch (e) {
+      obj = null
+    }
+    if (obj === null) {
+      return ''
+    }
+    const choices = obj.choices
+    if (choices === undefined || choices.length === 0) {
+      return ''
+    }
+    const delta = choices[0].delta
+    if (delta === undefined || delta.content === undefined) {
+      return ''
+    }
+    return delta.content
+  }
+
+  /**
+   * 从**还没收完**的 JSON 文本里，尽量取出某个字符串字段当前的值。
+   * 用于把流式 JSON 变成可读文本；转义序列未收全时安全停下。
+   */
+  private static partialField(json: string, field: string): string {
+    const key = `"${field}"`
+    const at = json.indexOf(key)
+    if (at < 0) {
+      return ''
+    }
+    let i = at + key.length
+    while (i < json.length && json.charAt(i) !== ':') {
+      i++
+    }
+    i++
+    while (i < json.length && (json.charAt(i) === ' ' || json.charAt(i) === '\t')) {
+      i++
+    }
+    if (json.charAt(i) !== '"') {
+      return ''
+    }
+    i++
+    let out = ''
+    while (i < json.length) {
+      const c = json.charAt(i)
+      if (c === '\\') {
+        if (i + 1 >= json.length) {
+          break
+        }
+        const n = json.charAt(i + 1)
+        if (n === 'n') {
+          out += '\n'
+        } else if (n === 't') {
+          out += '\t'
+        } else if (n === 'r') {
+          out += ''
+        } else if (n === '"') {
+          out += '"'
+        } else if (n === '\\') {
+          out += '\\'
+        } else {
+          out += n
+        }
+        i += 2
+        continue
+      }
+      if (c === '"') {
+        break
+      }
+      out += c
+      i++
+    }
+    return out
   }
 
   /**

@@ -47,6 +47,10 @@ export struct StudyReport {
   @State levels: number[] = []
   @State states: string[] = []
   @State minutes: number[] = []
+  /** 本次专注得分 = 100 − 走神占比（取整，夹 0~100） */
+  @State score: number = 0
+  /** 走神时间占总学习时间的百分比（取整） */
+  @State distractRatio: number = 0
   /** 本次会话里**真正算干扰**的观察记录（看手机 / 离开 / 趴桌） */
   @State interference: ObservationRecord[] = []
   /** 云端确认为"在做题/看书"的次数 —— 属于学习确认，不该混进干扰事件 */
@@ -100,6 +104,20 @@ export struct StudyReport {
     this.wallStr = TimeUtils.formatDuration(Metrics.wallClock(session))
     this.netStr = TimeUtils.formatDuration(Metrics.netFocusSec(session))
     this.distractStr = TimeUtils.formatDuration(Metrics.distractionSec(session))
+    // 本次专注得分：走神占比越低分越高；无数据时按满分处理（避免显示 0 分误导）
+    const totalStudy: number = Metrics.totalStudySec(session)
+    const ratio: number = totalStudy > 0
+      ? Math.round(Metrics.distractionSec(session) / totalStudy * 100)
+      : 0
+    this.distractRatio = ratio
+    let sc: number = 100 - ratio
+    if (sc < 0) {
+      sc = 0
+    }
+    if (sc > 100) {
+      sc = 100
+    }
+    this.score = sc
     this.qaStr = TimeUtils.formatDuration(Metrics.qaSec(session))
     this.breakStr = TimeUtils.formatDuration(Metrics.restSec(session))
     this.pauseStr = TimeUtils.formatDuration(Metrics.pauseSec(session))
@@ -203,7 +221,56 @@ export struct StudyReport {
           .width('100%')
           .alignItems(HorizontalAlign.Start)
 
-          // ① 专注数据总览（口径自解释，可验算）
+          // ① 专注曲线（置顶）+ 本次专注得分
+          Column() {
+            Row() {
+              Column() {
+                Text('本次专注得分')
+                  .fontSize(13)
+                  .fontColor(Colors.TEXT_SECONDARY)
+                Row() {
+                  Text(`${this.score}`)
+                    .fontSize(38)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(Colors.PRIMARY_DARK)
+                  Text('分')
+                    .fontSize(13)
+                    .fontColor(Colors.TEXT_SECONDARY)
+                    .margin({ left: 3, bottom: 6 })
+                }
+                .alignItems(VerticalAlign.Bottom)
+                .margin({ top: 4 })
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+
+              Column() {
+                Text(`${this.distractRatio}%`)
+                  .fontSize(20)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.distractRatio > 30 ? Colors.RED : Colors.TEXT_PRIMARY)
+                Text('走神占比')
+                  .fontSize(12)
+                  .fontColor(Colors.TEXT_SECONDARY)
+                  .margin({ top: 4 })
+              }
+              .alignItems(HorizontalAlign.Center)
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
+
+            FocusChart({ levels: this.levels, states: this.states, minutes: this.minutes })
+              .margin({ top: 12 })
+
+            Text(`得分 = 100 − 走神占比（走神 ${this.distractStr} ÷ 总学习 ${this.totalStr}）`)
+              .fontSize(11)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .width('100%')
+              .margin({ top: 10 })
+          }
+          .reportCard()
+
+          // ② 专注数据总览（口径自解释，可验算）
           Column() {
             this.sectionTitle('专注数据总览')
             Row({ space: 12 }) {
@@ -270,13 +337,6 @@ export struct StudyReport {
                 .margin({ top: 8 })
               }
             }
-          }
-          .reportCard()
-
-          // ③ 专注曲线
-          Column() {
-            this.sectionTitle('专注曲线')
-            FocusChart({ levels: this.levels, states: this.states, minutes: this.minutes })
           }
           .reportCard()
 

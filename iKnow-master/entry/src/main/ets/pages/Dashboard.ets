@@ -34,7 +34,6 @@ export struct Dashboard {
   @State allTotal: number = 0
   @State pending: Task[] = []
   @State showPending: boolean = false
-  private weekLabels: string[] = ['一', '二', '三', '四', '五', '六', '日']
 
   aboutToAppear(): void {
     this.refresh()
@@ -81,8 +80,50 @@ export struct Dashboard {
     this.pending = pend
   }
 
-  /** 有会话在跑（含被返回键留在后台的）时，首页给出继续入口 */
-  private resumeFocus(): void {
+  /**
+   * 近 7 天柱状图的横轴标签：柱子是"6 天前 → 今天"的滚动窗口，
+   * 原来写死 ['一'…'日']，除非今天恰好是周日，否则"星期一"下面站的是星期三的数据。
+   */
+  private weekDateLabels(): string[] {
+    const out: string[] = []
+    const base = TimeUtils.dayStart(Date.now())
+    for (let day = 6; day >= 0; day--) {
+      out.push(TimeUtils.formatMonthDay(base - day * 24 * 3600 * 1000))
+    }
+    return out
+  }
+
+  /** 倒计时主数值：未设置或已过期都显示「—」，不再恒显示 0 天 */
+  private examDaysText(): string {
+    const g = AppStore.getInstance().getGoal()
+    if (g.targetDate <= 0) {
+      return '—'
+    }
+    return TimeUtils.daysUntil(g.targetDate, Date.now()) > 0 ? `${this.examDays}` : '—'
+  }
+
+  /** 倒计时副标签 */
+  private examDaysSub(): string {
+    const g = AppStore.getInstance().getGoal()
+    if (g.targetDate <= 0) {
+      return '未设日期'
+    }
+    return TimeUtils.daysUntil(g.targetDate, Date.now()) > 0 ? '天后开考' : '已过期'
+  }
+
+  /** 倒计时下方的一句说明（原来无论有没有日期都写"还有 N 天"） */
+  private examHint(): string {
+    const g = AppStore.getInstance().getGoal()
+    if (g.targetDate <= 0) {
+      return '还没有设置考试日期，去「我的 → 长期计划与目标」设置后倒计时才准确'
+    }
+    if (TimeUtils.daysUntil(g.targetDate, Date.now()) <= 0) {
+      return '考试日期已经过去，去「我的 → 长期计划与目标」更新'
+    }
+    return `距离 ${this.examType} 还有 ${this.examDays} 天，按节奏稳步推进`
+  }
+
+  /** 有会话在跑（含被返回键留在后台的）时，首页给出继续入口 */  private resumeFocus(): void {
     router.pushUrl({ url: 'pages/Focus' })
   }
 
@@ -260,11 +301,11 @@ export struct Dashboard {
               .layoutWeight(1)
 
               Column() {
-                Text(`${this.examDays}`)
+                Text(this.examDaysText())
                   .fontSize(34)
                   .fontWeight(FontWeight.Bold)
                   .fontColor(Colors.TEXT_PRIMARY)
-                Text('天后开考')
+                Text(this.examDaysSub())
                   .fontSize(12)
                   .fontColor(Colors.TEXT_SECONDARY)
               }
@@ -272,8 +313,7 @@ export struct Dashboard {
             }
             .width('100%')
 
-            // 倒计时进度条：按「已度过 / 总周期」展示，未设起始时只显示剩余天数
-            Text(`距离 ${this.examType} 还有 ${this.examDays} 天，按节奏稳步推进`)
+            Text(this.examHint())
               .fontSize(12)
               .fontColor(Colors.TEXT_TERTIARY)
               .margin({ top: 12 })
@@ -413,7 +453,7 @@ export struct Dashboard {
             .fontColor(Colors.TEXT_TERTIARY)
             .width('100%')
             .margin({ bottom: 10 })
-          BarChart({ values: this.weekTrend, labels: this.weekLabels })
+          BarChart({ values: this.weekTrend, labels: this.weekDateLabels() })
             .width('100%')
           Text(`本周累计净专注 ${TimeUtils.formatHMin(this.weekFocus)}`)
             .fontSize(13)

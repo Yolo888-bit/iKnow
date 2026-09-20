@@ -204,25 +204,36 @@ export struct StudyReport {
           .alignItems(HorizontalAlign.Start)
 
           // ① 专注数据总览（口径自解释，可验算）
+          // 统一 4 行 × 2 列的网格：原来是 2/2/2/3 混排，最后一行每格只有前几行一半宽，
+          // 值又是 20 号字，直接溢出到相邻卡片上。完成率并进「完成任务」格（同一件事的两个说法），
+          // 让 8 个指标刚好排满 8 格。
           Column() {
             this.sectionTitle('专注数据总览')
             Row({ space: 12 }) {
               this.stat('总学习时长', this.totalStr)
               this.stat('净专注时长', this.netStr)
             }
+            .width('100%')
+            .margin({ top: 12 })
             Row({ space: 12 }) {
               this.stat('净专注率', `${this.focusRate}%`)
-              this.stat('完成率', this.taskTotal > 0 ? `${this.completionRate}%` : '—')
+              this.stat('完成任务', this.taskTotal > 0
+                ? `${this.taskDone}/${this.taskTotal} · ${this.completionRate}%` : '本次未设定任务')
             }
+            .width('100%')
+            .margin({ top: 10 })
             Row({ space: 12 }) {
-              this.stat('完成任务', this.taskTotal > 0 ? `${this.taskDone} / ${this.taskTotal}` : '本次未设定任务')
               this.stat('AI 答疑', `${this.qaCount} 个问题`)
-            }
-            Row({ space: 12 }) {
               this.stat('分心', this.distractStr)
+            }
+            .width('100%')
+            .margin({ top: 10 })
+            Row({ space: 12 }) {
               this.stat('休息', this.breakStr)
               this.stat('暂停', this.pauseStr)
             }
+            .width('100%')
+            .margin({ top: 10 })
             Text(`总学习 = 墙钟 ${this.wallStr} − 休息 ${this.breakStr} − 暂停 ${this.pauseStr}`)
               .fontSize(12)
               .fontColor(Colors.TEXT_TERTIARY)
@@ -273,9 +284,9 @@ export struct StudyReport {
           }
           .reportCard()
 
-          // ③ 专注曲线
+          // ③ 专注状态时间轴（色带：横轴时间、颜色=状态；见 FocusChart 头部说明）
           Column() {
-            this.sectionTitle('专注曲线')
+            this.sectionTitle('专注状态时间轴')
             FocusChart({ levels: this.levels, states: this.states, minutes: this.minutes })
           }
           .reportCard()
@@ -289,6 +300,8 @@ export struct StudyReport {
                   Text(q.question)
                     .fontSize(14)
                     .fontColor(Colors.TEXT_PRIMARY)
+                    .maxLines(2)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
                   // 档案页就该能查到当时的答案：展开/收起，不再是点了没反应的死链
                   Text(this.expandedQ === q.id ? '收起答案 ▲' : '展开答案 ▼')
                     .fontSize(12)
@@ -483,10 +496,14 @@ export struct StudyReport {
       Text(label)
         .fontSize(12)
         .fontColor(Colors.TEXT_SECONDARY)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
       Text(value)
         .fontSize(20)
         .fontWeight(FontWeight.Medium)
         .fontColor(Colors.TEXT_PRIMARY)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
         .margin({ top: 6 })
     }
     .layoutWeight(1)
@@ -504,4 +521,6 @@ function reportCard() {
   .backgroundColor(Colors.CARD)
   .borderRadius(Radius.LG)
   .alignItems(HorizontalAlign.Start)
+  // 兜底：卡片内任何内容算宽了都不许画到相邻卡片上（此前没有这层保护，溢出会交叠）
+  .clip(true)
 }

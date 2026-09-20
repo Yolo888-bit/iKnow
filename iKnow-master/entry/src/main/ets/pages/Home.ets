@@ -79,7 +79,29 @@ export struct Home {
     if (this.examType.length === 0) {
       return `${this.displayName()}，先去「我的 → 长期计划与目标」定个目标吧`
     }
-    return `${this.displayName()} · 距离${this.examType}还有 ${this.examDays} 天`
+    const d = this.examDaysText()
+    if (d === '—') {
+      return `${this.displayName()} · ${this.examType}还没填考试日期`
+    }
+    return `${this.displayName()} · 距离${this.examType}还有 ${d} 天`
+  }
+
+  /** 倒计时主数值：未设置或已过期都显示「—」（TimeUtils.daysUntil 会把过去的时间夹到 0） */
+  private examDaysText(): string {
+    const g = AppStore.getInstance().getGoal()
+    if (g.targetDate <= 0) {
+      return '—'
+    }
+    return TimeUtils.daysUntil(g.targetDate, Date.now()) > 0 ? `${this.examDays}` : '—'
+  }
+
+  /** 倒计时副标签 */
+  private examDaysSub(): string {
+    const g = AppStore.getInstance().getGoal()
+    if (g.targetDate <= 0) {
+      return '未设日期'
+    }
+    return TimeUtils.daysUntil(g.targetDate, Date.now()) > 0 ? '天' : '已过期'
   }
 
   private cameraOn(): boolean {
@@ -280,11 +302,11 @@ export struct Home {
               .layoutWeight(1)
 
               Column() {
-                Text(`${this.examDays}`)
+                Text(this.examDaysText())
                   .fontSize(28)
                   .fontWeight(FontWeight.Bold)
                   .fontColor(Colors.TEXT_PRIMARY)
-                Text('天')
+                Text(this.examDaysSub())
                   .fontSize(12)
                   .fontColor(Colors.TEXT_SECONDARY)
               }

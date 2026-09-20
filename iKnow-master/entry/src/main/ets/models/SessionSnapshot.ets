@@ -8,6 +8,12 @@ export class SessionSnapshot {
   sessionId: string = ''
   /** 快照时间戳 */
   ts: number = 0
+  /**
+   * 会话开始时间（墙钟）。
+   * 必须随快照一起存：恢复会话时只还原计时累加器是不够的 —— 落库时 `start_time = 0`
+   * 会让"今天/本周/近 30 天"的按日聚合全部静默漏掉这次会话（`new Date(0)` = 1970）。
+   */
+  startTime: number = 0
   /** 累计总学习时长（秒） */
   totalSec: number = 0
   /** 累计净专注时长（秒） */

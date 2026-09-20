@@ -277,6 +277,21 @@ export class AppStore {
     this.currentPlan = tasks
   }
 
+  /**
+   * 规划确认即把任务落库。
+   *
+   * 原来规划结果只进内存 `currentPlan`，要等"结束一次专注"才写库 ——
+   * 于是首次专注结束前，工作台的「总体进度」「科目进度」恒为 0/0 + "还没有任何任务"，
+   * 用户会觉得这两个卡片坏了（或数据没依据）。落库后当场成立。
+   */
+  async persistPlan(tasks: Task[]): Promise<void> {
+    for (const t of tasks) {
+      await StorageService.getInstance().saveTask(t)
+    }
+    this.tasks = await StorageService.getInstance().loadTasks()
+    await this.refreshAggregates()
+  }
+
   addPlanTask(title: string, subject: string, minutes: number): void {
     const t = new Task()
     t.id = IdUtils.uuid()
@@ -396,7 +411,9 @@ export class AppStore {
     let todayNet = 0
     let todayStudy = 0
     let weekFocus = 0
-    const weekStart = TimeUtils.dayStart(now) - 6 * 24 * 3600 * 1000
+    // 「本周」= 自然周（周一 0 点起）。原来用的是"今天往前 6 天"的滚动窗口，
+    // 却挂着「本周累计」的标签 —— 名实不符。近 7 天的图表另有 computeWeekTrend。
+    const weekStart = TimeUtils.weekStart(now)
 
     for (const s of this.sessions) {
       if (TimeUtils.isSameDay(s.startTime, now)) {

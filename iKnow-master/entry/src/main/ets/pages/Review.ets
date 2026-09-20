@@ -86,6 +86,8 @@ export struct Review {
   private dimLabels: string[] = ['效率', '专注度', '稳定性', '执行力', '抗干扰']
   private chartSettings: RenderingContextSettings = new RenderingContextSettings(true)
   private lineCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.chartSettings)
+  /** Canvas 是否已就绪：数据重载后据此判断能不能立即重画（未就绪时重画会画到空 canvas 上） */
+  private lineReady: boolean = false
   /** 会话结束后 DATA_VERSION 会自增：据此重取数据，避免复盘 Tab 一直显示旧值 */
   @StorageProp(StorageKey.DATA_VERSION) @Watch('reload') dataVersion: number = 0
 
@@ -149,6 +151,12 @@ export struct Review {
     if (this.mode === 1) {
       this.loadDay()
     }
+
+    // Canvas 是命令式绘制：数据重载后 onReady 不会再触发，必须显式重画，
+    // 否则会出现"同屏数值卡已是新值、曲线还停在旧值"（数据一刷新，图和数字就对不上）
+    if (this.lineReady) {
+      this.onLineChartReady()
+    }
   }
 
   /** 目标一行：考试 + 倒计时 + 科目（与长期计划合并后一起展示，空则如实说明） */
@@ -195,10 +203,15 @@ export struct Review {
     return `范围：近 30 天 · 库里共 ${list.length} 次专注 · 覆盖 ${days.length} 天 · 最早一次 ${e.getMonth() + 1}月${e.getDate()}日（${Math.round(earliestDuration / 60)} 分钟）`
   }
 
+  /**
+   * 推进最慢的科目（按完成率）。
+   * 没有任何科目数据时返回空串 —— 原来返回硬编码的『数学类任务』，
+   * 会被喂进 AI 长期分析，凭空生成一条"数学类任务推进得最慢"的结论。
+   */
   private hardestSubject(): string {
     const subs = AppStore.getInstance().getDashboard().subjectProgress
     if (subs.length === 0) {
-      return '数学类任务'
+      return ''
     }
     let hardest = subs[0]
     for (const s of subs) {
@@ -472,6 +485,14 @@ export struct Review {
     c.quadraticCurveTo(pts[n - 1][0], pts[n - 1][1], pts[n - 1][0], pts[n - 1][1])
   }
 
+  /**
+   * Canvas 的 `font` 单位是**物理 px**（而画布坐标是 vp）—— 直接写 `13px` 在 3x 屏上只有约 4vp，
+   * 这就是"横纵坐标小到看不见"的根因。统一按 vp 换算后再设置字号。
+   */
+  private lineFont(vpSize: number): string {
+    return `${vp2px(vpSize)}px sans-serif`
+  }
+
   private onLineChartReady(): void {
     const c = this.lineCtx
     const w = c.width
@@ -483,22 +504,47 @@ export struct Review {
       return
     }
 
-    const padLeft = 8
-    const padRight = 8
-    const padTop = 16
+    const padLeft = 34
+    const padRight = 10
+    // padTop 留出 28：上面要放「分钟」单位（11px）与最高刻度（12px），
+    // 字号调大之后 16 会把两者挤在一起
+    const padTop = 28
     const padBottom = 24
     const chartW = w - padLeft - padRight
     const chartH = h - padTop - padBottom
     const baseY = padTop + chartH
 
-    let maxV = 1
+    // 量程固定化：原来取自身最大值 —— 只要有一天非 0 就顶到满格，
+    // 无法从高度判断"这天究竟学了多少"。改为 60 分钟起步、按 30 向上取整，并标出刻度。
+    let peak = 0
     for (const v of values) {
-      if (v > maxV) {
-        maxV = v
+      if (v > peak) {
+        peak = v
       }
     }
+    const maxV = Math.max(60, Math.ceil(peak / 30) * 30)
     const n = values.length
     const stepX = n > 1 ? chartW / (n - 1) : chartW
+
+    // 纵轴刻度（分钟）+ 网格线：没有刻度时曲线的高度是没有含义的
+    c.font = this.lineFont(11)
+    c.textAlign = 'right'
+    const ticks: number[] = [maxV, maxV / 2, 0]
+    for (const t of ticks) {
+      const ty = padTop + chartH - (t / maxV) * chartH
+      c.strokeStyle = Colors.LINE
+      c.lineWidth = 1
+      c.beginPath()
+      c.moveTo(padLeft, ty)
+      c.lineTo(w - padRight, ty)
+      c.stroke()
+      c.fillStyle = Colors.TEXT_TERTIARY
+      c.fillText(`${Math.round(t)}`, padLeft - 6, ty + 4)
+    }
+    c.textAlign = 'left'
+    c.fillStyle = Colors.TEXT_TERTIARY
+    c.font = this.lineFont(10)
+    c.fillText('分钟', padLeft - 32, 14)
 
     const points: number[][] = []
     for (let i = 0; i < n; i++) {
@@ -563,13 +609,14 @@ export struct Review {
       c.stroke()
     }
 
-    // 首尾标签
+    // 首尾标签：整张图最重要的两个参照点（窗口起点与今天），字号要比刻度再大一档，
+    // 并用更深的颜色和刻度区分开
     c.fillStyle = Colors.TEXT_SECONDARY
-    c.font = '10px sans-serif'
+    c.font = this.lineFont(13)
     c.textAlign = 'left'
-    c.fillText('30天前', padLeft, h - 6)
+    c.fillText('30天前', padLeft, h - 7)
     c.textAlign = 'right'
-    c.fillText('今天', w - padRight, h - 6)
+    c.fillText('今天', w - padRight, h - 7)
   }
 
   /** 曲线触摸：按 x 定位最近的数据点（点按显示点、左右拖拽数值实时变化） */
@@ -793,9 +840,10 @@ export struct Review {
   private curveCaption(): string {
     const n = this.day.minutes.length
     const span = n > 1 ? this.day.minutes[n - 1] - this.day.minutes[0] : 0
-    const base = `纵轴：状态等级（绿 92 / 黄 62 / 红 30 三档，不是连续分数）· 横轴：当天累计学习 0–${span} 分钟`
+    // 图已改为状态时间轴（色带）：横轴是时间，颜色只有三档含义，不再有"纵轴等级"
+    const base = `横轴：当天累计学习 0–${span} 分钟；色带按状态分段涂色（绿=专注 / 黄=轻度分心 / 红=分心）`
     if (this.day.sessionCount > 1) {
-      return `${base}；当天共 ${this.day.sessionCount} 次专注，虚线为两次之间的分界`
+      return `${base}；当天共 ${this.day.sessionCount} 次专注，白线为两次之间的分界`
     }
     return base
   }
@@ -847,7 +895,8 @@ export struct Review {
             levels: this.day.levels,
             states: this.day.states,
             minutes: this.day.minutes,
-            separators: this.day.separators
+            separators: this.day.separators,
+            showLegend: false
           })
             .width('100%')
             .height(140)
@@ -970,6 +1019,7 @@ export struct Review {
           .width('100%')
           .height(150)
           .onReady(() => {
+            this.lineReady = true
             this.onLineChartReady()
           })
           .onTouch((e: TouchEvent) => {
@@ -1068,6 +1118,8 @@ export struct Review {
                 Text(`${item.subject}：${item.content}`)
                   .fontSize(13)
                   .fontColor(Colors.TEXT_PRIMARY)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
               }
               .alignItems(HorizontalAlign.Start)
               .layoutWeight(1)
@@ -1075,13 +1127,16 @@ export struct Review {
               Text(`${item.count}次`)
                 .fontSize(13)
                 .fontColor(Colors.TEXT_SECONDARY)
+                .width(38)
+                .textAlign(TextAlign.End)
             }
             .width('100%')
             .padding({ top: 6, bottom: 6 })
           }, (item: PracticeSummaryItem, index: number) => `${item.subject}_${index}`)
 
-          // 原先这里是「全科稳步提升 / 数学进步明显」两个写死的标签，与用户数据无关
-          Row({ space: Spacing.SM }) {
+          // 原先这里是「全科稳步提升 / 数学进步明显」两个写死的标签，与用户数据无关。
+          // 两个标签改成竖排：卡片内容宽约 124vp，并排需要约 200vp，会直接画到相邻卡片上。
+          Column({ space: 6 }) {
             Text(`累计完成 ${this.summary.completedTasks} 个任务`)
               .fontSize(11)
               .fontColor(Colors.PRIMARY_DARK)
@@ -1095,6 +1150,7 @@ export struct Review {
               .backgroundColor(Colors.PRIMARY_SOFT)
               .borderRadius(10)
           }
+          .alignItems(HorizontalAlign.Start)
           .margin({ top: 6 })
         } else {
           Text('暂无练习记录')
@@ -1110,6 +1166,8 @@ export struct Review {
       .backgroundColor(Colors.CARD)
       .borderRadius(Radius.LG)
       .alignItems(HorizontalAlign.Start)
+      // 兜底：窄卡片里任何内容算宽了都不许画出去（此前没有这层保护，溢出会压到相邻卡片上）
+      .clip(true)
     }
     .width('100%')
     .alignItems(VerticalAlign.Top)

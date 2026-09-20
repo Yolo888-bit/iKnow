@@ -37,11 +37,32 @@ export class TimeUtils {
     return `${Math.round(minutes)} min`
   }
 
+  /**
+   * 时间戳 → "9/20"。
+   * 给「近 7 天」这类**滚动窗口**的横轴用：柱子是从 6 天前排到今天，
+   * 用固定的「一~日」星期标签会让星期二下面站着星期五的数据。
+   */
+  static formatMonthDay(timestamp: number): string {
+    const d = new Date(timestamp)
+    return `${d.getMonth() + 1}/${d.getDate()}`
+  }
+
   /** 当天 0 点时间戳 */
   static dayStart(timestamp: number): number {
     const d = new Date(timestamp)
     d.setHours(0, 0, 0, 0)
     return d.getTime()
+  }
+
+  /**
+   * 本周起点（自然周，周一 0 点）。
+   * 「本周累计」用它；「近 7 天」用 dayStart(now) − 6 天。两者是不同的口径，不要混用。
+   */
+  static weekStart(timestamp: number): number {
+    const d = new Date(timestamp)
+    // getDay(): 0=周日 … 6=周六 → 换算成"距离本周一过了几天"
+    const offset = (d.getDay() + 6) % 7
+    return TimeUtils.dayStart(timestamp) - offset * 24 * 3600 * 1000
   }
 
   /** 是否同一天 */

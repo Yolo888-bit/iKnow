@@ -26,6 +26,14 @@ export struct RadarChart {
     }
   }
 
+  /**
+   * Canvas 的 font 单位是**物理 px**（画布坐标是 vp）：原来写 `13px` 在 3x 屏上只有约 4vp，
+   * 等于五个维度的名字与数值一直没显示出来。统一按 vp 换算。
+   */
+  private fontOf(vpSize: number): string {
+    return `${vp2px(vpSize)}px sans-serif`
+  }
+
   private angle(i: number, n: number): number {
     return -Math.PI / 2 + i * 2 * Math.PI / n
   }
@@ -38,7 +46,8 @@ export struct RadarChart {
     }
     const cx = this.chartSize / 2
     const cy = this.chartSize / 2
-    const r = this.chartSize / 2 - 30
+    // 半径留出 40：标签要放到顶点外侧，字号变得可读之后必须给它们留位置（原来留 30 会画到画布外）
+    const r = this.chartSize / 2 - 40
     c.clearRect(0, 0, this.chartSize, this.chartSize)
 
     // 网格
@@ -102,16 +111,18 @@ export struct RadarChart {
       c.fill()
     }
 
-    // 标签
+    // 标签：名字与数值分两行，并按顶点在左右哪一侧决定对齐方式 ——
+    // 一行写「抗干扰 100」在 280vp 宽的画布上会被裁掉
     c.fillStyle = Colors.TEXT_SECONDARY
-    c.font = '13px sans-serif'
-    c.textAlign = 'center'
+    c.font = this.fontOf(11)
     for (let i = 0; i < n; i++) {
       const ang = this.angle(i, n)
-      const lx = cx + (r + 20) * Math.cos(ang)
-      const ly = cy + (r + 20) * Math.sin(ang)
-      const value = `${this.labels[i]} ${Math.round(this.values[i])}`
-      c.fillText(value, lx, ly + 4)
+      const cosv = Math.cos(ang)
+      const lx = cx + (r + 8) * cosv
+      const ly = cy + (r + 8) * Math.sin(ang)
+      c.textAlign = cosv > 0.2 ? 'left' : (cosv < -0.2 ? 'right' : 'center')
+      c.fillText(this.labels[i], lx, ly)
+      c.fillText(`${Math.round(this.values[i])}`, lx, ly + 14)
     }
   }
 }

@@ -297,8 +297,8 @@ export class FocusController {
     // 手表事件驱动（复赛为合成信号）：产出"状态变化待确认"事件
     this.watchEvents = []
     this.observations = []
-    // 时基取"本链开始拉起的这一刻"：恢复会话时 session.startTime 没有快照可还原（= 0），
-    // 用 0 会让基线硬超时被瞬间判定为已过；而引擎的样本缓冲本来就是从此刻重新累积的
+    // 时基取"本链开始拉起的这一刻"：引擎的样本缓冲是从此刻重新累积的，用 0（或会话的真实
+    // 起始时间）都会让基线硬超时被瞬间判定为已过。会话的 startTime 是给复盘统计用的，与此无关。
     WatchEventEngine.getInstance().start(this.session.id, Date.now(),
       (e: WatchEvent) => {
         this.onWatchEvent(e)
@@ -916,6 +916,11 @@ export class FocusController {
     this.session.id = snap.sessionId
     this.session.status = SessionStatus.RUNNING
     this.session.perceptionMode = snap.perceptionMode
+    // 恢复起始时间：快照里带上就还原它；旧快照没有这个字段（= 0）时按「现在 − 已计时长」反推，
+    // 绝不能留 0 —— 那会让这次会话永远不计入"今天"
+    this.session.startTime = snap.startTime > 0
+      ? snap.startTime
+      : Date.now() - Math.floor(snap.totalSec) * 1000
     // 快照里的感知模式可能已经过期（恢复期间撤销了授权）：以当前授权为准，
     // 否则界面会显示「感知中」而实际不抓拍
     this.perceptionMode = PermissionService.getInstance().snapshot().camera
@@ -959,6 +964,12 @@ export class FocusController {
     this.paused = false
     this.breakStartedAt = 0
     this.session.endTime = Date.now()
+    // 兜底：起始时间缺失（旧快照恢复、异常路径）时按「结束时间 − 总学习时长」反推。
+    // 留 0 会让这次会话在按日聚合里静默消失（今日/本周/近 30 天/时段归属全都漏），
+    // 相比"起始时间差几十秒"，这是更严重的问题。
+    if (this.session.startTime <= 0) {
+      this.session.startTime = Math.max(0, this.session.endTime - Math.floor(this.totalSec) * 1000)
+    }
     this.session.totalDuration = Math.floor(this.totalSec)
     this.session.focusDuration = Math.floor(this.focusSec)
     this.session.distractionDuration = Math.floor(this.distractionSec)
@@ -1041,6 +1052,8 @@ export class FocusController {
     const snap = new SessionSnapshot()
     snap.sessionId = this.session.id
     snap.ts = Date.now()
+    // 起始时间必须随快照走，否则恢复后落库 start_time = 0 → 今日/本周/30 天全都漏记这一次
+    snap.startTime = this.session.startTime
     snap.totalSec = Math.floor(this.totalSec)
     snap.focusSec = Math.floor(this.focusSec)
     snap.distractionSec = Math.floor(this.distractionSec)

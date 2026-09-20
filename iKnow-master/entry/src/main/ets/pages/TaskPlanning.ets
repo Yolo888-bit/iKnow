@@ -143,8 +143,9 @@ export struct TaskPlanning {
       this.applyPlan(got)
       return
     }
-    // 兜底：聊满 4 轮还没出计划，就按已收集的信息直接生成
-    if (this.turns >= 4) {
+    // 兜底：已经追问过一轮（第 2 轮）还没出计划，就按已收集的信息直接生成。
+    // 原来是 4 轮，用户要连答 4 个问题才看到计划 —— 提示词已改为「最多追问 1 轮」，这里对齐。
+    if (this.turns >= 2) {
       await this.generatePlan()
     }
   }
@@ -373,6 +374,12 @@ export struct TaskPlanning {
       }
     }
     AppStore.getInstance().setCurrentPlan(selected)
+    // 规划确认即落库：否则「总体进度 / 科目进度」要等第一次专注结束才有数据（恒 0/0）
+    try {
+      await AppStore.getInstance().persistPlan(selected)
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Planning', '任务落库失败，仍继续开始专注：%{public}s', e.message)
+    }
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
     router.pushUrl({ url: 'pages/Focus' })
   }

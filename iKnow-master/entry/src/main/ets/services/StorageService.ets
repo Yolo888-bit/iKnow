@@ -101,7 +101,7 @@ export class StorageService {
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS session_snapshot (
       session_id TEXT, ts INTEGER, total_sec INTEGER, focus_sec INTEGER,
       distraction_sec INTEGER, qa_sec INTEGER, break_sec INTEGER,
-      current_task_id TEXT, state TEXT, perception_mode TEXT,
+      current_task_id TEXT, state TEXT, perception_mode TEXT, start_time INTEGER,
       PRIMARY KEY(session_id, ts))`)
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS intervention_event (
       id TEXT PRIMARY KEY, session_id TEXT, ts INTEGER, level TEXT, channel TEXT,
@@ -138,7 +138,8 @@ export class StorageService {
       'ALTER TABLE focus_profile ADD COLUMN sample_count INTEGER',
       'ALTER TABLE focus_profile ADD COLUMN recent_concentrations TEXT',
       'ALTER TABLE focus_profile ADD COLUMN recent_distraction_rates TEXT',
-      'ALTER TABLE question ADD COLUMN user_id TEXT'
+      'ALTER TABLE question ADD COLUMN user_id TEXT',
+      'ALTER TABLE session_snapshot ADD COLUMN start_time INTEGER'
     ]
     for (const sql of alters) {
       try {
@@ -655,7 +656,8 @@ export class StorageService {
       'break_sec': snap.breakSec,
       'current_task_id': snap.currentTaskId,
       'state': snap.state,
-      'perception_mode': snap.perceptionMode
+      'perception_mode': snap.perceptionMode,
+      'start_time': snap.startTime
     }
     await this.store.insert('session_snapshot', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE)
   }
@@ -677,6 +679,7 @@ export class StorageService {
       s.currentTaskId = this.getString(rs, 'current_task_id')
       s.state = this.getString(rs, 'state') || 'FOCUSED'
       s.perceptionMode = this.getString(rs, 'perception_mode') || 'PERCEPTION_FULL'
+      s.startTime = this.getNum(rs, 'start_time')
       list.push(s)
     }
     rs.close()

@@ -14,7 +14,7 @@ export struct FocusProfile {
   @State profile: Profile = new Profile()
   @State dimValues: number[] = []
   @State trend: number[] = []
-  @State hardest: string = '数学类任务'
+  @State hardest: string = ''
   private dimLabels: string[] = ['效率', '专注度', '稳定性', '执行力', '抗干扰']
 
   aboutToAppear(): void {
@@ -29,10 +29,11 @@ export struct FocusProfile {
     this.hardest = this.hardestSubject()
   }
 
+  /** 推进最慢的科目；没有科目数据时返回空串（原来返回硬编码的『数学类任务』= 凭空生成结论） */
   private hardestSubject(): string {
     const subs = AppStore.getInstance().getDashboard().subjectProgress
     if (subs.length === 0) {
-      return '数学类任务'
+      return ''
     }
     let hardest = subs[0]
     for (const s of subs) {
@@ -69,7 +70,7 @@ export struct FocusProfile {
             .margin({ bottom: 14 })
 
           this.profileRow('黄金专注时段', this.profile.bestFocusTime)
-          this.profileRow('最容易分心的任务', this.hardest)
+          this.profileRow('最容易分心的任务', this.hardest.length > 0 ? this.hardest : '暂无科目数据')
           this.profileRow('当前专注阈值', `${this.profile.focusThreshold} min`)
         }
         .profileCard()

@@ -19,6 +19,20 @@ import { StorageKey } from '../common/Constants'
 import { IdUtils } from '../utils/IdUtils'
 import { TimeUtils } from '../utils/TimeUtils'
 
+/** 计划任务的持久化结构（KV 里存 JSON，避免直接序列化 @Observed 对象） */
+interface PlanTaskJson {
+  id: string
+  title: string
+  subject: string
+  estimatedDuration: number
+  actualDuration: number
+  status: string
+  done: boolean
+  sortOrder: number
+  sessionId: string
+  createdAt: number
+}
+
 /**
  * AppStore —— 单一事实源（Vuex 风格）
  * 所有读写都经过这里，并同步到 StorageService 持久化 + AppStorage 响应式。
@@ -84,6 +98,8 @@ export class AppStore {
     if (this.user.nickname.length > 0) {
       AppStorage.setOrCreate<string>(StorageKey.USER_NICKNAME, this.user.nickname)
     }
+    // 恢复上次的计划（含勾选进度），否则重启后「今日任务」是空的
+    await this.restorePlan()
     // PRD FR-15：人格必须生效 → 启动即把持久化人格同步给 AI 层
     AIService.getInstance().setPersonality(this.user.aiPersonality)
     await this.refreshAggregates()
@@ -250,21 +266,35 @@ export class AppStore {
     let target: Task | null = null
     for (const t of this.tasks) {
       if (t.id === id) {
-        t.done = !t.done
-        t.status = t.done ? TaskStatus.DONE : TaskStatus.TODO
         target = t
       }
     }
-    // 今日常用的「当前计划」里若有同一条，同步勾选状态，避免两处不一致
-    for (const t of this.currentPlan) {
-      if (t.id === id) {
-        t.done = target !== null ? target.done : !t.done
-        t.status = t.done ? TaskStatus.DONE : TaskStatus.TODO
+    if (target === null) {
+      // 全量表里没有 → 说明这条只存在于「当前计划」（还没进过专注）。
+      // 勾上就算"做过一次"，纳入全量表，后续任务总结/进度才看得到。
+      for (const t of this.currentPlan) {
+        if (t.id === id) {
+          target = t
+        }
+      }
+      if (target !== null) {
+        this.tasks.push(target)
       }
     }
-    if (target !== null) {
-      await StorageService.getInstance().saveTask(target)
+    if (target === null) {
+      return
     }
+    target.done = !target.done
+    target.status = target.done ? TaskStatus.DONE : TaskStatus.TODO
+    // 「当前计划」里的同一条同步勾选状态，避免首页与工作台两处不一致
+    for (const t of this.currentPlan) {
+      if (t.id === id) {
+        t.done = target.done
+        t.status = target.status
+      }
+    }
+    await StorageService.getInstance().saveTask(target)
+    await this.savePlan()
     await this.refreshAggregates()
   }
 
@@ -275,6 +305,73 @@ export class AppStore {
 
   setCurrentPlan(tasks: Task[]): void {
     this.currentPlan = tasks
+    this.savePlan()
+  }
+
+  /** 把当前计划落库（KV 存 JSON）：重启 App 后「今日任务」与勾选进度都还在 */
+  async savePlan(): Promise<void> {
+    try {
+      const arr: PlanTaskJson[] = []
+      for (const t of this.currentPlan) {
+        arr.push({
+          id: t.id,
+          title: t.title,
+          subject: t.subject,
+          estimatedDuration: t.estimatedDuration,
+          actualDuration: t.actualDuration,
+          status: t.status,
+          done: t.done,
+          sortOrder: t.sortOrder,
+          sessionId: t.sessionId,
+          createdAt: t.createdAt
+        })
+      }
+      await StorageService.getInstance().saveKv(StorageKey.CURRENT_PLAN, JSON.stringify(arr))
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Store', '保存当前计划失败：%{public}s', e.message)
+    }
+  }
+
+  /** 启动时恢复当前计划；读不到就当没有计划（不编造） */
+  private async restorePlan(): Promise<void> {
+    try {
+      const raw = await StorageService.getInstance().loadKv(StorageKey.CURRENT_PLAN)
+      if (raw.length === 0) {
+        this.currentPlan = []
+        return
+      }
+      const arr = JSON.parse(raw) as PlanTaskJson[]
+      const list: Task[] = []
+      for (const j of arr) {
+        const t = new Task()
+        t.id = j.id
+        t.title = j.title
+        t.subject = j.subject
+        t.estimatedDuration = j.estimatedDuration
+        t.actualDuration = j.actualDuration
+        t.status = AppStore.statusOf(j.status)
+        t.done = j.done
+        t.sortOrder = j.sortOrder
+        t.sessionId = j.sessionId
+        t.createdAt = j.createdAt
+        list.push(t)
+      }
+      this.currentPlan = list
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Store', '恢复当前计划失败：%{public}s', e.message)
+      this.currentPlan = []
+    }
+  }
+
+  /** 字符串 → TaskStatus（避免直接强转枚举，坏数据也兜得住） */
+  private static statusOf(v: string): TaskStatus {
+    if (v === TaskStatus.DONE) {
+      return TaskStatus.DONE
+    }
+    if (v === TaskStatus.DOING) {
+      return TaskStatus.DOING
+    }
+    return TaskStatus.TODO
   }
 
   /**
@@ -301,6 +398,7 @@ export class AppStore {
     t.sortOrder = this.currentPlan.length
     t.createdAt = Date.now()
     this.currentPlan.push(t)
+    this.savePlan()
   }
 
   removePlanTask(id: string): void {
@@ -311,6 +409,7 @@ export class AppStore {
       }
     }
     this.currentPlan = next
+    this.savePlan()
   }
 
   togglePlanTask(id: string): void {
@@ -401,6 +500,8 @@ export class AppStore {
     } catch (e) {
       hilog.error(0x0000, 'iKnow.Store', '重读数据失败，仍继续重算统计：%{public}s', e.message)
     }
+    // 计划也要落库：专注中勾选/新增的任务，重启后必须还在
+    await this.savePlan()
     await this.refreshAggregates()
   }
 

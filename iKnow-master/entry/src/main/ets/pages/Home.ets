@@ -56,6 +56,26 @@ export struct Home {
     this.loadSlogan()
   }
 
+  /** 今日计划里已完成的数量（卡片右上角用） */
+  private planDone(): number {
+    let n = 0
+    for (const t of this.plan) {
+      if (t.done) {
+        n += 1
+      }
+    }
+    return n
+  }
+
+  /**
+   * 勾选 / 取消勾选今日任务。
+   * 走 AppStore.toggleTaskDone：落库 + 重算聚合 → 今日数据里的完成率、工作台进度都会跟着变。
+   */
+  private async toggleTask(id: string): Promise<void> {
+    await AppStore.getInstance().toggleTaskDone(id)
+    this.refreshPlan()
+  }
+
   /**
    * 标语：先用本地文案表立即上屏（不出现空白），
    * 再用大模型生成更贴合的替换；结果由 AIService 缓存，目标变更时失效。
@@ -322,7 +342,7 @@ export struct Home {
         .borderRadius(Radius.LG)
         .shadow({ radius: 18, color: Colors.SHADOW, offsetX: 0, offsetY: 6 })
 
-        // 今日任务
+        // 今日任务：与其他模块同款卡片（标题左右对齐一致），勾选即完成并同步进度
         Column() {
           Row() {
             Text('今日任务')
@@ -330,7 +350,9 @@ export struct Home {
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)
             Blank()
-            Text(`${this.plan.length === 0 ? '待规划' : this.plan.length + ' 项'}`)
+            Text(this.plan.length === 0
+              ? '待规划'
+              : `${this.planDone()} / ${this.plan.length} 已完成`)
               .fontSize(13)
               .fontColor(Colors.TEXT_SECONDARY)
           }
@@ -348,9 +370,8 @@ export struct Home {
                 .margin({ top: 6 })
             }
             .width('100%')
-            .padding(20)
-            .backgroundColor(Colors.CARD)
-            .borderRadius(Radius.MD)
+            .padding({ top: 8, bottom: 8 })
+            .alignItems(HorizontalAlign.Start)
           } else {
             Column({ space: Spacing.SM }) {
               ForEach(this.plan, (task: Task) => {
@@ -361,18 +382,19 @@ export struct Home {
                   done: task.done,
                   showCheckbox: true,
                   onToggle: () => {
-                    AppStore.getInstance().togglePlanTask(task.id)
-                    // 必须 slice 出新数组：赋同一个引用不会触发 @State 重绘（勾选状态不更新）
-                    this.plan = AppStore.getInstance().getCurrentPlan().slice()
-                    this.refreshPlan()
+                    this.toggleTask(task.id)
                   }
                 })
-              }, (task: Task) => task.id)
+              }, (task: Task) => `${task.id}_${task.done ? 1 : 0}`)
             }
             .width('100%')
           }
         }
         .width('100%')
+        .padding(20)
+        .backgroundColor(Colors.CARD)
+        .borderRadius(Radius.LG)
+        .shadow({ radius: 18, color: Colors.SHADOW, offsetX: 0, offsetY: 6 })
 
         // 今日数据
         Column() {

@@ -4,6 +4,7 @@ import { StorageKey } from '../common/Constants'
 import { NavParams } from '../models/NavParams'
 import { AppStore } from '../store/AppStore'
 import { StorageService } from '../services/StorageService'
+import { AuthService } from '../services/AuthService'
 import { AIPersonality } from '../models/Enums'
 import { UserAvatar } from '../components/UserAvatar'
 import { AvatarPicker } from '../components/AvatarPicker'
@@ -23,6 +24,9 @@ export struct Mine {
   @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
   @State personality: AIPersonality = AIPersonality.GENTLE
   @State showAvatarSheet: boolean = false
+  /** 改称呼的覆盖层 */
+  @State showRename: boolean = false
+  @State renameValue: string = ''
   /** 模拟模式（默认开：当前无真机/真表，靠合成信号驱动演示） */
   @State simMode: boolean = true
   private types: CompanionType[] = [
@@ -55,8 +59,45 @@ export struct Mine {
     promptAction.showToast({ message: '已切换考伴类型' })
   }
 
-  /** 重新设置称呼 / 目标考试与日期（本地体验模式，无账号可退出） */
-  private editProfile(): void {
+  /** 打开改称呼的覆盖层 */
+  private openRename(): void {
+    this.renameValue = this.nickname
+    this.showRename = true
+  }
+
+  private async saveNickname(): Promise<void> {
+    const name = this.renameValue.trim()
+    if (name.length === 0) {
+      promptAction.showToast({ message: '称呼不能为空' })
+      return
+    }
+    await AppStore.getInstance().saveUserNickname(name)
+    this.showRename = false
+    promptAction.showToast({ message: '称呼已更新' })
+  }
+
+  /** 退出登录：确认后回到登录页（本机学习数据保留，重新登录即可继续） */
+  private confirmLogout(): void {
+    AlertDialog.show({
+      title: '退出登录',
+      message: '退出后本机已保存的学习数据仍会保留，重新登录就能继续。',
+      primaryButton: {
+        value: '退出',
+        fontColor: Colors.RED,
+        action: () => {
+          this.doLogout()
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      }
+    })
+  }
+
+  private async doLogout(): Promise<void> {
+    await AuthService.getInstance().logout()
     router.replaceUrl({ url: 'pages/Login' })
   }
 
@@ -160,8 +201,21 @@ export struct Mine {
               .margin({ top: 4 })
           }
           .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
           .margin({ left: 16 })
+
+          // 改称呼挪到这里（底部按钮让给「退出登录」）
+          Text('修改称呼')
+            .fontSize(13)
+            .fontColor(Colors.PRIMARY_DARK)
+            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+            .backgroundColor(Colors.PRIMARY_SOFT)
+            .borderRadius(12)
+            .onClick(() => {
+              this.openRename()
+            })
         }
+        .alignItems(VerticalAlign.Center)
         .width('100%')
         .padding(20)
         .backgroundColor(Colors.CARD)
@@ -235,16 +289,16 @@ export struct Mine {
         }
         .width('100%')
 
-        // 只改称呼：目标与长期计划统一在「长期计划与目标」里配置
-        Button('编辑称呼')
+        // 底部主操作：退出登录（改称呼在右上角）
+        Button('退出登录')
           .width('100%')
           .height(48)
           .fontSize(15)
-          .fontColor(Colors.TEXT_SECONDARY)
+          .fontColor(Colors.RED)
           .backgroundColor(Colors.CARD)
           .borderRadius(Radius.MD)
           .onClick(() => {
-            this.editProfile()
+            this.confirmLogout()
           })
 
         Blank().height(20)
@@ -263,6 +317,78 @@ export struct Mine {
           this.showAvatarSheet = false
         }
       })
+
+      // 改称呼（自定义覆盖层，与头像选择器同一套做法：Tab 子页面里比 bindSheet 稳）
+      if (this.showRename) {
+        Stack({ alignContent: Alignment.Center }) {
+          // 遮罩：点空白处关闭。必须是面板的**兄弟节点**，
+          // 否则点在面板上的事件会冒泡到遮罩，一点输入框就把弹层关了
+          Column() {}
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showRename = false
+          })
+
+          Column() {
+            Text('修改称呼')
+              .fontSize(17)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .width('100%')
+            Text('App 里会用这个名字称呼你')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .width('100%')
+              .margin({ top: 6, bottom: 16 })
+
+            TextInput({ placeholder: '输入称呼', text: this.renameValue })
+              .fontSize(15)
+              .height(48)
+              .backgroundColor(Colors.BG)
+              .borderRadius(Radius.MD)
+              .maxLength(20)
+              .onChange((v: string) => {
+                this.renameValue = v
+              })
+              .onSubmit(() => {
+                this.saveNickname()
+              })
+
+            Row({ space: 10 }) {
+              Button('取消')
+                .layoutWeight(1)
+                .height(44)
+                .fontSize(15)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .backgroundColor(Colors.BG)
+                .borderRadius(Radius.MD)
+                .onClick(() => {
+                  this.showRename = false
+                })
+              Button('保存')
+                .layoutWeight(1)
+                .height(44)
+                .fontSize(15)
+                .fontColor(Color.White)
+                .backgroundColor(Colors.PRIMARY_STRONG)
+                .borderRadius(Radius.MD)
+                .onClick(() => {
+                  this.saveNickname()
+                })
+            }
+            .width('100%')
+            .margin({ top: 20 })
+          }
+          .width('82%')
+          .padding(24)
+          .backgroundColor(Colors.CARD)
+          .borderRadius(Radius.LG)
+        }
+        .width('100%')
+        .height('100%')
+      }
     }
     .width('100%')
     .height('100%')

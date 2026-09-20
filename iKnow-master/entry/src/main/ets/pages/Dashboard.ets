@@ -4,12 +4,11 @@ import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { TimeUtils } from '../utils/TimeUtils'
 import { BarChart } from '../components/BarChart'
-import { SubjectProgress } from '../models/Dashboard'
+import { SubjectTaskProgress } from '../models/Dashboard'
 import { Task } from '../models/Task'
 import { TaskStatus } from '../models/Enums'
 import { UserAvatar } from '../components/UserAvatar'
 import { AvatarPicker } from '../components/AvatarPicker'
-import { SimWorkbench } from '../components/SimWorkbench'
 
 /** 我的工作台 —— 学习全局看板 */
 @Component
@@ -24,7 +23,6 @@ export struct Dashboard {
   /** 1 = 会话进行中（响应式） */
   @StorageProp(StorageKey.FOCUS_RUNNING) focusRunningFlag: number = 0
   @State weekTrend: number[] = []
-  @State subjects: SubjectProgress[] = []
   @State examType: string = ''
   @State targetDateText: string = ''
   @State greeting: string = ''
@@ -34,6 +32,8 @@ export struct Dashboard {
   @State allTotal: number = 0
   @State pending: Task[] = []
   @State showPending: boolean = false
+  /** 任务进度：引导里填的每个科目一条（完成一次涨一点） */
+  @State taskProgress: SubjectTaskProgress[] = []
 
   aboutToAppear(): void {
     this.refresh()
@@ -51,7 +51,6 @@ export struct Dashboard {
     const store = AppStore.getInstance()
     const d = store.getDashboard()
     this.weekTrend = d.weekTrend
-    this.subjects = d.subjectProgress
 
     const goal = store.getGoal()
     this.examType = goal.examType
@@ -94,53 +93,87 @@ export struct Dashboard {
     this.allTotal = merged.length
     this.allDone = done
     this.pending = pend
+    this.taskProgress = this.buildTaskProgress(merged)
   }
 
   /**
-   * 近 7 天柱状图的横轴标签：柱子是"6 天前 → 今天"的滚动窗口，
-   * 原来写死 ['一'…'日']，除非今天恰好是周日，否则"星期一"下面站的是星期三的数据。
+   * 任务进度：**引导里填的每个科目 = 一条任务进度**，完成一次涨一点。
+   *
+   * 增量当前写死 70%~90%（用户还没定好幅度），按科目名做确定性散列，
+   * 保证同一科目每次算出来一样、不会渲染一次跳一个数；累计超过 100% 夹到 100。
+   * 之后要改成真实幅度，只动 `progressStep()` 一处即可。
    */
-  private weekDateLabels(): string[] {
-    const out: string[] = []
-    const base = TimeUtils.dayStart(Date.now())
-    for (let day = 6; day >= 0; day--) {
-      out.push(TimeUtils.formatMonthDay(base - day * 24 * 3600 * 1000))
+  private buildTaskProgress(tasks: Task[]): SubjectTaskProgress[] {
+    const subjects: string[] = []
+    // ① 主口径：引导 / 长期计划里填的科目
+    for (const s of AppStore.getInstance().getGoal().subjects) {
+      const v = s.trim()
+      if (v.length > 0 && subjects.indexOf(v) < 0) {
+        subjects.push(v)
+      }
     }
+    // ② 任务里实际出现过的科目也补进来，避免科目写法对不上时整块空着
+    for (const t of tasks) {
+      const v = t.subject.trim()
+      if (v.length > 0 && subjects.indexOf(v) < 0) {
+        subjects.push(v)
+      }
+    }
+
+    const out: SubjectTaskProgress[] = []
+    for (const s of subjects) {
+      let done = 0
+      for (const t of tasks) {
+        const hay = `${t.subject} ${t.title}`
+        if (hay.indexOf(s) >= 0 && (t.done || t.status === TaskStatus.DONE)) {
+          done += 1
+        }
+      }
+      const item = new SubjectTaskProgress()
+      item.subject = s
+      item.doneCount = done
+      const p = Math.round(done * progressStep(s) * 100)
+      item.percent = p > 100 ? 100 : p
+      out.push(item)
+    }
+    out.sort((a: SubjectTaskProgress, b: SubjectTaskProgress) => b.percent - a.percent)
     return out
   }
 
-  /** 倒计时主数值：未设置或已过期都显示「—」，不再恒显示 0 天 */
+  /** 有会话在跑（含被返回键留在后台的）时，首页给出继续入口 */
+  private resumeFocus(): void {
+    router.pushUrl({ url: 'pages/Focus' })
+  }
+
+  /** 剩余天数（大字）：没有目标日期时如实显示「—」，不编造倒计时 */
   private examDaysText(): string {
-    const g = AppStore.getInstance().getGoal()
-    if (g.targetDate <= 0) {
-      return '—'
-    }
-    return TimeUtils.daysUntil(g.targetDate, Date.now()) > 0 ? `${this.examDays}` : '—'
+    return this.targetDateText.length > 0 ? `${this.examDays}` : '—'
   }
 
-  /** 倒计时副标签 */
   private examDaysSub(): string {
-    const g = AppStore.getInstance().getGoal()
-    if (g.targetDate <= 0) {
-      return '未设日期'
-    }
-    return TimeUtils.daysUntil(g.targetDate, Date.now()) > 0 ? '天后开考' : '已过期'
+    return this.targetDateText.length > 0 ? '天后开考' : '未设日期'
   }
 
-  /** 倒计时下方的一句说明（原来无论有没有日期都写"还有 N 天"） */
+  /** 目标总览脚下那行提示：没填日期时给不同的话，填了就给倒计时 */
   private examHint(): string {
-    const g = AppStore.getInstance().getGoal()
-    if (g.targetDate <= 0) {
-      return '还没有设置考试日期，去「我的 → 长期计划与目标」设置后倒计时才准确'
+    if (this.examType.length === 0) {
+      return '在「我的 → 长期计划与目标」里填写目标与日期，倒计时才会准确'
     }
-    if (TimeUtils.daysUntil(g.targetDate, Date.now()) <= 0) {
-      return '考试日期已经过去，去「我的 → 长期计划与目标」更新'
+    if (this.targetDateText.length === 0) {
+      return '还没填目标日期，补上之后倒计时才准'
     }
     return `距离 ${this.examType} 还有 ${this.examDays} 天，按节奏稳步推进`
   }
 
-  /** 有会话在跑（含被返回键留在后台的）时，首页给出继续入口 */  private resumeFocus(): void {
-    router.pushUrl({ url: 'pages/Focus' })
+  /** 长期趋势横轴标签：近 7 天的「月/日」 */
+  private weekDateLabels(): string[] {
+    const out: string[] = []
+    const base = TimeUtils.dayStart(Date.now())
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(base - i * 24 * 3600 * 1000)
+      out.push(`${d.getMonth() + 1}/${d.getDate()}`)
+    }
+    return out
   }
 
   private percent(): string {
@@ -427,36 +460,66 @@ export struct Dashboard {
         }
         .dashCard()
 
-        // 科目进度
+        // 任务进度：引导里填的每个科目一条，完成一次涨一点
         Column() {
-          this.sectionTitle('科目进度（近 30 天）')
-          if (this.subjects.length === 0) {
-            Text('开始学习后，这里会显示各学科的完成进度')
+          Row() {
+            Text('任务进度')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Blank()
+            if (this.taskProgress.length > 0) {
+              Text(`${this.taskProgress.length} 项`)
+                .fontSize(12)
+                .fontColor(Colors.TEXT_TERTIARY)
+            }
+          }
+          .width('100%')
+          .margin({ bottom: 4 })
+
+          Text('你设置的目标科目，完成一次就往前走一点')
+            .fontSize(11)
+            .fontColor(Colors.TEXT_TERTIARY)
+            .width('100%')
+            .margin({ bottom: 6 })
+
+          if (this.taskProgress.length === 0) {
+            Text('还没有科目。可以在「我的 → 长期计划与目标」里添加')
               .fontSize(13)
               .fontColor(Colors.TEXT_SECONDARY)
               .width('100%')
+              .margin({ top: 6 })
           } else {
-            ForEach(this.subjects, (sp: SubjectProgress) => {
+            ForEach(this.taskProgress, (it: SubjectTaskProgress) => {
               Column() {
                 Row() {
-                  Text(sp.subject)
+                  Text(it.subject)
                     .fontSize(14)
                     .fontColor(Colors.TEXT_PRIMARY)
+                  if (it.doneCount > 0) {
+                    Text(`已完成 ${it.doneCount} 次`)
+                      .fontSize(11)
+                      .fontColor(Colors.TEXT_TERTIARY)
+                      .margin({ left: 8 })
+                  }
                   Blank()
-                  Text(`${sp.percent}%`)
-                    .fontSize(14)
-                    .fontColor(Colors.PRIMARY_DARK)
+                  Text(`${it.percent}%`)
+                    .fontSize(15)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(it.percent >= 100 ? Colors.PRIMARY_DARK : Colors.TEXT_PRIMARY)
                 }
                 .width('100%')
-                Progress({ value: sp.percent, total: 100, type: ProgressType.Linear })
-                  .color(Colors.PRIMARY)
+                .alignItems(VerticalAlign.Center)
+
+                Progress({ value: it.percent, total: 100, type: ProgressType.Linear })
+                  .color(it.percent >= 100 ? Colors.PRIMARY : Colors.PRIMARY_DARK)
                   .backgroundColor(Colors.LINE)
                   .width('100%')
                   .margin({ top: 8 })
               }
               .width('100%')
               .margin({ top: 14 })
-            }, (sp: SubjectProgress) => sp.subject)
+            }, (it: SubjectTaskProgress) => `${it.subject}_${it.doneCount}_${it.percent}`)
           }
         }
         .dashCard()
@@ -479,9 +542,6 @@ export struct Dashboard {
         }
         .dashCard()
 
-        // 模拟状态（原在「设备连接」页的模拟工作台，统一移到这里）
-        SimWorkbench()
-
         Blank().height(20)
         }
         .padding(20)
@@ -502,6 +562,18 @@ export struct Dashboard {
     .width('100%')
     .height('100%')
   }
+}
+
+/**
+ * 每完成一次的进度增量：**先写死 70%~90%**（用户还没定幅度）。
+ * 按科目名做确定性散列 —— 不用随机数，否则每次渲染进度都会乱跳。
+ */
+function progressStep(subject: string): number {
+  let h = 0
+  for (let i = 0; i < subject.length; i++) {
+    h = (h * 31 + subject.charCodeAt(i)) % 1000
+  }
+  return 0.70 + (h % 21) / 100
 }
 
 @Extend(Column)

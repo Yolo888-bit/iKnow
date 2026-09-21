@@ -5,6 +5,7 @@ import { User } from '../models/User'
 import { Task, LearningGoal } from '../models/Task'
 import { FocusSession } from '../models/FocusSession'
 import { StudyReport } from '../models/StudyReport'
+import { StudyPlan } from '../models/StudyPlan'
 import { FocusProfile } from '../models/FocusProfile'
 import { Dashboard, SubjectProgress } from '../models/Dashboard'
 import { AIPersonality, TaskStatus, SessionStatus } from '../models/Enums'
@@ -14,7 +15,7 @@ import { ReportService } from '../services/ReportService'
 import { FocusController } from '../services/FocusController'
 import { PermissionService } from '../services/PermissionService'
 import { SensorService } from '../services/SensorService'
-import { Metrics } from '../services/Metrics'
+import { Metrics, PlanProgress } from '../services/Metrics'
 import { StorageKey } from '../common/Constants'
 import { IdUtils } from '../utils/IdUtils'
 import { TimeUtils } from '../utils/TimeUtils'
@@ -35,6 +36,13 @@ export class AppStore {
   private currentPlan: Task[] = []
   private currentReport: StudyReport | null = null
   private currentSession: FocusSession | null = null
+  /**
+   * 长期计划（单记录）。缓存在内存里，`refreshAggregates()` 直接用它算目标进度 ——
+   * 每次刷新都去读库既慢又会让聚合依赖 I/O。
+   */
+  private plan: StudyPlan | null = null
+  /** 「目标进度」的权威结果（页面拉取式读取，不用 @StorageProp 镜像 —— 见 C3 的教训） */
+  private planProgress: PlanProgress = Metrics.planProgress([], null)
   private initialized: boolean = false
   private initPromise: Promise<void> | null = null
 
@@ -79,6 +87,8 @@ export class AppStore {
       const p = await StorageService.getInstance().loadProfile()
       this.profile = p !== null ? p : new FocusProfile()
     }
+    // 长期计划（单记录）读一次进内存：目标进度的分母、规划背景都从它取
+    this.plan = await StorageService.getInstance().loadStudyPlan()
     // 登录用户名全局生效：重新启动（自动登录）时也要把持久化昵称写回 AppStorage，
     // 否则会用 initAppStorageDefaults 的默认值，首页问候语显示成默认名。
     if (this.user.nickname.length > 0) {
@@ -156,6 +166,39 @@ export class AppStore {
 
   getGoal(): LearningGoal {
     return this.goal
+  }
+
+  getPlan(): StudyPlan | null {
+    return this.plan
+  }
+
+  setPlan(p: StudyPlan | null): void {
+    this.plan = p
+  }
+
+  /** 「目标进度」的权威结果：页面**拉取**这个，不要用 @StorageProp 镜像派生 */
+  getPlanProgress(): PlanProgress {
+    return this.planProgress
+  }
+
+  /**
+   * 把某科目标上调到指定分钟（D6 的"一键上调"）。
+   * 超额时进度条会停在 100% 失去区分度，所以给用户一个把目标对齐到真实投入的出口。
+   */
+  async raiseSubjectTarget(subject: string, targetMinutes: number): Promise<void> {
+    const p = this.plan
+    if (p === null || targetMinutes <= 0) {
+      return
+    }
+    for (const st of p.subjectTargets) {
+      if (st.subject === subject) {
+        st.targetMinutes = targetMinutes
+      }
+    }
+    StudyPlan.recomputeTotal(p)
+    p.updatedAt = Date.now()
+    await StorageService.getInstance().saveStudyPlan(p)
+    await this.refreshAggregates()
   }
 
   getTasks(): Task[] {
@@ -300,6 +343,8 @@ export class AppStore {
     t.estimatedDuration = minutes
     t.sortOrder = this.currentPlan.length
     t.createdAt = Date.now()
+    // 手工加的任务同样归属当前长期计划（与规划产生的任务同一口径）
+    t.planId = StudyPlan.PLAN_SINGLETON_ID
     this.currentPlan.push(t)
   }
 
@@ -459,6 +504,8 @@ export class AppStore {
     d.todayTotalTasks = total
     d.subjectProgress = this.computeSubjectProgress()
     this.dashboard = d
+    // 目标进度：入参在这里组装，计算仍由 Metrics 负责（纯函数，不读存储）
+    this.planProgress = Metrics.planProgress(this.tasks, this.plan)
     this.pushAggregates()
   }
 
@@ -564,6 +611,9 @@ export class AppStore {
     this.currentPlan = []
     this.currentReport = null
     this.currentSession = null
+    // study_plan 表也被清空了，内存里的计划与进度必须一起回到空
+    this.plan = null
+    this.planProgress = Metrics.planProgress([], null)
     this.dashboard = new Dashboard()
     this.pushAggregates()
   }

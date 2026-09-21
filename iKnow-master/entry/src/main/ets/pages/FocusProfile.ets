@@ -15,6 +15,8 @@ export struct FocusProfile {
   @State dimValues: number[] = []
   @State trend: number[] = []
   @State hardest: string = ''
+  /** 长期分析文案：在 refresh() 里算好（窗口指标现算，不放进持久化的 Profile） */
+  @State aiAdvice: string = ''
   private dimLabels: string[] = ['效率', '专注度', '稳定性', '执行力', '抗干扰']
 
   aboutToAppear(): void {
@@ -27,6 +29,11 @@ export struct FocusProfile {
     this.dimValues = [p.efficiency, p.concentration, p.stability, p.execution, p.antiDistraction]
     this.trend = p.monthlyTrend.slice(-14)
     this.hardest = this.hardestSubject()
+    // 近 7 天/前 7 天与连续学习天数是**窗口指标**，每次现算（§6.4：不进 FocusProfile）
+    const now = Date.now()
+    const sessions = AppStore.getInstance().getSessions()
+    this.aiAdvice = AIService.getInstance().longTermAnalysis(this.profile, this.hardest,
+      Metrics.trend7v7(sessions, now), Metrics.streaks(sessions, now))
   }
 
   /** 推进最慢的科目；没有科目数据时返回空串（原来返回硬编码的『数学类任务』= 凭空生成结论） */
@@ -116,7 +123,7 @@ export struct FocusProfile {
           }
           .width('100%')
 
-          Text(AIService.getInstance().longTermAnalysis(this.profile, this.hardest))
+          Text(this.aiAdvice)
             .fontSize(15)
             .fontColor(Colors.TEXT_PRIMARY)
             .lineHeight(24)

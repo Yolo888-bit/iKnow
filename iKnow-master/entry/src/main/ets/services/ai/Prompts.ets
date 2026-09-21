@@ -8,8 +8,8 @@
  */
 
 export class PromptVersion {
-  static readonly TASK_DIALOG = 'task_dialog@1.2.0'
-  static readonly TASK_PLAN = 'task_plan@1.1.0'
+  static readonly TASK_DIALOG = 'task_dialog@1.3.0'
+  static readonly TASK_PLAN = 'task_plan@1.2.0'
   static readonly QA = 'qa@1.0.0'
   static readonly SLOGAN = 'slogan@1.0.0'
 }
@@ -33,15 +33,16 @@ export class Prompts {
   static readonly BANNED_CONTENT = BANNED
 
   /**
-   * task_dialog@1.2.0 —— 对话式任务规划（多轮）
+   * task_dialog@1.3.0 —— 对话式任务规划（多轮 / 增量）
    *
-   * 1.2.0：提问策略由"必须问满 6 项"改为"默认值优先、最多追问 1 轮"。
-   * 实测（2026-09-20 反馈）原策略要连问 3~6 轮才出计划，且第一轮常一次问 3 个问题。
+   * 1.3.0：加入**增量语义**。用户往往是在已有清单上继续追加（先排高数、再聊着加英语），
+   * 而 1.2.0 没说清"已有清单怎么处理"，模型会整份重排，导致已排好的科目被冲掉或重复。
    *
    * 输入变量：
    *  - personality: 考伴人格（STRICT / GENTLE / QUIET）
    *  - messages[0..n-2]: 历史对话（user / assistant 交替）
    *  - messages[n-1]: 用户当前这句话
+   *  - planningContext: 已知用户背景；若其中含「当前今日清单」，按增量处理
    *
    * 输出 JSON Schema：
    *  { "reply": string, "done": boolean,
@@ -84,6 +85,14 @@ export class Prompts {
   单段专注多久、每 30~45 分钟休息 5~10 分钟的用眼与休息节奏。
 - 所有建议都要具体到数字。
 
+【如果已经有一份清单（增量模式）】
+当【已知用户背景】里给出了「当前今日清单」时，说明用户**已经有安排**，这一轮只是继续加东西：
+- **只输出要新增的任务**。清单里已经有的（科目 + 任务名相同）绝对不要重复输出一遍。
+- 用户说"再加上英语""还要背单词"这类话时，就只补这些新增项；**不要重排、不要重述整份清单**。
+- 已有的任务保持原样（用户可能自己改过时长），不要用你的估计值覆盖它。
+- reply 里用一句话说明你新加了什么、大概多久，不要复述已有的部分。
+- 只有当用户明确要求"重排 / 换掉 / 重新规划"时，才给出完整的新清单。
+
 【输出要求】
 只输出一个 JSON 对象，不要输出任何解释性文字、不要用代码块包裹：
 {"reply":"要对用户说的话","done":false,"tasks":[]}
@@ -109,6 +118,8 @@ ${toneOf(personality)}
 要求：
 - 拆成 2~5 条具体任务，必须包含**动作 + 量/范围**（如"完成 10 道级数作业题"），
   不要出现"好好学习""认真复习"这类无法验收的表述；
+- 如果上下文里已给出「当前今日清单」，**只输出需要新增的任务**，清单里已有的（科目 + 任务名相同）
+  不要重复输出；这一条优先于"拆成 2~5 条"。
 - 每条任务给出 subject（科目）与 estimated_minutes；
 - **时长必须按任务性质逐条推算，禁止所有任务都写 30**。参考口径：
   做题 = 题量 × 每题 2~4 分钟；预习/看书 = 页数 × 1.5~2 分钟或每知识点 15~25 分钟；

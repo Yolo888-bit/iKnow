@@ -415,7 +415,12 @@ export class WatchEventEngine implements WatchSignalSink {
     const e = new WatchEvent()
     e.id = IdUtils.uuid()
     e.sessionId = this.sessionId
-    e.tMs = nowMs
+    // 事件时间戳一律写**真实墙钟**（不是样本时间 `nowMs`）。
+    // 引擎内部的窗口/节流判定跑在"样本时基"上，而模拟手表是 ×30 的加速时基
+    // （`WatchSignalSimulator.SIM_TIME_SCALE`），样本时间戳是虚拟时间。
+    // 若把它记进事件，报告页用 `(tMs − 会话真实开始时间)` 算"第几分钟"就会差一个倍率。
+    // 真机（`RealWatchSignalSource`）样本时间本来就是真实时间，此改动不影响其行为。
+    e.tMs = Date.now()
     e.kind = kind
     e.rmssd = rmssd
     e.hr = hr

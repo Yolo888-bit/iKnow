@@ -36,6 +36,17 @@ struct Index {
     this.checkRecovery()
   }
 
+  /**
+   * 从二级页（专注 / 休息 / 复盘）返回根页时再重算一次聚合。
+   *
+   * 首页与工作台是 Tabs 的常驻子页，返回**不会**重走 aboutToAppear，也不会触发 onChange，
+   * 所以"结束专注后今日数据没变"这类问题只能靠这里兜底 —— 它是最后一个必经点。
+   * refreshAggregates() 只做内存重算 + 广播（不读库），开销很小。
+   */
+  onPageShow(): void {
+    AppStore.getInstance().refreshAggregates()
+  }
+
   private resumeFocus(): void {
     router.pushUrl({ url: 'pages/Focus' })
   }

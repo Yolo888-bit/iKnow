@@ -3,6 +3,7 @@ import { window } from '@kit.ArkUI'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { AppStore } from '../store/AppStore'
 import { AuthService } from '../services/AuthService'
+import { FocusController } from '../services/FocusController'
 
 const DOMAIN = 0x0000
 const TAG = 'iKnow'
@@ -14,6 +15,26 @@ export default class EntryAbility extends UIAbility {
     }).catch((err: Error) => {
       hilog.error(DOMAIN, TAG, 'AppStore init failed: ' + err.message)
     })
+  }
+
+  /**
+   * 回到前台：结算"专注中切走"的那段时间。
+   *
+   * 放在 Ability 生命周期而不是页面的 onPageHide，是因为页面的 hide 在应用内部跳转
+   * （专注 → 答疑 / 休息）时也会触发，会把正常跳转误判成"去用手机了"。
+   * 只有整个应用进入后台，才是"人在别的应用上"。
+   */
+  onForeground(): void {
+    FocusController.getInstance().onAppForeground()
+  }
+
+  /**
+   * 进入后台：只记录时刻与屏幕状态并结清已过去的段，**是否算分心留到回前台时判定** ——
+   * 熄屏（手机扣在桌上学习）是核心场景，不能算分心；而且后台定时器会被冻结，
+   * 离开多久只有回到前台时用真实时钟才知道。
+   */
+  onBackground(): void {
+    FocusController.getInstance().onAppBackground()
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

@@ -1,12 +1,13 @@
 import { relationalStore } from '@kit.ArkData'
 import { common } from '@kit.AbilityKit'
+import { hilog } from '@kit.PerformanceAnalysisKit'
 import { User } from '../models/User'
 import { LearningGoal, Task } from '../models/Task'
 import { FocusSession, FocusEvent, FocusTimelinePoint } from '../models/FocusSession'
 import { SessionSnapshot } from '../models/SessionSnapshot'
 import { InterventionEvent } from '../models/InterventionEvent'
 import { TaskTimelinePoint } from '../models/TaskTimeline'
-import { StudyPlan, PlanTask } from '../models/StudyPlan'
+import { StudyPlan, SubjectTarget } from '../models/StudyPlan'
 import { Authorization } from '../models/Authorization'
 import { QuestionRecord } from '../models/QuestionRecord'
 import { StudyReport } from '../models/StudyReport'
@@ -73,7 +74,7 @@ export class StorageService {
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS task (
       id TEXT PRIMARY KEY, title TEXT, subject TEXT, estimated_duration INTEGER,
       actual_duration INTEGER, status TEXT, done INTEGER, sort_order INTEGER,
-      session_id TEXT, created_at INTEGER)`)
+      session_id TEXT, created_at INTEGER, plan_id TEXT)`)
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS focus_session (
       id TEXT PRIMARY KEY, title TEXT, start_time INTEGER, end_time INTEGER,
       total_duration INTEGER, focus_duration INTEGER, distraction_duration INTEGER,
@@ -106,9 +107,11 @@ export class StorageService {
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS intervention_event (
       id TEXT PRIMARY KEY, session_id TEXT, ts INTEGER, level TEXT, channel TEXT,
       message TEXT, source TEXT, user_feedback TEXT, recovered_focus INTEGER, payload_json TEXT)`)
+    // 单记录表：id 固定为 StudyPlan.PLAN_SINGLETON_ID。
+    // 不再有 exam_type（考试类型只属于 LearningGoal）与 tasks（AI 输出只是 DTO，不入库）。
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS study_plan (
-      id TEXT PRIMARY KEY, title TEXT, exam_type TEXT, total_estimated_minutes INTEGER,
-      tasks TEXT, created_at INTEGER)`)
+      id TEXT PRIMARY KEY, title TEXT, total_estimated_minutes INTEGER, created_at INTEGER,
+      subject_targets TEXT, period_start INTEGER, period_end INTEGER, updated_at INTEGER)`)
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS task_timeline (
       session_id TEXT, minute_offset INTEGER, task_id TEXT, level INTEGER,
       PRIMARY KEY(session_id, minute_offset))`)
@@ -139,7 +142,13 @@ export class StorageService {
       'ALTER TABLE focus_profile ADD COLUMN recent_concentrations TEXT',
       'ALTER TABLE focus_profile ADD COLUMN recent_distraction_rates TEXT',
       'ALTER TABLE question ADD COLUMN user_id TEXT',
-      'ALTER TABLE session_snapshot ADD COLUMN start_time INTEGER'
+      'ALTER TABLE session_snapshot ADD COLUMN start_time INTEGER',
+      // 任务归属 + 长期计划新结构（老库必须 ALTER，CREATE TABLE IF NOT EXISTS 只对新装用户有效）
+      'ALTER TABLE task ADD COLUMN plan_id TEXT',
+      'ALTER TABLE study_plan ADD COLUMN subject_targets TEXT',
+      'ALTER TABLE study_plan ADD COLUMN period_start INTEGER',
+      'ALTER TABLE study_plan ADD COLUMN period_end INTEGER',
+      'ALTER TABLE study_plan ADD COLUMN updated_at INTEGER'
     ]
     for (const sql of alters) {
       try {
@@ -234,10 +243,29 @@ export class StorageService {
     }
   }
 
-  private parsePlanTasks(json: string): PlanTask[] {
+  /** 解析 subject_targets JSON；脏数据一律返回 []，不抛（与其它 parseXxx 一致） */
+  private parseSubjectTargets(json: string): SubjectTarget[] {
+    if (json.length === 0) {
+      return []
+    }
     try {
-      const a = JSON.parse(json) as PlanTask[]
-      return Array.isArray(a) ? a : []
+      const a = JSON.parse(json) as SubjectTarget[]
+      if (!Array.isArray(a)) {
+        return []
+      }
+      const out: SubjectTarget[] = []
+      for (const item of a) {
+        if (item === null || item === undefined) {
+          continue
+        }
+        const t = new SubjectTarget()
+        t.subject = typeof item.subject === 'string' ? item.subject : ''
+        t.targetMinutes = typeof item.targetMinutes === 'number' ? item.targetMinutes : 0
+        if (t.targetMinutes > 0) {
+          out.push(t)
+        }
+      }
+      return out
     } catch (e) {
       return []
     }
@@ -315,6 +343,7 @@ export class StorageService {
       t.sortOrder = this.getNum(rs, 'sort_order')
       t.sessionId = this.getString(rs, 'session_id')
       t.createdAt = this.getNum(rs, 'created_at')
+      t.planId = this.getString(rs, 'plan_id')
       list.push(t)
     }
     rs.close()
@@ -332,7 +361,8 @@ export class StorageService {
       'done': t.done ? 1 : 0,
       'sort_order': t.sortOrder,
       'session_id': t.sessionId,
-      'created_at': t.createdAt
+      'created_at': t.createdAt,
+      'plan_id': t.planId
     }
     await this.store.insert('task', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE)
   }
@@ -752,33 +782,77 @@ export class StorageService {
     return list
   }
 
-  // ---------- StudyPlan（§12）----------
+  // ---------- StudyPlan（§12，单记录）----------
+  /**
+   * 保存长期计划。**强制固定 id** —— `ON_CONFLICT_REPLACE` 按主键覆盖，固定 id 即天然单行。
+   * 老版本每次保存都 `new uuid` 新增一行，是"表里累积多条、读回不确定"的根源。
+   */
   async saveStudyPlan(plan: StudyPlan): Promise<void> {
+    plan.id = StudyPlan.PLAN_SINGLETON_ID
+    if (plan.updatedAt <= 0) {
+      plan.updatedAt = Date.now()
+    }
     const v: relationalStore.ValuesBucket = {
       'id': plan.id,
       'title': plan.title,
-      'exam_type': plan.examType,
       'total_estimated_minutes': plan.totalEstimatedMinutes,
-      'tasks': JSON.stringify(plan.tasks),
-      'created_at': plan.createdAt
+      'subject_targets': JSON.stringify(plan.subjectTargets),
+      'period_start': plan.periodStart,
+      'period_end': plan.periodEnd,
+      'created_at': plan.createdAt,
+      'updated_at': plan.updatedAt
     }
     await this.store.insert('study_plan', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE)
   }
 
+  /**
+   * 读长期计划。**必须排序**：老库可能有 N 行（历次保存各一行），
+   * 不带 `orderBy` 的查询读回哪一行是不确定的。固定 id 优先命中，否则取最近更新的一行。
+   *
+   * 同时做 D4 的一次性迁移：老记录只有总目标、没有分科 → 把旧总值包成一条
+   * **未分配目标**（`subject === ''`）并写回固定 id。不静默分摊 —— 分摊要用户点按钮。
+   */
   async loadStudyPlan(): Promise<StudyPlan | null> {
-    const rs = await this.store.query(new relationalStore.RdbPredicates('study_plan'))
-    if (!rs.goToNextRow()) {
-      rs.close()
+    const q = new relationalStore.RdbPredicates('study_plan')
+    q.orderByDesc('updated_at')
+    const rs = await this.store.query(q)
+    let found: StudyPlan | null = null
+    let fallback: StudyPlan | null = null
+    while (rs.goToNextRow()) {
+      const p = new StudyPlan()
+      p.id = this.getString(rs, 'id')
+      p.title = this.getString(rs, 'title')
+      p.totalEstimatedMinutes = this.getNum(rs, 'total_estimated_minutes')
+      p.subjectTargets = this.parseSubjectTargets(this.getString(rs, 'subject_targets'))
+      p.periodStart = this.getNum(rs, 'period_start')
+      p.periodEnd = this.getNum(rs, 'period_end')
+      p.createdAt = this.getNum(rs, 'created_at')
+      p.updatedAt = this.getNum(rs, 'updated_at')
+      if (p.id === StudyPlan.PLAN_SINGLETON_ID) {
+        found = p
+        break
+      }
+      if (fallback === null) {
+        fallback = p
+      }
+    }
+    rs.close()
+    const p = found !== null ? found : fallback
+    if (p === null) {
       return null
     }
-    const p = new StudyPlan()
-    p.id = this.getString(rs, 'id')
-    p.title = this.getString(rs, 'title')
-    p.examType = this.getString(rs, 'exam_type')
-    p.totalEstimatedMinutes = this.getNum(rs, 'total_estimated_minutes')
-    p.tasks = this.parsePlanTasks(this.getString(rs, 'tasks'))
-    p.createdAt = this.getNum(rs, 'created_at')
-    rs.close()
+    if (p.subjectTargets.length === 0 && p.totalEstimatedMinutes > 0) {
+      // 迁移：旧总值 → "未分配目标"；写回固定 id（幂等：下次 subjectTargets 就不再为空）
+      p.subjectTargets = [SubjectTarget.create('', p.totalEstimatedMinutes)]
+      StudyPlan.recomputeTotal(p)
+      p.id = StudyPlan.PLAN_SINGLETON_ID
+      p.updatedAt = Date.now()
+      await this.saveStudyPlan(p).catch(() => {
+        // 迁移写回失败不影响本次读取结果
+      })
+      hilog.info(0x0000, 'iKnow.Store', '长期计划已迁移为分科结构（保留未分配总额 %{public}d 分钟）',
+        p.totalEstimatedMinutes)
+    }
     return p
   }
 

@@ -50,6 +50,7 @@ export struct Review {
     qaSessions: 0,
     sessionCount: 0,
     bestPeriod: '',
+    structure: { timeToFocus: -1, longestRun: 0, bouts: 0, recoveryMedian: -1, deepRatio: 0, tailDrop: 0 },
     levels: [],
     states: [],
     minutes: [],
@@ -138,7 +139,10 @@ export struct Review {
     this.canShowRadar = Metrics.canShowProfile(this.profile.sampleCount)
 
     const hardest = this.hardestSubject()
-    this.aiAdvice = AIService.getInstance().longTermAnalysis(this.profile, hardest)
+    // 窗口指标一律**现算**、不进 FocusProfile（§6.4）：profile 只在会话结束时更新，
+    // 把"近 7 天"塞进去会变成"落库那刻新鲜、展示时已过期"
+    this.aiAdvice = AIService.getInstance().longTermAnalysis(this.profile, hardest,
+      Metrics.trend7v7(sessions, now), Metrics.streaks(sessions, now))
 
     // 长期计划（设置页改完回来要刷新）
     StorageService.getInstance().loadStudyPlan().then((p: StudyPlan | null) => {
@@ -438,12 +442,13 @@ export struct Review {
   private loadDay(): void {
     const sessions: FocusSession[] = AppStore.getInstance().getSessions()
     this.day = Metrics.daySummary(sessions, this.dayStart)
-    this.dayInsight = AIService.getInstance().dayInsight(
-      this.dayLabel(), this.day.focusRate, this.day.bestPeriod, this.day.hasData)
-    // 最多 3 条：建议太多反而把页面挤满
-    this.daySuggestions = AIService.getInstance()
-      .daySuggestions(this.day.studyMinutes, this.day.focusRate)
-      .slice(0, 3)
+    // 基线以**所选那一天**为锚（看历史某天时，对比的是那天之前的 7/30 天），
+    // 窗口与门槛、以及"排除当天"的判定都在 Metrics.baseline 里
+    const dayEnd = this.dayStart + 24 * 3600 * 1000
+    const baseline = Metrics.baseline(sessions, '', dayEnd)
+    this.dayInsight = AIService.getInstance().dayInsight(this.dayLabel(), this.day, baseline)
+    // daySuggestions 内部已经按优先级派生并截到最多 3 条
+    this.daySuggestions = AIService.getInstance().daySuggestions(this.day, baseline)
   }
 
   private dayStatusText(): string {
@@ -1192,17 +1197,6 @@ export struct Review {
     // 学习习惯洞察（全部来自真实数据；无数据时显示空态，不给与用户无关的建议）
     Column({ space: Spacing.SM }) {
       this.sectionHeader('🕐', '学习习惯洞察')
-      // 数据来源与生成逻辑：算得出来就该讲得清，避免用户把规则结论当成"AI 猜的"
-      Text('数据来源：取每一次已完成专注的**开始时间**，按每 2 小时归入一个时段（全天 12 个时段）；' +
-        '时段专注率 = 该时段的净专注时长 ÷ 该时段总学习时长（总学习 = 墙钟 − 休息 − 暂停）。\n' +
-        '生成逻辑：高峰 = 总学习时长最多的时段，低谷 = 总学习时长最少的时段；' +
-        '若低谷的专注率比高峰低 10 个百分点以上，记为「容易分心」，否则记为「投入偏少」。' +
-        '建议由这两者的对比自动生成，没有写死的文案；只统计到一个时段时会如实说明，不做外推。')
-        .fontSize(11)
-        .fontColor(Colors.TEXT_TERTIARY)
-        .lineHeight(17)
-        .width('100%')
-        .margin({ top: 6 })
 
       if (this.habit.advice.length === 0) {
         Text('还没有足够的时段数据。多在不同时段完成几次专注，这里会给出你的高峰与低谷。')
@@ -1212,16 +1206,19 @@ export struct Review {
           .margin({ top: 8 })
       } else {
       Column({ space: Spacing.XS }) {
-        Row() {
-          Text('最佳学习时段：')
-            .fontSize(13)
-            .fontColor(Colors.TEXT_SECONDARY)
-          Text(`${this.habit.bestWindow}（专注率 ${this.habit.bestRate}%）`)
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Colors.TEXT_PRIMARY)
+        // bestWindow 为空 = 各时段差别不大（或还没到门槛）→ 不渲染这一行，避免出现"（专注率 0%）"
+        if (this.habit.bestWindow.length > 0) {
+          Row() {
+            Text('最佳学习时段：')
+              .fontSize(13)
+              .fontColor(Colors.TEXT_SECONDARY)
+            Text(`${this.habit.bestWindow}（专注率 ${this.habit.bestRate}%）`)
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+          }
+          .width('100%')
         }
-        .width('100%')
 
         if (this.habit.lowWindow.length > 0) {
           Row() {
@@ -1286,7 +1283,7 @@ export struct Review {
           .lineHeight(20)
           .width('100%')
       } else {
-        Text(`${this.longPlan.title}${this.longPlan.examType.length > 0 ? ' · ' + this.longPlan.examType : ''}${this.longPlan.totalEstimatedMinutes > 0 ? ' · 目标 ' + Math.round(this.longPlan.totalEstimatedMinutes / 60) + ' 小时' : ''}`)
+        Text(`${this.longPlan.title}${this.longPlan.totalEstimatedMinutes > 0 ? ' · 目标 ' + Math.round(this.longPlan.totalEstimatedMinutes / 60) + ' 小时' : ''}`)
           .fontSize(14)
           .fontColor(Colors.TEXT_PRIMARY)
           .width('100%')

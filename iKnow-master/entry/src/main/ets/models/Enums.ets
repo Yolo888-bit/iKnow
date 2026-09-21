@@ -17,7 +17,13 @@ export enum FocusSource {
   CAMERA = 'CAMERA',
   WATCH = 'WATCH',
   MANUAL = 'MANUAL',
-  AI = 'AI'
+  AI = 'AI',
+  /**
+   * 手机侧信号（不依赖任何外设）：
+   * 专注中切到其他应用且屏幕是亮的 → 用户正在用手机，记为分心。
+   * 熄屏/锁屏不算（"手机扣在桌上学习"是本产品的核心场景，不能把它判成分心）。
+   */
+  PHONE = 'PHONE'
 }
 
 /** 任务状态 */

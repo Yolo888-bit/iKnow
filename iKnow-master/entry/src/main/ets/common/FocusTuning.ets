@@ -142,4 +142,14 @@ export class FocusTuning {
   static readonly SIM_INJECT_SETTLE_MS = 1_200
   /** 注入标记的宽限期：结论是异步回来的（采集→识别→规则），留足时间再过期 */
   static readonly SIM_INJECT_GRACE_MS = 6_000
+
+  // ===================== 手机侧信号：专注中切后台 =====================
+  //
+  // 零外设、零权限可用（`power.isActive()`，since 9）。
+  // 判据不是"App 进后台"本身，而是"进后台 **且屏幕是亮的**" —— 后者才等于"人在别的应用上"，
+  // 即手机使用。熄屏/锁屏（手机扣在桌上、放兜里）是学习场景的常态，绝不能判成分心。
+  /** 亮屏离开超过这个时长才算一次"手机使用"分心（滤掉误触返回造成的秒级抖动） */
+  static readonly BG_PHONE_MIN_SEC = 30
+  /** 该判定的置信度（与其它来源同量纲 0~1；这是可观察事实，取值偏高） */
+  static readonly BG_PHONE_CONFIDENCE = 0.9
 }

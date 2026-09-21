@@ -12,6 +12,7 @@ import { AIPayload, AIResult, AIRequest, AIResponse, AIScene } from './ai/AIServ
 import { PlanningInput, PlanningResult, PlanningDialogInput, PlanningDialogResult } from './ai/PlanningService'
 import { QATextPayload, QAResp } from './ai/QAService'
 import { IdUtils } from '../utils/IdUtils'
+import { DaySummary, Baseline, Trend7v7, Streaks } from './Metrics'
 
 /**
  * AI 服务兼容垫片（PRD §13 / 硬规则 §1）
@@ -157,13 +158,13 @@ export class AIService {
   }
 
   /** 单日复盘 AI 洞察（AI 输出，硬规则 §1） */
-  dayInsight(dayLabel: string, focusRate: number, bestPeriod: string, hasData: boolean): string {
-    return this.mock.dayInsight(dayLabel, focusRate, bestPeriod, hasData)
+  dayInsight(dayLabel: string, day: DaySummary, baseline: Baseline): string {
+    return this.mock.dayInsight(dayLabel, day, baseline)
   }
 
   /** 单日复盘优化建议（AI 输出，硬规则 §1） */
-  daySuggestions(studyMinutes: number, focusRate: number): string[] {
-    return this.mock.daySuggestions(studyMinutes, focusRate)
+  daySuggestions(day: DaySummary, baseline: Baseline): string[] {
+    return this.mock.daySuggestions(day, baseline)
   }
 
   /**
@@ -306,7 +307,7 @@ export class AIService {
   }
 
   /** 长期分析文案 */
-  longTermAnalysis(profile: FocusProfile, hardestSubject: string): string {
-    return this.mock.longTermAnalysis(profile, hardestSubject)
+  longTermAnalysis(profile: FocusProfile, hardestSubject: string, trend: Trend7v7, streak: Streaks): string {
+    return this.mock.longTermAnalysis(profile, hardestSubject, trend, streak)
   }
 }

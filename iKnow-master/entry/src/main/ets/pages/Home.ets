@@ -6,6 +6,7 @@ import { AppStore } from '../store/AppStore'
 import { PermissionService } from '../services/PermissionService'
 import { FocusController } from '../services/FocusController'
 import { Task } from '../models/Task'
+import { TaskStatus } from '../models/Enums'
 import { TimeUtils } from '../utils/TimeUtils'
 import { TaskCard } from '../components/TaskCard'
 import { UserAvatar } from '../components/UserAvatar'
@@ -23,21 +24,33 @@ export struct Home {
   @StorageProp(StorageKey.USER_NICKNAME) nickname: string = ''
   @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
   @StorageProp(StorageKey.EXAM_DAYS) examDays: number = 0
-  @StorageProp(StorageKey.TODAY_FOCUS_SEC) todayFocus: number = 0
-  @StorageProp(StorageKey.FOCUS_RATE) focusRate: number = 0
-  @StorageProp(StorageKey.TODAY_DONE_TASKS) todayDone: number = 0
-  @StorageProp(StorageKey.TODAY_TOTAL_TASKS) todayTotal: number = 0
   @StorageProp(StorageKey.FOCUS_ELAPSED) focusElapsed: number = 0
   /** 实时净专注 / 总学习（进行中时用于现算净专注率） */
   @StorageProp(StorageKey.FOCUS_NET) focusNet: number = 0
   @StorageProp(StorageKey.FOCUS_STUDY) focusStudy: number = 0
   /** 1 = 会话进行中（响应式；之前用普通方法读单例，导致 UI 不刷新） */
   @StorageProp(StorageKey.FOCUS_RUNNING) focusRunningFlag: number = 0
+  /**
+   * 唯一的刷新触发点：pushAggregates() 最后才写 DATA_VERSION，
+   * 因此它一变就代表"今日聚合已整体算完"。今日数据的具体数值走 refreshPlan() 拉取。
+   */
   @StorageProp(StorageKey.DATA_VERSION) @Watch('refreshPlan') dataVersion: number = 0
   @State goalTitle: string = ''
   @State examType: string = ''
   @State completionRate: number = 0
   @State plan: Task[] = []
+  /**
+   * 今日数据一律从 store 的 dashboard **拉取**，不再依赖 @StorageProp 镜像。
+   *
+   * 原因：pushAggregates() 会连续写 TODAY_* / FOCUS_RATE / DATA_VERSION 多个键，
+   * 而 @Watch 回调里读到的镜像值**不保证已经同步**（同一批更新里 DATA_VERSION 可能先被处理），
+   * 于是由镜像派生的「任务完成率」会永久停在旧值 —— 表现就是"结束专注后首页数据没更新"。
+   * dashboard 在 pushAggregates() 之前就已整体赋值，读它永远是最新的，与更新顺序无关。
+   */
+  @State dashTodayFocus: number = 0
+  @State dashRate: number = 0
+  @State dashDone: number = 0
+  @State dashTotal: number = 0
   /** 顶部标语：贴合目标的励志短句（AI 生成，本地文案表兜底） */
   @State slogan: string = ''
 
@@ -46,13 +59,31 @@ export struct Home {
   }
 
   refreshPlan(): void {
-    // 必须 slice 出新数组：赋同一个引用不会触发 @State 重绘，
-    // 会导致结束后按钮文案与「继续专注」条不更新
-    this.plan = AppStore.getInstance().getCurrentPlan().slice()
+    // 今日任务：**未完成置顶、已完成自动沉底**；同组内保持原有顺序（稳定分桶，
+    // 不改变用户/AI 排好的先后）。必须新建数组：赋同一个引用不会触发 @State 重绘。
+    const source = AppStore.getInstance().getCurrentPlan()
+    const todo: Task[] = []
+    const finished: Task[] = []
+    for (const t of source) {
+      if (t.done || t.status === TaskStatus.DONE) {
+        finished.push(t)
+      } else {
+        todo.push(t)
+      }
+    }
+    this.plan = todo.concat(finished)
+
     const goal = AppStore.getInstance().getGoal()
     this.goalTitle = goal.title
     this.examType = goal.examType
-    this.completionRate = this.todayTotal > 0 ? Math.round(this.todayDone / this.todayTotal * 100) : 0
+
+    // 今日数据：直接读 store 里已经算好的聚合结果（权威值），不看镜像
+    const d = AppStore.getInstance().getDashboard()
+    this.dashTodayFocus = d.todayFocusSeconds
+    this.dashRate = d.focusRate
+    this.dashDone = d.todayCompletedTasks
+    this.dashTotal = d.todayTotalTasks
+    this.completionRate = this.dashTotal > 0 ? Math.round(this.dashDone / this.dashTotal * 100) : 0
     this.loadSlogan()
   }
 
@@ -178,19 +209,33 @@ export struct Home {
   }
 
   /**
-   * 今日专注时长（**实时**）= 已结束会话累计 + 进行中会话的实时增量。
-   * 之前只读落库累计值，进行中不动，所以看着"今日数据不更新"。
+   * 今日专注时长（**实时**）= 已结束会话的累计（dashboard，权威值） + 进行中会话的实时增量。
+   * 之前只读 @StorageProp 镜像累计值，镜像没同步时看着"今日数据不更新"。
    */
   private liveFocusSec(): number {
-    return this.todayFocus + (this.focusRunningFlag === 1 ? this.focusElapsed : 0)
+    return this.dashTodayFocus + (this.focusRunningFlag === 1 ? this.focusElapsed : 0)
   }
 
-  /** 净专注率（实时）：进行中用「净专注 / 总学习」现算，结束后用落库值 */
+  /** 净专注率（实时）：进行中用「净专注 / 总学习」现算，结束后用落库聚合值 */
   private liveRate(): number {
     if (this.focusRunningFlag === 1 && this.focusStudy > 0) {
       return Math.round(this.focusNet / this.focusStudy * 100)
     }
-    return this.focusRate
+    return this.dashRate
+  }
+
+  /**
+   * 今日专注时长的展示文案：**不足 1 分钟按秒显示**。
+   *
+   * 直接走 formatHMin() 时，1 分钟以内的会话结束后显示的还是 "0min"，
+   * 和没开始时一模一样 —— 用户（尤其测试时）完全看不出刷新了没有。
+   */
+  private focusSecondsText(): string {
+    const sec = this.liveFocusSec()
+    if (sec > 0 && sec < 60) {
+      return `${Math.floor(sec)}秒`
+    }
+    return TimeUtils.formatHMin(sec)
   }
 
   @Builder
@@ -361,10 +406,11 @@ export struct Home {
                   done: task.done,
                   showCheckbox: true,
                   onToggle: () => {
-                    AppStore.getInstance().togglePlanTask(task.id)
-                    // 必须 slice 出新数组：赋同一个引用不会触发 @State 重绘（勾选状态不更新）
-                    this.plan = AppStore.getInstance().getCurrentPlan().slice()
-                    this.refreshPlan()
+                    // 必须走 store 的 toggleTaskDone：它会**落库 + 重算聚合 + 广播刷新**。
+                    // 原来只改内存里的计划（togglePlanTask），勾选后任务完成率不变、重启还丢状态。
+                    AppStore.getInstance().toggleTaskDone(task.id).then(() => {
+                      this.refreshPlan()
+                    })
                   }
                 })
               }, (task: Task) => task.id)
@@ -385,8 +431,9 @@ export struct Home {
 
           Row({ space: 8 }) {
             this.statTile(`${this.liveRate()}%`, '净专注率')
-            this.statTile(TimeUtils.formatHMin(this.liveFocusSec()), '今日专注时长')
-            this.statTile(this.todayTotal > 0 ? `${this.completionRate}%` : '—', '任务完成率')
+            this.statTile(this.focusSecondsText(), '今日专注时长')
+            // 口径写清：这是**今日计划**的勾选完成率，与工作台「目标进度」（各科目标 vs 实际投入）不是同一个数
+          this.statTile(this.dashTotal > 0 ? `${this.completionRate}%` : '—', '今日任务完成率')
           }
           .width('100%')
         }

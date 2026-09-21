@@ -64,6 +64,17 @@ export struct TaskPlanning {
   aboutToAppear(): void {
     // 徽标要如实反映"这次到底是走大模型还是本地模板"，不能无条件亮绿灯
     this.gatewayReady = AIService.getInstance().isGatewayReady()
+    // 已有的今日计划先载入「待确认任务」。
+    // 这样整轮对话是**在现有清单上做增量**，而不是每次从空列表重排一遍 ——
+    // 否则"先排了高数、再聊着加英语"时，高数那几条会被下一轮结果整体冲掉。
+    const existing = AppStore.getInstance().getCurrentPlan()
+    if (existing.length > 0) {
+      const loaded: Task[] = []
+      for (const t of existing) {
+        loaded.push(t.copy())
+      }
+      this.tasks = loaded
+    }
     this.pushAI(AIService.getInstance().planningIntro())
     // 长期计划：在「复盘 → 长期计划」里设置，这里读出来当背景参考
     StorageService.getInstance().loadStudyPlan().then((p: StudyPlan | null) => {
@@ -71,8 +82,16 @@ export struct TaskPlanning {
         return
       }
       const hours = p.totalEstimatedMinutes > 0 ? ` · 目标 ${Math.round(p.totalEstimatedMinutes / 60)} 小时` : ''
-      const exam = p.examType.length > 0 ? ` · ${p.examType}` : ''
-      this.longPlanText = `${p.title}${exam}${hours}`
+      // 考试类型不再从计划里取（StudyPlan 已不复制 examType，备考目标在 buildPlanningContext 里由 goal 统一注入）；
+      // 但要把**各科目标**带上：它决定"目标进度"的分母，规划要看到同一份口径
+      const parts: string[] = []
+      for (const st of p.subjectTargets) {
+        if (st.subject.length > 0 && st.targetMinutes > 0) {
+          parts.push(`${st.subject} ${Math.round(st.targetMinutes / 60)} 小时`)
+        }
+      }
+      const subsText = parts.length > 0 ? ` · 各科目标 ${parts.join('、')}` : ''
+      this.longPlanText = `${p.title}${hours}${subsText}`
       this.pushAI(`你的长期计划是「${this.longPlanText}」，我会按这个来安排。`)
     }).catch(() => {
       // 没有长期计划就正常聊，不硬提
@@ -178,20 +197,30 @@ export struct TaskPlanning {
   }
 
   /**
+   * 去重键 = **科目 + 归一化标题**。
+   * 只比标题是不够的：不同科目下会出现同名任务（"第一章习题"），
+   * 只比标题会把英语的这条误判成"已经有了"而静默丢掉。
+   */
+  private taskKey(subject: string, title: string): string {
+    return `${this.titleKey(subject)}|${this.titleKey(title)}`
+  }
+
+  /**
    * 把 AI 给出的任务**追加**到「待确认任务」列表，而不是整体替换。
    *  - 已有任务原样保留（含用户手动调过的时长、已勾选状态）；
-   *  - 标题重复的视为同一条，跳过 —— 多轮对话不会把清单越聊越乱；
-   *  - 有新增才收起输入框，方便用户接着补充需求。
+   *  - 科目 + 标题都相同的视为同一条，跳过 —— 多轮对话不会把清单越聊越乱；
+   *  - 新加进来的任务在"已经点过圆圈"的情况下自动并入勾选集合，
+   *    否则「确认并开始」会把刚加的科目静默排除掉（选了 1 个之后其余全被剔除）。
    */
   private applyPlan(list: PlanTask[]): void {
     const next: Task[] = this.tasks.slice()
     const keys: string[] = []
     for (const t of next) {
-      keys.push(this.titleKey(t.title))
+      keys.push(this.taskKey(t.subject, t.title))
     }
-    let added = 0
+    const addedIds: string[] = []
     for (const p of list) {
-      const k = this.titleKey(p.title)
+      const k = this.taskKey(p.subject, p.title)
       if (keys.indexOf(k) >= 0) {
         continue
       }
@@ -199,14 +228,19 @@ export struct TaskPlanning {
       t.sortOrder = next.length
       keys.push(k)
       next.push(t)
-      added += 1
+      addedIds.push(t.id)
     }
-    if (next.length === 0) {
+    if (addedIds.length === 0) {
       return
     }
     this.tasks = next
-    if (added > 0) {
-      this.showComposer = false
+    // 已经点过圆圈 = 进入了"显式选择"模式，新增项默认也选中
+    if (this.confirmedIds.length > 0) {
+      const merged: string[] = this.confirmedIds.slice()
+      for (const id of addedIds) {
+        merged.push(id)
+      }
+      this.confirmedIds = merged
     }
   }
 
@@ -256,6 +290,17 @@ export struct TaskPlanning {
     if (unfinished.length > 0) {
       lines.push(`- 最近未完成任务：${unfinished.join('、')}`)
     }
+    // 当前清单：让模型知道"已经排了什么"，只补差量、不重复输出。
+    // 不注入这一项时，模型只能靠历史对话猜，用户说"再加上英语"很容易得到整份重排。
+    if (this.tasks.length > 0) {
+      const names: string[] = []
+      for (const t of this.tasks) {
+        const sub = t.subject.length > 0 ? `${t.subject}·` : ''
+        const done = t.done ? '（已完成）' : ''
+        names.push(`${sub}${t.title} ${t.estimatedDuration}分钟${done}`)
+      }
+      lines.push(`- 当前今日清单（已存在，请勿重复输出）：${names.join('；')}`)
+    }
     const minutes = TimeUtils.parseDurationMinutes(this.userTexts.join(' '))
     if (minutes > 0) {
       lines.push(`- 用户可用时间：${minutes} 分钟`)
@@ -299,6 +344,9 @@ export struct TaskPlanning {
     t.estimatedDuration = p.estimatedDuration
     t.sortOrder = p.sortOrder
     t.createdAt = Date.now()
+    // 本页产生的任务一律归属当前长期计划 —— 「目标进度」只统计这一批，
+    // 不把历次规划的散任务也算进分母（那会让进度越用越接近 0%）
+    t.planId = StudyPlan.PLAN_SINGLETON_ID
     return t
   }
 
@@ -643,18 +691,17 @@ export struct TaskPlanning {
       .width('100%')
       .padding({ left: 12, right: 12 })
 
-      // 出计划后仍可回到对话，继续让 AI 调整安排
-      if (!this.showComposer) {
-        Text('💬 继续调整')
-          .fontSize(12)
-          .fontColor(Colors.TEXT_SECONDARY)
-          .width('100%')
-          .textAlign(TextAlign.Center)
-          .margin({ top: 16 })
-          .onClick(() => {
-            this.showComposer = true
-          })
-      }
+      // 有计划后仍可回到对话继续追加需求（如"再加上英语"）。
+      // 做成开关而不是一次性按钮：否则点开就没法收起，输入栏会一直占着底部。
+      Text(this.showComposer ? '收起对话' : '💬 继续补充 / 调整')
+        .fontSize(12)
+        .fontColor(Colors.TEXT_SECONDARY)
+        .width('100%')
+        .textAlign(TextAlign.Center)
+        .margin({ top: 16 })
+        .onClick(() => {
+          this.showComposer = !this.showComposer
+        })
     }
     .width('100%')
   }
@@ -907,9 +954,18 @@ export struct TaskPlanning {
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
 
-        // 底部：出计划后固定「开始专注」，否则为输入栏
-        if (this.tasks.length > 0 && !this.showComposer) {
-          this.startBar()
+        // 底部：一旦有了计划就**始终**保留「开始专注」（用户随时可以走），
+        // 需要继续聊时输入栏叠加在它上方。
+        // 原来是二选一（有输入栏就没有开始按钮），于是"加了英语却找不到开始按钮"，
+        // 把本来顺畅的追加流程卡死在聊天里。
+        if (this.tasks.length > 0) {
+          Column() {
+            if (this.showComposer) {
+              this.inputBar()
+            }
+            this.startBar()
+          }
+          .width('100%')
         } else {
           this.inputBar()
         }

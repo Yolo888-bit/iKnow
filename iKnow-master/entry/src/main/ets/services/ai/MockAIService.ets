@@ -37,7 +37,7 @@ import { FocusProfile } from '../../models/FocusProfile'
 import { PlanTask } from '../../models/StudyPlan'
 import { Task } from '../../models/Task'
 import { StudyReport } from '../../models/StudyReport'
-import { Metrics } from '../Metrics'
+import { Metrics, DaySummary, Baseline, Trend7v7, Streaks } from '../Metrics'
 import { IdUtils } from '../../utils/IdUtils'
 import { TimeUtils } from '../../utils/TimeUtils'
 
@@ -763,48 +763,115 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
   }
 
   /**
-   * 单日复盘 AI 洞察（AI 输出，硬规则 §1：动态文案不得写死在页面）。
-   * dayLabel 形如「9月12日」；bestPeriod 形如「08:00 - 10:00」。
+   * 单日复盘洞察 —— **只讲这一天**，每条结论自带数字；能与本人基线对比时带上对比基准。
+   *
+   * 与长期分析严格区分：不引用近 30 天趋势、不引用五维画像。
+   * 结构量与基线口径都在 `Metrics`（`sessionStructure` / `baseline`），本层只把数字组织成人话 ——
+   * 原实现只有 `≥80 / ≥60 / 其它` 三档，同一档里所有日子输出同一句。
    */
-  /**
-   * 单日复盘洞察 —— **只讲这一天**。
-   * 与长期分析严格区分：不引用近 30 天趋势、不引用五维画像，避免两处内容雷同。
-   */
-  dayInsight(dayLabel: string, focusRate: number, bestPeriod: string, hasData: boolean): string {
-    if (!hasData) {
+  dayInsight(dayLabel: string, day: DaySummary, baseline: Baseline): string {
+    if (!day.hasData) {
       return `${dayLabel}没有专注记录，所以这一天没有可分析的内容。`
     }
-    const period = bestPeriod.length > 0 ? bestPeriod : '当天状态最好的那一段'
-    if (focusRate >= 80) {
-      return `${dayLabel}这一天净专注率 ${focusRate}%，其中 ${period} 是全天的状态高点，这段时间的产出最扎实。`
+    const st = day.structure
+    const parts: string[] = []
+    const main = day.sessionCount > 1 ? `当天最长的一次（当天共 ${day.sessionCount} 次）` : '这一次'
+
+    // ① 进入状态要多久
+    let first = `${dayLabel}学习 ${day.studyMinutes} 分钟，净专注率 ${day.focusRate}%`
+    if (st.timeToFocus >= 0) {
+      first += `，${main}进入状态用了 ${st.timeToFocus} 分钟`
+      if (baseline.ready && baseline.timeToFocus >= 0) {
+        first += `（你的常态约 ${baseline.timeToFocus} 分钟）`
+      }
     }
-    if (focusRate >= 60) {
-      return `${dayLabel}这一天净专注率 ${focusRate}%，属于正常波动范围；${period} 比其它时段更稳。`
+    parts.push(`${first}。`)
+
+    // ② 能连续专注多久
+    if (st.longestRun > 0) {
+      let line = `最长一段连续专注 ${st.longestRun} 分钟`
+      if (baseline.ready && baseline.longestRun > 0) {
+        const d = st.longestRun - baseline.longestRun
+        if (d <= -5) {
+          line += `，比你的常态（${baseline.longestRun} 分钟）短了 ${Math.abs(d)} 分钟`
+        } else if (d >= 5) {
+          line += `，比你的常态（${baseline.longestRun} 分钟）长了 ${d} 分钟`
+        } else {
+          line += `，与你的常态（${baseline.longestRun} 分钟）基本持平`
+        }
+      }
+      parts.push(`${line}。`)
     }
-    return `${dayLabel}这一天净专注率 ${focusRate}%，分心相对偏多，主要集中在 ${period} 之外的时段。`
+
+    // ②' 当天状态最好的一段（`Metrics.bestPeriodOfDay` 现算的真实时钟区间）
+    if (day.bestPeriod.length > 0) {
+      parts.push(`全天状态最好的一段在 ${day.bestPeriod}。`)
+    }
+
+    // ③ 被打断几次、回来要多久（recoveryMedian 是最可干预的一个量）
+    if (st.bouts > 0) {
+      let line = `被打断 ${st.bouts} 次`
+      if (st.recoveryMedian >= 0) {
+        line += `，平均 ${st.recoveryMedian} 分钟才回到专注`
+        if (baseline.ready && baseline.recoveryMedian >= 0 && st.recoveryMedian > baseline.recoveryMedian) {
+          line += `（你平时约 ${baseline.recoveryMedian} 分钟）`
+        }
+      }
+      parts.push(`${line}。`)
+    } else {
+      parts.push('全程没有出现分心段。')
+    }
+
+    // ④ 疲劳拐点：后段掉得明显才说（比"第一个 level<45"稳得多）
+    if (st.tailDrop <= -10) {
+      parts.push(`后半段平均专注等级比前半段低了 ${Math.abs(st.tailDrop)} 分，疲劳出现得偏早。`)
+    }
+
+    // ⑤ 没法对比时如实说明还差几次，不做跨天结论
+    if (!baseline.ready) {
+      parts.push(`再完成 ${baseline.needMore} 次专注，我就能拿这一天的数字和你的常态做对比。`)
+    }
+    return parts.join('')
   }
 
   /**
-   * 单日复盘建议 —— **只针对当天、且是明天就能执行的动作**。
-   * 长期策略类内容归长期视图的 longTermAnalysis，不在此处重复。
+   * 单日复盘建议 —— 由**当天结构指标与基线的差值**派生，最多 3 条，优先级（C5）：
+   * 分心次数 → 恢复耗时 → 疲劳拐点 → 单段长度 → 全部达标时只给 1 条保持建议。
+   * 没有任何无条件追加的模板句：不满足条件就不出这一条。
    */
-  daySuggestions(studyMinutes: number, focusRate: number): string[] {
+  daySuggestions(day: DaySummary, baseline: Baseline): string[] {
     const out: string[] = []
-    if (studyMinutes <= 0) {
-      return ['这一天没有有效学习时长，先设定一个 25 分钟的小目标开始']
+    if (!day.hasData || day.studyMinutes <= 0) {
+      return ['这一天没有有效学习时长，先设一个 25 分钟的小目标开始']
     }
-    if (focusRate < 70) {
-      out.push(`这一天分心偏多，明天把单段时长压到 25-30 分钟，中间主动起来活动一次`)
-    } else {
-      out.push(`这一天的节奏可以保持，明天沿用同样的单段时长即可`)
+    const st = day.structure
+    const ready = baseline.ready
+
+    // ① 被打断得比平时多 → 先找分心源
+    if (st.bouts >= 3 && (!ready || st.bouts > baseline.bouts)) {
+      const target = ready && baseline.bouts >= 0 ? Math.round(baseline.bouts) : 2
+      out.push(`被打断 ${st.bouts} 次，先把最容易打断你的东西移出视线（手机、消息提醒），明天争取压到 ${target} 次以内`)
     }
-    if (studyMinutes >= 180) {
-      out.push('这一天累计学习偏长，注意用眼与久坐，每两段之间留一次真正的休息')
+    // ② 被打断后回不来 → 缩短单段 + 主动休息
+    if (out.length < 3 && st.recoveryMedian >= 3 && (!ready || st.recoveryMedian > baseline.recoveryMedian)) {
+      out.push(`平均要 ${st.recoveryMedian} 分钟才能回到专注，把单段时长压到 25 分钟、每段之间主动起身一次，比硬撑更划算`)
     }
-    if (studyMinutes < 60) {
-      out.push('这一天总时长偏短，明天优先保证一整段不受打扰的专注')
+    // ③ 后半段明显掉下来 → 疲劳拐点偏早
+    if (out.length < 3 && st.tailDrop <= -10) {
+      out.push(`后半段专注等级掉了 ${Math.abs(st.tailDrop)} 分，疲劳来得偏早：把最长的那一段拆成两段，中间留 5~10 分钟真正的休息`)
     }
-    return out
+    // ④ 单段比平时短 → 先把"能连续专注多久"拉起来
+    if (out.length < 3 && ready && baseline.longestRun > 0 && st.longestRun > 0
+      && st.longestRun * 1.2 < baseline.longestRun) {
+      out.push(`最长连续专注 ${st.longestRun} 分钟，比你的常态（${baseline.longestRun} 分钟）短，明天先保证一整段不受打扰的 25 分钟`)
+    }
+    // ⑤ 全部达标：只给 1 条保持建议
+    if (out.length === 0) {
+      out.push(ready
+        ? `这一天的节奏与你的常态持平或更好（最长连续 ${st.longestRun} 分钟、被打断 ${st.bouts} 次），明天沿用同样的单段时长即可`
+        : `这一天完成了 ${day.studyMinutes} 分钟、最长连续专注 ${st.longestRun} 分钟，先把这个节奏保持住`)
+    }
+    return out.slice(0, 3)
   }
 
   /** 规划对话无有效回复时的承接语（AI 文案，硬规则 §1：不写死在页面） */
@@ -860,43 +927,49 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
    * 长期分析：**只陈述数据里真实存在的事实**，不再无条件宣称"效率在稳步提升"。
    * 样本不足时如实说明，不编造趋势。
    */
-  longTermAnalysis(profile: FocusProfile, hardestSubject: string): string {
-    if (profile.sampleCount < 3) {
-      return `目前只累计到 ${profile.sampleCount} 次专注，还不足以做长期分析。再多完成几次，我会按你的真实数据给结论。`
+  longTermAnalysis(profile: FocusProfile, hardestSubject: string, trend: Trend7v7, streak: Streaks): string {
+    if (profile.sampleCount < Metrics.MIN_SAMPLES) {
+      const need = Metrics.MIN_SAMPLES - profile.sampleCount
+      return `目前只累计到 ${profile.sampleCount} 次专注，还不足以做长期分析 —— 再完成 ${need} 次，我会按你的真实数据给结论。`
     }
     const parts: string[] = []
-    parts.push(`基于 ${profile.sampleCount} 次专注：平均单次净专注 ${profile.averageFocusDuration} 分钟，建议单段不超过 ${profile.focusThreshold} 分钟。`)
-    if (profile.bestFocusTime.length > 0) {
-      parts.push(`高效时段集中在 ${profile.bestFocusTime}。`)
-    }
-
-    // 用五维里的最强/最弱项说明差异，而不是笼统地说"在提升"
-    const names: string[] = ['效率', '专注度', '稳定性', '执行力', '抗干扰']
-    const values: number[] = [
-      profile.efficiency,
-      profile.concentration,
-      profile.stability,
-      profile.execution,
-      profile.antiDistraction
-    ]
-    let lo = 0
-    let hi = 0
-    for (let i = 1; i < values.length; i++) {
-      if (values[i] < values[lo]) {
-        lo = i
-      }
-      if (values[i] > values[hi]) {
-        hi = i
-      }
-    }
-    if (values[hi] - values[lo] >= 5) {
-      parts.push(`五维里「${names[lo]}」相对偏低（${values[lo]}），「${names[hi]}」相对更好（${values[hi]}）。`)
+    // 基准句：累计口径 + 近 7 天对比（窗口数据不足时如实说明，不编趋势）
+    let base = `累计 ${profile.sampleCount} 次专注，平均单次净专注 ${profile.averageFocusDuration} 分钟`
+    if (trend.ready) {
+      base += `；近 7 天净专注率 ${trend.curRate}%（前 7 天 ${trend.prevRate}%，${trend.rateTrend}），`
+        + `日均净专注 ${trend.curAvgMinutes} 分钟（前 7 天 ${trend.prevAvgMinutes} 分钟，${trend.avgTrend}）`
     } else {
-      parts.push(`五维目前比较均衡（${values[lo]}–${values[hi]}），暂没有明显短板。`)
+      base += '；近 7 天或前 7 天的数据还不完整，暂不比较趋势'
     }
-    if (hardestSubject.length > 0) {
-      parts.push(`按完成率看，${hardestSubject}推进得最慢，建议把它安排在高效时段。`)
+    parts.push(`${base}。`)
+
+    // ① 主要杠杆动作：只给一条，按优先级取第一个成立的（每条都带数字）
+    let lever = ''
+    if (trend.ready && trend.rateTrend === '下降') {
+      lever = `近 7 天净专注率比前 7 天低了 ${trend.prevRate - trend.curRate} 个百分点，`
+        + `先把单段压到 ${profile.focusThreshold} 分钟、学习时把手机放到视线之外，再观察一周`
+    } else if (trend.ready && trend.avgTrend === '下降') {
+      lever = `近 7 天日均净专注比前 7 天少了 ${trend.prevAvgMinutes - trend.curAvgMinutes} 分钟，`
+        + '先把每天的第一段 25 分钟固定下来，不追求总量'
+    } else if (hardestSubject.length > 0) {
+      const slot = profile.bestFocusTime.length > 0 ? profile.bestFocusTime : '你状态最好的时段'
+      lever = `按完成率看「${hardestSubject}」推进得最慢，把它安排到 ${slot}`
+        + `（单段不超过 ${profile.focusThreshold} 分钟）`
+    } else {
+      lever = `单段控制在 ${profile.focusThreshold} 分钟以内（当前平均单次 ${profile.averageFocusDuration} 分钟），到点就起身活动一次`
     }
+    parts.push(`${lever}。`)
+
+    // ② 保持动作：只给一条
+    let keep = ''
+    if (streak.currentStreak >= 2) {
+      keep = `已经连续学习 ${streak.currentStreak} 天，保持住这个节奏`
+    } else if (streak.longestGapDays >= 2) {
+      keep = `近 30 天最长有连续 ${streak.longestGapDays} 天没学（${streak.studiedDays} 天有记录），先保证每天至少一段 25 分钟`
+    } else {
+      keep = `近 30 天有 ${streak.studiedDays} 天留下了专注记录，继续按现在的节奏走`
+    }
+    parts.push(`${keep}。`)
     return parts.join('')
   }
 }

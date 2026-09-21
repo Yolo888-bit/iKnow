@@ -2,20 +2,18 @@ import { router, promptAction } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageService } from '../services/StorageService'
 import { AppStore } from '../store/AppStore'
-import { StudyPlan } from '../models/StudyPlan'
+import { StudyPlan, SubjectTarget } from '../models/StudyPlan'
 
 /**
- * 长期计划与目标 —— **合并后的唯一入口**。
+ * 长期计划与目标 —— **唯一入口**。
  *
- * 为什么合并：原先"目标"（考试类型 / 日期 / 科目）只能在首次引导页里改，
- * 入口藏在「我的 → 重新设置称呼与目标」，而"长期计划"（计划名称 / 目标总时长）
- * 是另一个页面、只有 3 个字段 —— 两者语义高度重叠却各写各的，
- * 用户既找不到，也分不清该改哪个。
+ * 单一来源规则（D1）：
+ *  - 考试类型 / 考试日期 / **科目清单** 只在「目标」（`LearningGoal`）；
+ *  - 长期计划（`StudyPlan`）只存"计划名 + 周期 + 各科目标分钟"，科目键必须取自上面的清单；
+ *  - `totalEstimatedMinutes` 是**派生**的合计（= Σ 各科目标），只读展示，不让它成为第二个真值。
  *
- * 现在一个页面同时配置：
- *  - 目标（LearningGoal）：目标考试 / 目标日期 / 科目 —— 用于倒计时与规划背景；
- *  - 长期计划（StudyPlan）  ：计划名称 / 目标总时长 —— 用于长期进度参照。
- * 存储沿用既有 `learning_goal` 与 `study_plan` 两张表，不新增表、不做迁移。
+ * 进度口径：工作台「目标进度」的分母 = 各科目标之和，分子 = 任务的**实际投入**
+ * （由专注计时自动累计）。所以这里填的是"每科计划投多少"，不是"完成了几个任务"。
  */
 @Entry
 @Component
@@ -26,8 +24,17 @@ export struct LongTermPlan {
   @State subjectsText: string = ''
   // —— 长期计划（StudyPlan）——
   @State title: string = ''
-  @State totalHours: string = ''
+  /** 已解析的科目清单（单独存一份，让 UI 随输入重绘） */
+  @State subjects: string[] = []
+  /** 与 subjects 一一对应的目标时长（小时，字符串便于编辑） */
+  @State targetHours: string[] = []
+  /** 迁移遗留的"未分配目标"（小时）；> 0 表示旧版只设过总目标、还没分到科目 */
+  @State unassignedHours: number = 0
   @State saved: boolean = false
+  /** 科目 → 目标分钟（非响应式：只在重建输入框时读） */
+  private targetMap: Map<string, number> = new Map()
+  /** 已加载的计划对象（保存时复用，保留 createdAt） */
+  private loaded: StudyPlan | null = null
 
   aboutToAppear(): void {
     const g = AppStore.getInstance().getGoal()
@@ -38,18 +45,64 @@ export struct LongTermPlan {
       this.dateText = `${d.getFullYear()}-${this.pad(d.getMonth() + 1)}-${this.pad(d.getDate())}`
     }
     StorageService.getInstance().loadStudyPlan().then((p: StudyPlan | null) => {
-      if (p !== null) {
-        this.title = p.title
-        this.totalHours = p.totalEstimatedMinutes > 0 ? `${Math.round(p.totalEstimatedMinutes / 60)}` : ''
-        this.saved = true
+      if (p === null) {
+        this.syncSubjects(this.subjectsText)
+        return
       }
+      this.loaded = p
+      this.title = p.title
+      this.saved = true
+      for (const st of p.subjectTargets) {
+        if (st.subject.length > 0) {
+          this.targetMap.set(st.subject, st.targetMinutes)
+        }
+      }
+      this.unassignedHours = this.minutesToHoursText(StudyPlan.unassignedMinutes(p))
+      this.syncSubjects(this.subjectsText)
     }).catch(() => {
       // 读不到就是"还没设置过"
+      this.syncSubjects(this.subjectsText)
     })
   }
 
   private pad(n: number): string {
     return n < 10 ? `0${n}` : `${n}`
+  }
+
+  private minutesToHoursText(minutes: number): number {
+    return Math.round(minutes / 60 * 10) / 10
+  }
+
+  /** 小时（字符串）→ 分钟；非法或空返回 0 */
+  private hoursToMinutes(text: string): number {
+    const h = Number(text.trim())
+    if (Number.isNaN(h) || h <= 0) {
+      return 0
+    }
+    return Math.round(h * 60)
+  }
+
+  /** 把当前输入框里的值收进 targetMap（改科目清单前必须先收，否则刚改的时长会丢） */
+  private flushInputs(): void {
+    for (let i = 0; i < this.subjects.length; i++) {
+      this.targetMap.set(this.subjects[i], this.hoursToMinutes(this.targetHours[i]))
+    }
+  }
+
+  /** 科目清单变化后重建输入框：已有目标的科目回填，新科目留空 */
+  private syncSubjects(text: string): void {
+    if (this.subjects.length > 0) {
+      this.flushInputs()
+    }
+    const list = this.parseSubjects(text)
+    const hours: string[] = []
+    for (const s of list) {
+      const raw: number | undefined = this.targetMap.get(s)
+      const min = raw !== undefined ? raw : 0
+      hours.push(min > 0 ? `${this.minutesToHoursText(min)}` : '')
+    }
+    this.subjects = list
+    this.targetHours = hours
   }
 
   /** 解析 YYYY-MM-DD；不合法或留空返回 0（= 不设置） */
@@ -92,23 +145,69 @@ export struct LongTermPlan {
     return out
   }
 
+  /** 合计（小时）= 各科目标之和 + 未分配；派生只读，不让用户再填一个总数 */
+  private totalHoursText(): string {
+    let minutes = 0
+    for (const t of this.targetHours) {
+      minutes += this.hoursToMinutes(t)
+    }
+    minutes += Math.round(this.unassignedHours * 60)
+    if (minutes <= 0) {
+      return '尚未设置'
+    }
+    return `${Math.round(minutes / 60 * 10) / 10} 小时`
+  }
+
+  /**
+   * 把"未分配目标"按现有任务的预计时长比例摊到各科（没有任务就平均分）。
+   * D4：**不静默分摊** —— 只有用户点了这个按钮才分配；分摊结果不直接保存，留给用户微调。
+   */
+  private distribute(): void {
+    const totalMin = Math.round(this.unassignedHours * 60)
+    if (totalMin <= 0 || this.subjects.length === 0) {
+      promptAction.showToast({ message: '先在「科目」里填好清单，再分摊' })
+      return
+    }
+    const weight: number[] = []
+    let sum = 0
+    for (const s of this.subjects) {
+      let m = 0
+      for (const t of AppStore.getInstance().getTasks()) {
+        if (t.subject === s) {
+          m += t.estimatedDuration
+        }
+      }
+      weight.push(m)
+      sum += m
+    }
+    const next: string[] = []
+    for (let i = 0; i < this.subjects.length; i++) {
+      const share = sum > 0 ? totalMin * weight[i] / sum : totalMin / this.subjects.length
+      next.push(`${Math.round(share / 60 * 10) / 10}`)
+    }
+    this.targetHours = next
+    this.unassignedHours = 0
+    promptAction.showToast({ message: '已按任务比例分摊到各科，可再手动微调后保存' })
+  }
+
   private async save(): Promise<void> {
     const exam = this.examType.trim()
     const target = this.parseDate(this.dateText.trim())
     if (exam.length === 0 && target === 0 && this.subjectsText.trim().length === 0
-      && this.title.trim().length === 0 && this.totalHours.trim().length === 0) {
+      && this.title.trim().length === 0) {
       promptAction.showToast({ message: '还没有填写内容' })
       return
     }
+    this.flushInputs()
 
-    // ① 目标：考试类型 / 日期 / 科目
+    // ① 目标：考试类型 / 日期 / 科目（科目清单是唯一来源）
     const g = AppStore.getInstance().getGoal()
     g.examType = exam
     if (g.title.length === 0 || g.title === '考研上岸') {
       g.title = exam
     }
     g.targetDate = target
-    g.subjects = this.parseSubjects(this.subjectsText)
+    g.subjects = this.subjects.slice()
     try {
       await AppStore.getInstance().saveGoal(g)
     } catch (e) {
@@ -116,21 +215,37 @@ export struct LongTermPlan {
       return
     }
 
-    // ② 长期计划：名称 / 目标总时长
+    // ② 长期计划：名称 + 周期 + 各科目标（合计派生）
     const name = this.title.trim()
-    if (name.length > 0) {
-      const hours = Number(this.totalHours.trim())
-      const minutes = Number.isNaN(hours) || hours <= 0 ? 0 : Math.round(hours * 60)
-      const plan = StudyPlan.create(name, exam)
-      plan.totalEstimatedMinutes = minutes
-      try {
-        await StorageService.getInstance().saveStudyPlan(plan)
-      } catch (e) {
-        promptAction.showToast({ message: '长期计划保存失败，请重试' })
-        return
+    const plan = this.loaded !== null ? this.loaded : StudyPlan.create(name)
+    plan.id = StudyPlan.PLAN_SINGLETON_ID
+    plan.title = name
+    plan.periodEnd = target
+    const targets: SubjectTarget[] = []
+    for (const s of this.subjects) {
+      const raw: number | undefined = this.targetMap.get(s)
+      const m = raw !== undefined ? raw : 0
+      if (m > 0) {
+        targets.push(SubjectTarget.create(s, m))
       }
     }
-    promptAction.showToast({ message: '已保存，倒计时与规划会按这个来' })
+    // 还没分摊掉的旧总值：如实保留为"未分配"，不丢弃也不硬塞给某个科目
+    if (this.unassignedHours > 0) {
+      targets.push(SubjectTarget.create('', Math.round(this.unassignedHours * 60)))
+    }
+    plan.subjectTargets = targets
+    StudyPlan.recomputeTotal(plan)
+    plan.updatedAt = Date.now()
+    try {
+      await StorageService.getInstance().saveStudyPlan(plan)
+    } catch (e) {
+      promptAction.showToast({ message: '长期计划保存失败，请重试' })
+      return
+    }
+    // 让工作台的目标进度立刻用上新分母（不必等下次重启）
+    AppStore.getInstance().setPlan(plan)
+    await AppStore.getInstance().refreshAggregates()
+    promptAction.showToast({ message: '已保存，倒计时与目标进度会按这个来' })
     router.back()
   }
 
@@ -181,7 +296,7 @@ export struct LongTermPlan {
           .fontWeight(FontWeight.Bold)
           .fontColor(Colors.TEXT_PRIMARY)
           .width('100%')
-        Text('目标决定倒计时与规划背景；长期计划描述"这一段时间要做成什么"。两者都只在这里设置。')
+        Text('目标决定倒计时与规划背景；各科目标决定工作台「目标进度」的分母。两者都只在这里设置。')
           .fontSize(12)
           .fontColor(Colors.TEXT_SECONDARY)
           .lineHeight(18)
@@ -198,6 +313,7 @@ export struct LongTermPlan {
           })
           this.field('科目', '例如：高等数学、英语、政治（顿号分隔，可留空）', this.subjectsText, (v: string) => {
             this.subjectsText = v
+            this.syncSubjects(v)
           })
         }
         .padding(18)
@@ -207,13 +323,88 @@ export struct LongTermPlan {
 
         // 长期计划
         Column() {
-          this.sectionTitle('长期计划', '这一段时间的总目标，用于长期进度参照；和每天的今日计划分开')
+          this.sectionTitle('长期计划', '计划名 + 各科计划投入时长；合计由各科相加得到，不单独填')
           this.field('计划名称', '例如：暑假强化 / 冲刺两个月', this.title, (v: string) => {
             this.title = v
           })
-          this.field('目标总时长（小时）', '例如：120（可留空）', this.totalHours, (v: string) => {
-            this.totalHours = v
-          })
+
+          if (this.subjects.length > 0) {
+            Text('各科目标时长（小时）')
+              .fontSize(13)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .width('100%')
+              .margin({ top: 16 })
+            ForEach(this.subjects, (s: string, i: number) => {
+              Row() {
+                Text(s)
+                  .fontSize(14)
+                  .fontColor(Colors.TEXT_PRIMARY)
+                  .layoutWeight(1)
+                TextInput({ placeholder: '小时，如 1.5', text: this.targetHours[i] })
+                  .fontSize(15)
+                  .height(42)
+                  .width(110)
+                  .backgroundColor(Colors.BG)
+                  .borderRadius(Radius.MD)
+                  .onChange((v: string) => {
+                    // 必须换新数组：同引用 ArkUI 不重绘
+                    const next = this.targetHours.slice()
+                    next[i] = v
+                    this.targetHours = next
+                  })
+              }
+              .width('100%')
+              .margin({ top: 8 })
+            }, (s: string, i: number) => `${s}_${i}`)
+
+            Row() {
+              Text('合计')
+                .fontSize(13)
+                .fontColor(Colors.TEXT_SECONDARY)
+              Blank()
+              Text(this.totalHoursText())
+                .fontSize(15)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.TEXT_PRIMARY)
+            }
+            .width('100%')
+            .margin({ top: 14 })
+          } else {
+            Text('先在上面「科目」里填好清单，这里就会出现每科的目标时长。')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .lineHeight(18)
+              .width('100%')
+              .margin({ top: 12 })
+          }
+
+          // 旧数据迁移：只设过总目标、还没分到科目
+          if (this.unassignedHours > 0) {
+            Column() {
+              Text(`旧版设置的总目标 ${this.unassignedHours} 小时还没分到科目，目标进度暂时无法计算。`)
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .lineHeight(18)
+                .width('100%')
+              Button('按现有任务比例分摊到各科')
+                .width('100%')
+                .height(40)
+                .fontSize(14)
+                .fontColor(Colors.TEXT_PRIMARY)
+                .backgroundColor(Colors.BG)
+                .borderRadius(Radius.MD)
+                .margin({ top: 10 })
+                .onClick(() => {
+                  this.distribute()
+                })
+            }
+            .width('100%')
+            .padding(12)
+            .backgroundColor(Colors.PRIMARY_SOFT)
+            .borderRadius(Radius.MD)
+            .margin({ top: 14 })
+            .alignItems(HorizontalAlign.Start)
+          }
         }
         .padding(18)
         .backgroundColor(Colors.CARD)

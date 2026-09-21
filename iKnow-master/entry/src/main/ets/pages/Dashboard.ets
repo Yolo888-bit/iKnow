@@ -4,12 +4,11 @@ import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { TimeUtils } from '../utils/TimeUtils'
 import { BarChart } from '../components/BarChart'
-import { SubjectProgress } from '../models/Dashboard'
 import { Task } from '../models/Task'
 import { TaskStatus } from '../models/Enums'
+import { Metrics, PlanProgress, SubjectProgressRow } from '../services/Metrics'
 import { UserAvatar } from '../components/UserAvatar'
 import { AvatarPicker } from '../components/AvatarPicker'
-import { SimWorkbench } from '../components/SimWorkbench'
 
 /** 我的工作台 —— 学习全局看板 */
 @Component
@@ -24,14 +23,16 @@ export struct Dashboard {
   /** 1 = 会话进行中（响应式） */
   @StorageProp(StorageKey.FOCUS_RUNNING) focusRunningFlag: number = 0
   @State weekTrend: number[] = []
-  @State subjects: SubjectProgress[] = []
   @State examType: string = ''
   @State targetDateText: string = ''
   @State greeting: string = ''
   @State showAvatarSheet: boolean = false
-  /** 总体进度：全部任务（含历史） */
-  @State allDone: number = 0
-  @State allTotal: number = 0
+  /**
+   * 目标进度：**拉取**自 AppStore（权威结果），不在页面里自算口径。
+   * 原来页面自己算"全部历史任务的勾选完成率"（merged/allDone/allTotal），
+   * 分母含历次规划的全部任务 → 越用越接近 0%，而且和用户的"学习进度"不是一回事。
+   */
+  @State progress: PlanProgress = Metrics.planProgress([], null)
   @State pending: Task[] = []
   @State showPending: boolean = false
 
@@ -51,7 +52,8 @@ export struct Dashboard {
     const store = AppStore.getInstance()
     const d = store.getDashboard()
     this.weekTrend = d.weekTrend
-    this.subjects = d.subjectProgress
+    // 目标进度：拉取 store 的权威结果（分母 = 本期计划各科目标，主分子 = 实际投入）
+    this.progress = store.getPlanProgress()
 
     const goal = store.getGoal()
     this.examType = goal.examType
@@ -62,38 +64,45 @@ export struct Dashboard {
       this.targetDateText = ''
     }
 
-    // 总体进度 = 「AI 规划中的任务」+「专注里实际用过的任务」，按 id 去重累加。
-    // 只统计这两个来源，不把无关任务算进来，口径与用户预期一致。
-    const merged: Task[] = []
-    const seen: string[] = []
-    const planned: Task[] = store.getCurrentPlan()
-    for (const t of planned) {
-      if (seen.indexOf(t.id) < 0) {
-        seen.push(t.id)
-        merged.push(t)
-      }
-    }
-    const fromFocus: Task[] = store.getTasks()
-    for (const t of fromFocus) {
-      if (seen.indexOf(t.id) < 0) {
-        seen.push(t.id)
-        merged.push(t)
-      }
-    }
-    let done = 0
+    // 未完成清单：仍列全部任务（含历史），但它只回答"还有什么要做"，
+    // **不再是进度的分子分母**（那套口径已由 targetProgress 取代）
+    const all: Task[] = store.getTasks()
     const pend: Task[] = []
-    for (const t of merged) {
-      if (t.done || t.status === TaskStatus.DONE) {
-        done += 1
-      } else {
+    for (const t of all) {
+      if (!t.done && t.status !== TaskStatus.DONE) {
         pend.push(t)
       }
     }
     // 未完成：最近的排在前面
     pend.sort((a: Task, b: Task) => b.createdAt - a.createdAt)
-    this.allTotal = merged.length
-    this.allDone = done
     this.pending = pend
+  }
+
+  /** 目标进度主数值：`实际投入 / 目标`（不 clamp，超额时照样显示真实数字） */
+  private investedText(): string {
+    return `${this.progress.actualMinutes} / ${this.progress.targetMinutes} 分钟`
+  }
+
+  /** 目标进度副信息：按勾选完成算的口径（辅口径，避免用户以为两个数矛盾） */
+  private completedText(): string {
+    return `按勾选完成算：${this.progress.doneEstimatedMinutes} / ${this.progress.targetMinutes} 分钟（${this.progress.completedPercent}%）`
+  }
+
+  /** 空态/异常态的一句说明（不默认显示 100%，也不显示 0% 冒充"有数据"） */
+  private progressHint(): string {
+    if (this.progress.state === 'NO_PLAN') {
+      return '还没有长期计划。设置各科目标时长后，这里会按"实际投入 / 目标"显示进度。'
+    }
+    if (this.progress.state === 'NO_TARGET') {
+      if (this.progress.unassignedTargetMinutes > 0) {
+        return `已设总目标 ${Math.round(this.progress.unassignedTargetMinutes / 60)} 小时，但还没分到科目 —— 去「长期计划与目标」分一下，进度才能算。`
+      }
+      return '长期计划里还没填各科目标时长，进度没有分母，暂时无法计算。'
+    }
+    if (this.progress.state === 'NO_TASK') {
+      return `各科目标合计 ${Math.round(this.progress.targetMinutes / 60)} 小时，本期还没有任务 —— 去「AI 规划」拆一份，进度从 0 开始。`
+    }
+    return ''
   }
 
   /**
@@ -141,13 +150,6 @@ export struct Dashboard {
 
   /** 有会话在跑（含被返回键留在后台的）时，首页给出继续入口 */  private resumeFocus(): void {
     router.pushUrl({ url: 'pages/Focus' })
-  }
-
-  private percent(): string {
-    if (this.allTotal === 0) {
-      return '—'
-    }
-    return `${Math.round(this.allDone / this.allTotal * 100)}%`
   }
 
   @Builder
@@ -338,15 +340,15 @@ export struct Dashboard {
         }
         .dashCard()
 
-        // 总体进度（全部任务，含历史）
+        // 目标进度（分母 = 各科目标，主分子 = 实际投入）
         Column() {
           Row() {
-            Text('总体进度')
+            Text('目标进度')
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)
             Blank()
-            Text('规划 + 专注')
+            Text('按实际投入')
               .fontSize(11)
               .fontColor(Colors.PRIMARY_DARK)
               .padding({ left: 8, right: 8, top: 3, bottom: 3 })
@@ -356,33 +358,79 @@ export struct Dashboard {
           .width('100%')
           .margin({ bottom: 12 })
 
-          Row() {
-            Text(`${this.allDone} / ${this.allTotal}`)
-              .fontSize(20)
-              .fontWeight(FontWeight.Medium)
+          if (this.progress.state === 'NO_PLAN' || this.progress.state === 'NO_TARGET'
+            || this.progress.state === 'NO_TASK') {
+            // 空态：不显示 0%、更不显示 100% —— 分母不存在时任何百分比都是假的
+            Text(this.progressHint())
+              .fontSize(13)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(20)
+              .width('100%')
+            Button('去「长期计划与目标」设置')
+              .width('100%')
+              .height(42)
+              .fontSize(14)
               .fontColor(Colors.TEXT_PRIMARY)
-            Blank()
-            Text(this.percent())
-              .fontSize(18)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.PRIMARY_DARK)
-          }
-          .width('100%')
-          .margin({ bottom: 10 })
-
-          Progress({
-            value: this.allDone,
-            total: Math.max(1, this.allTotal),
-            type: ProgressType.Linear
-          })
-            .color(Colors.PRIMARY)
-            .backgroundColor(Colors.LINE)
+              .backgroundColor(Colors.BG)
+              .borderRadius(Radius.MD)
+              .margin({ top: 12 })
+              .onClick(() => {
+                router.pushUrl({ url: 'pages/LongTermPlan' })
+              })
+          } else {
+            Row() {
+              Text(this.investedText())
+                .fontSize(20)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Blank()
+              Text(`${this.progress.investedPercent}%`)
+                .fontSize(18)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.PRIMARY_DARK)
+            }
             .width('100%')
+            .margin({ bottom: 10 })
 
-          // 点这里展开未完成任务清单
+            Progress({ value: this.progress.investedPercent, total: 100, type: ProgressType.Linear })
+              .color(Colors.PRIMARY)
+              .backgroundColor(Colors.LINE)
+              .width('100%')
+
+            Text(this.completedText())
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .width('100%')
+              .margin({ top: 10 })
+
+            if (this.progress.overdueMinutes > 0) {
+              Text(`已超出目标 ${this.progress.overdueMinutes} 分钟：进度条停在 100%，但真实投入照实显示`)
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .lineHeight(18)
+                .width('100%')
+                .margin({ top: 6 })
+            }
+            if (this.progress.unassignedTasks > 0) {
+              Text(`另有 ${this.progress.unassignedTasks} 个未计入目标的任务，实际投入 ${this.progress.unassignedActualMinutes} 分钟（不计入上面的百分比）`)
+                .fontSize(12)
+                .fontColor(Colors.TEXT_TERTIARY)
+                .lineHeight(18)
+                .width('100%')
+                .margin({ top: 6 })
+            }
+            Text('口径：主数值为实际投入（由专注计时自动累计，不需要手动打钩），分母为各科目标时长之和。')
+              .fontSize(11)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .lineHeight(16)
+              .width('100%')
+              .margin({ top: 10 })
+          }
+
+          // 点这里展开未完成任务清单（它回答"还有什么要做"，与进度口径无关）
           Row() {
-            Text(this.allTotal === 0
-              ? '还没有任何任务，去「AI 规划」拆一份吧'
+            Text(this.pending.length === 0
+              ? '目前没有未完成的任务'
               : (this.showPending
                 ? `未完成 ${this.pending.length} 项 · 打钩即完成`
                 : `未完成 ${this.pending.length} 项 · 点击查看`))
@@ -427,36 +475,69 @@ export struct Dashboard {
         }
         .dashCard()
 
-        // 科目进度
+        // 各科目标进度（科目来自计划的 subjectTargets，不由任务反推）
         Column() {
-          this.sectionTitle('科目进度（近 30 天）')
-          if (this.subjects.length === 0) {
-            Text('开始学习后，这里会显示各学科的完成进度')
+          this.sectionTitle('各科目标进度')
+          if (this.progress.subjects.length === 0) {
+            Text('在「长期计划与目标」里填好各科目标时长后，这里会按科目显示进度。')
               .fontSize(13)
               .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(20)
               .width('100%')
           } else {
-            ForEach(this.subjects, (sp: SubjectProgress) => {
+            ForEach(this.progress.subjects, (row: SubjectProgressRow) => {
               Column() {
                 Row() {
-                  Text(sp.subject)
+                  Text(row.subject)
                     .fontSize(14)
                     .fontColor(Colors.TEXT_PRIMARY)
                   Blank()
-                  Text(`${sp.percent}%`)
-                    .fontSize(14)
+                  Text(row.targetMinutes > 0
+                    ? `${row.actualMinutes} / ${row.targetMinutes} 分钟`
+                    : `${row.actualMinutes} 分钟（未设目标）`)
+                    .fontSize(13)
                     .fontColor(Colors.PRIMARY_DARK)
                 }
                 .width('100%')
-                Progress({ value: sp.percent, total: 100, type: ProgressType.Linear })
+
+                Progress({
+                  value: row.targetMinutes > 0
+                    ? Math.min(100, Math.round(row.actualMinutes / row.targetMinutes * 100)) : 0,
+                  total: 100,
+                  type: ProgressType.Linear
+                })
                   .color(Colors.PRIMARY)
                   .backgroundColor(Colors.LINE)
                   .width('100%')
                   .margin({ top: 8 })
+
+                Text(row.targetMinutes <= 0
+                  ? '这一科还没设目标时长，进度无从计算'
+                  : (row.totalTasks === 0
+                    ? '本期还没有这一科的任务'
+                    : `任务 ${row.doneTasks}/${row.totalTasks} 已完成（勾选口径）`))
+                  .fontSize(11)
+                  .fontColor(Colors.TEXT_TERTIARY)
+                  .width('100%')
+                  .margin({ top: 6 })
+
+                // 超额时给一句一键操作：把目标上调到真实投入（D6）
+                if (row.state === 'OVER') {
+                  Button(`把这个目标上调到 ${row.actualMinutes} 分钟`)
+                    .height(34)
+                    .fontSize(12)
+                    .fontColor(Colors.TEXT_PRIMARY)
+                    .backgroundColor(Colors.BG)
+                    .borderRadius(Radius.MD)
+                    .margin({ top: 8 })
+                    .onClick(() => {
+                      AppStore.getInstance().raiseSubjectTarget(row.subject, row.actualMinutes)
+                    })
+                }
               }
               .width('100%')
               .margin({ top: 14 })
-            }, (sp: SubjectProgress) => sp.subject)
+            }, (row: SubjectProgressRow) => row.subject)
           }
         }
         .dashCard()
@@ -478,9 +559,6 @@ export struct Dashboard {
             .width('100%')
         }
         .dashCard()
-
-        // 模拟状态（原在「设备连接」页的模拟工作台，统一移到这里）
-        SimWorkbench()
 
         Blank().height(20)
         }

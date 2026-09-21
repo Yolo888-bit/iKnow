@@ -21,6 +21,7 @@ import { GatewayRecognizer } from './GatewayRecognizer'
 import { AIService } from './AIService'
 import { FeedbackService } from './FeedbackService'
 import { hilog } from '@kit.PerformanceAnalysisKit'
+import { power } from '@kit.BasicServicesKit'
 import { PermissionService } from './PermissionService'
 import { StorageService } from './StorageService'
 import { FocusDetectionService } from './FocusDetectionService'
@@ -84,6 +85,18 @@ export class FocusController {
   private sampleAccumMs: number = 0
   private lastYellowAt: number = 0
   private lastRedAt: number = 0
+
+  /**
+   * 切后台的时间戳（0 = 当前在前台）。
+   * 手机侧的唯一信号：进后台 + 亮屏 = 用户在别的应用上（手机使用）；
+   * 熄屏/锁屏 = 手机被放下（本产品的核心学习场景），不算分心。
+   * 归属在**回到前台时**用真实时钟一次性结算，避免后台定时器被冻结导致算不准。
+   */
+  private bgStartedAt: number = 0
+  /** 切走那一刻屏幕是否亮着 */
+  private bgScreenOn: boolean = false
+  /** 切走时是否处于"可判定"的模式（非暂停/非休息/非答疑） */
+  private bgEligible: boolean = false
 
   private timeline: FocusTimelinePoint[] = []
   /** 本次会话的手表事件（随会话落库） */
@@ -252,6 +265,63 @@ export class FocusController {
     this.session.taskTimeline.push(p)
   }
 
+  /**
+   * 按任务归属曲线**分段反算**实际投入，累加写回 `Task.actualDuration`（秒）。
+   *
+   * 口径：**墙钟段长** —— 不细分段内的休息/暂停，代表"这段计划时间里真的投进去了多少"。
+   * 它与"勾选完成"是两个口径：这个由会话计时自动产生，不需要用户打钩。
+   *
+   * 规则：
+   *  - 每个采样点 `minuteOffset` 到下一个采样点之间算给该点的任务；末段补到 `totalSec`；
+   *  - 首点之前的那一段（恢复会话时可能存在）归给首个采样点的任务；
+   *  - 整条曲线为空时退化为"整段算给当前任务"（宁可粗，也不要凭空发明归属）；
+   *  - 空任务 id（未分配任务）的段不计入任何任务。
+   */
+  private applyTaskDurations(): void {
+    const totalMin = Math.floor(this.totalSec / 60)
+    if (totalMin <= 0 || this.tasks.length === 0) {
+      return
+    }
+    const pts: TaskTimelinePoint[] = this.session.taskTimeline.slice()
+    pts.sort((a: TaskTimelinePoint, b: TaskTimelinePoint): number => a.minuteOffset - b.minuteOffset)
+    const minutes: Map<string, number> = new Map()
+    if (pts.length === 0) {
+      const fallbackId = this.currentTaskId.length > 0 ? this.currentTaskId : this.firstUnfinishedTaskId()
+      if (fallbackId.length > 0) {
+        minutes.set(fallbackId, totalMin)
+      }
+    } else {
+      for (let i = 0; i < pts.length; i++) {
+        const startMin = i === 0 ? 0 : pts[i].minuteOffset
+        const endMin = i + 1 < pts.length ? pts[i + 1].minuteOffset : totalMin
+        const span = endMin - startMin
+        if (pts[i].taskId.length === 0 || span <= 0) {
+          continue
+        }
+        const prev: number | undefined = minutes.get(pts[i].taskId)
+        minutes.set(pts[i].taskId, (prev !== undefined ? prev : 0) + span)
+      }
+    }
+    for (const t of this.tasks) {
+      const m: number | undefined = minutes.get(t.id)
+      if (m !== undefined && m > 0) {
+        t.actualDuration = t.actualDuration + m * 60
+      }
+    }
+    hilog.info(0x0000, 'iKnow.Focus', '任务实际投入反算：按 %{public}d 个采样点、共 %{public}d 分钟',
+      pts.length, totalMin)
+  }
+
+  /** 第一个未完成的任务 id（无则空串）：没有归属信息时的兜底对象 */
+  private firstUnfinishedTaskId(): string {
+    for (const t of this.tasks) {
+      if (!t.done) {
+        return t.id
+      }
+    }
+    return ''
+  }
+
   /** UI 注册干预回调（Phase 1 用于弹窗/横幅呈现）；传 null 取消注册 */
   setOnIntervention(cb: ((d: CompanionDecision, e: InterventionEvent) => void) | null): void {
     this.onIntervention = cb
@@ -274,6 +344,9 @@ export class FocusController {
     this.running = true
     this.state = FocusState.FOCUSED
     this.stateEnteredAt = Date.now()
+    // 任务归属曲线的初始点：没有它，第一段（0 分钟 → 首次切换任务）没有归属，
+    // 分段反算时开头这一段会被整段丢掉
+    this.recordTaskTimeline()
     this.questions = []
     this.bindPerception()
   }
@@ -402,6 +475,7 @@ export class FocusController {
     this.manualInject = false
     this.simInjectPending = false
     this.clearSimTimer()
+    this.resetBackgroundProbe()
   }
 
   /** 清掉演示注入的延迟结算定时器（会话结束/复位时必调，避免回调打到已结束的会话） */
@@ -934,6 +1008,11 @@ export class FocusController {
     this.resting = (this.state === FocusState.RESTING)
     this.breakStartedAt = this.resting ? Date.now() : 0
     this.stateEnteredAt = Date.now()
+    // 快照里带了"当时在哪个任务上"，必须还原 —— 否则恢复后当前任务变成空，
+    // 之后的任务归属曲线全都没有归属，界面也显示成没在任务上
+    this.currentTaskId = snap.currentTaskId
+    // 任务归属曲线补一个初始点（偏移 = 已计时长），让恢复后的这一段也有归属
+    this.recordTaskTimeline()
     this.running = true
     this.lastTickAt = Date.now()
     this.segStartAt = Date.now()
@@ -958,6 +1037,7 @@ export class FocusController {
     this.clearSimTimer()
     // 收尾前先结清最后一段，否则"最后一次切换 → 用户点结束"这段时间不会计入任何累计值
     this.settleSegment(Date.now())
+    this.resetBackgroundProbe()
     this.running = false
     this.qaMode = false
     this.resting = false
@@ -979,6 +1059,9 @@ export class FocusController {
     this.session.timeline = this.timeline
     this.session.events = this.events
     this.session.completedTaskIds = this.tasks.filter((t: Task): boolean => t.done).map((t: Task): string => t.id)
+    // 按任务归属曲线分段反算"实际投入"，写回 Task.actualDuration。
+    // 必须在这里（而不是 AppStore 里）：endSession() 紧接着会 getTasks() 并逐个 saveTask()
+    this.applyTaskDurations()
     this.session.status = SessionStatus.FINISHED
     this.session.updatedAt = Date.now()
     // 落最终快照 + 持久化干预事件 + 任务归属曲线
@@ -1017,6 +1100,7 @@ export class FocusController {
     RealWatchSignalSource.getInstance().stop()
     WatchEventEngine.getInstance().stop()
     this.clearSimTimer()
+    this.resetBackgroundProbe()
     this.running = false
     this.qaMode = false
     this.resting = false
@@ -1043,6 +1127,104 @@ export class FocusController {
     AppStorage.setOrCreate<string>(StorageKey.FOCUS_STATE, FocusState.FOCUSED)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_QA_ELAPSED, 0)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_BREAK_REMAIN, 0)
+  }
+
+  // ===================== 手机侧信号：专注中切后台 =====================
+  //
+  // 为什么需要：专注中切到别的应用，计时仍在继续，而没有任何地方记下"用户在用手机"。
+  // 这两个方法由 EntryAbility 的生命周期回调驱动 —— 零外设、零权限。
+  //
+  // 判据的关键：**进后台 ≠ 分心**。"手机扣在桌上、锁屏后专心写题"正是本产品的核心场景，
+  // 那时 App 也在后台。所以只有当"后台 + 屏幕亮着"（= 人在别的应用上）才算手机使用。
+  //
+  // 归属时间在**回到前台时**用真实时钟一次性结算：后台定时器会被系统冻结，
+  // 用 tick 累加会严重少算；而且熄屏与亮屏要分别归属到不同的累计值。
+
+  /** App 进入后台（EntryAbility.onBackground 调用）：只记录与结清，不在这里下结论 */
+  onAppBackground(): void {
+    if (!this.running || this.bgStartedAt > 0) {
+      return
+    }
+    const now = Date.now()
+    // 先把"一直到切走前"的这一段按当前状态结清，段的边界落在真实切换时刻
+    this.settleSegment(now)
+    this.bgStartedAt = now
+    this.bgScreenOn = FocusController.isScreenOn()
+    this.bgEligible = !this.paused && !this.resting && !this.qaMode
+    hilog.info(0x0000, 'iKnow.Focus', '进入后台：屏幕=%{public}s 可判定=%{public}s',
+      this.bgScreenOn ? '亮' : '灭', this.bgEligible ? '是' : '否')
+  }
+
+  /**
+   * App 回到前台（EntryAbility.onForeground 调用）：结算后台这段时间的归属。
+   *  - 亮屏 + 离开 ≥ BG_PHONE_MIN_SEC + 可判定 → 记为「手机使用」分心，并走一次干预阶梯；
+   *  - 熄屏 / 离开过短 → 不算分心，按当时模式归入净专注；
+   *  - 休息 / 暂停 / 答疑途中 → 归入对应累计值（后台不影响这些模式的计时）。
+   */
+  onAppForeground(): void {
+    if (!this.running || this.bgStartedAt <= 0) {
+      return
+    }
+    const now = Date.now()
+    const away = Math.max(0, (now - this.bgStartedAt) / 1000)
+    const screenOn = this.bgScreenOn
+    const eligible = this.bgEligible
+    this.resetBackgroundProbe()
+    // 这段时间由下面手工归属，把段起点挪到"现在"，避免 settleSegment 再算一遍
+    this.segStartAt = now
+    if (away <= 0) {
+      return
+    }
+    this.totalSec += away
+
+    if (eligible && screenOn && away >= FocusTuning.BG_PHONE_MIN_SEC) {
+      this.distractionSec += away
+      this.lastDetail = `切到其他应用 ${Math.round(away)} 秒（手机使用）`
+      this.lastConfidence = Math.round(FocusTuning.BG_PHONE_CONFIDENCE * 100)
+      this.recordEvent(FocusState.DISTRACTED, FocusSource.PHONE,
+        FocusTuning.BG_PHONE_CONFIDENCE, `亮屏离开本应用 ${Math.round(away)} 秒`)
+      this.sampleTimeline()
+      this.pushLive()
+      hilog.info(0x0000, 'iKnow.Focus', '记为手机使用分心：%{public}d 秒', Math.round(away))
+      // 干预阶梯照常走（冷却与预算由 InterventionEngine 管）。
+      // 评估时把状态临时置为"分心"，让引擎按一次真实分心来决定是否提醒；评估完立刻还原。
+      const prevState = this.state
+      const prevEntered = this.stateEnteredAt
+      this.state = FocusState.DISTRACTED
+      this.stateEnteredAt = now - Math.round(away * 1000)
+      this.evaluateIntervention()
+      this.state = prevState
+      this.stateEnteredAt = prevEntered
+      return
+    }
+
+    if (this.paused) {
+      this.pausedAccum += away
+    } else if (this.resting) {
+      this.breakSec += away
+    } else if (this.qaMode) {
+      this.qaSec += away
+    } else {
+      // 熄屏（手机扣桌 / 放兜里）或极短离开：这仍然是专注
+      this.focusSec += away
+    }
+    this.pushLive()
+  }
+
+  /** 屏幕是否亮着（power.isActive()，免权限，since 9）。取不到时按"亮"处理：宁可多记一次也不漏判 */
+  private static isScreenOn(): boolean {
+    try {
+      return power.isActive()
+    } catch (e) {
+      return true
+    }
+  }
+
+  /** 复位切后台探测状态（结束 / 中止 / 新会话开始都要做，避免脏时间戳打到下一段会话） */
+  private resetBackgroundProbe(): void {
+    this.bgStartedAt = 0
+    this.bgScreenOn = false
+    this.bgEligible = false
   }
 
   private async writeSnapshot(): Promise<void> {

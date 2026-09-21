@@ -13,7 +13,6 @@ import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
 import { DateChip } from '../components/DateChip'
 import { StorageService } from '../services/StorageService'
-import { StudyPlan } from '../models/StudyPlan'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 
 /**
@@ -31,8 +30,6 @@ export struct Review {
   @State practice: PracticeSummaryItem[] = []
   @State habit: HabitInsight = { bestWindow: '', bestRate: 0, lowWindow: '', lowNote: '', advice: '' }
   @State aiAdvice: string = ''
-  /** 长期计划（study_plan 表，此前零调用；长期视图里设置） */
-  @State longPlan: StudyPlan | null = null
   @State profile: FocusProfile = new FocusProfile()
   @State dimValues: number[] = []
   @State canShowRadar: boolean = false
@@ -61,6 +58,8 @@ export struct Review {
 
   // 右上角下拉面板：切换「长期复盘 / 按天复盘」，按天时内嵌月历
   @State showPicker: boolean = false
+  /** 有复盘记录的日期（按天起点时间戳）：日历里用来灰置「当天没记录」的日子 */
+  @State dayMarks: number[] = []
   /** 下拉面板里是否已展开「按天复盘」的月历 */
   @State pickDayMode: boolean = false
   @State calYear: number = 2026
@@ -144,12 +143,7 @@ export struct Review {
     this.aiAdvice = AIService.getInstance().longTermAnalysis(this.profile, hardest,
       Metrics.trend7v7(sessions, now), Metrics.streaks(sessions, now))
 
-    // 长期计划（设置页改完回来要刷新）
-    StorageService.getInstance().loadStudyPlan().then((p: StudyPlan | null) => {
-      this.longPlan = p
-    }).catch(() => {
-      this.longPlan = null
-    })
+    this.buildDayMarks(sessions)
 
     // 按天视图下同步刷新当天数据，否则结束后仍显示旧值
     if (this.mode === 1) {
@@ -161,23 +155,6 @@ export struct Review {
     if (this.lineReady) {
       this.onLineChartReady()
     }
-  }
-
-  /** 目标一行：考试 + 倒计时 + 科目（与长期计划合并后一起展示，空则如实说明） */
-  private goalLine(): string {
-    const g = AppStore.getInstance().getGoal()
-    if (g.examType.length === 0 && g.subjects.length === 0) {
-      return '还没设置目标考试与科目，在「长期计划与目标」里填写后，倒计时与规划会更准。'
-    }
-    const parts: string[] = []
-    if (g.examType.length > 0) {
-      const days = g.targetDate > 0 ? `，距考试 ${TimeUtils.daysUntil(g.targetDate, Date.now())} 天` : '（未填考试日期）'
-      parts.push(`目标：${g.examType}${days}`)
-    }
-    if (g.subjects.length > 0) {
-      parts.push(`科目：${g.subjects.join('、')}`)
-    }
-    return parts.join(' · ')
   }
 
   /**
@@ -249,6 +226,34 @@ export struct Review {
     return cells
   }
 
+  /**
+   * 收集「真的有复盘记录」的日期（按天起点归并）。
+   * 只用有效学习时长 > 0 的会话 —— 空会话不算一天有记录。
+   */
+  private buildDayMarks(sessions: FocusSession[]): void {
+    const marks: number[] = []
+    for (const s of sessions) {
+      if (Metrics.totalStudySec(s) <= 0) {
+        continue
+      }
+      const d = TimeUtils.dayStart(s.startTime)
+      if (marks.indexOf(d) < 0) {
+        marks.push(d)
+      }
+    }
+    this.dayMarks = marks
+  }
+
+  /** 某一天是否有复盘记录 */
+  private hasRecord(y: number, m: number, d: number): boolean {
+    return this.dayMarks.indexOf(TimeUtils.dayStart(new Date(y, m, d).getTime())) >= 0
+  }
+
+  /** 日历单元格是否不可选：未来日期 或 当天没有任何复盘记录 */
+  private dayDisabled(y: number, m: number, d: number): boolean {
+    return this.isFuture(y, m, d) || !this.hasRecord(y, m, d)
+  }
+
   private isFuture(y: number, m: number, d: number): boolean {
     const today = new Date(this.todayY, this.todayM, this.todayD)
     const sel = new Date(y, m, d)
@@ -290,7 +295,9 @@ export struct Review {
     Column() {
       Text(`${day}`)
         .fontSize(14)
-        .fontColor(this.isFuture(this.calYear, this.calMonth, day) ? Colors.TEXT_TERTIARY : Colors.TEXT_PRIMARY)
+        .fontColor(this.dayDisabled(this.calYear, this.calMonth, day)
+          ? Colors.TEXT_TERTIARY
+          : Colors.TEXT_PRIMARY)
         .fontWeight(this.isSameDay(this.calYear, this.calMonth, day, this.selY, this.selM, this.selD)
           ? FontWeight.Bold : FontWeight.Normal)
     }
@@ -304,8 +311,10 @@ export struct Review {
           ? Colors.GREEN_SOFT : Color.Transparent)
     )
     .justifyContent(FlexAlign.Center)
+    .opacity(this.dayDisabled(this.calYear, this.calMonth, day) ? 0.45 : 1)
     .onClick(() => {
-      if (this.isFuture(this.calYear, this.calMonth, day)) {
+      // 未来日期、以及当天没有任何复盘记录的日子都不可选
+      if (this.dayDisabled(this.calYear, this.calMonth, day)) {
         return
       }
       this.confirmDay(day)
@@ -413,13 +422,21 @@ export struct Review {
                 Text('').width('100%').height(34)
               }
             }
-          }, (cell: number, idx: number) => `${idx}_${cell}`)
+            // key 必须带上月份与记录数：否则换月/新增记录后，单元格会被复用而不重绘
+          }, (cell: number, idx: number) => `${this.calYear}_${this.calMonth}_${idx}_${cell}_${this.dayMarks.length}`)
         }
         .columnsTemplate('1fr 1fr 1fr 1fr 1fr 1fr 1fr')
         .rowsGap(2)
         .columnsGap(2)
         .height(210)
         .width('100%')
+
+        Text('灰色日期表示当天没有复盘记录')
+          .fontSize(11)
+          .fontColor(Colors.TEXT_TERTIARY)
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .margin({ top: 6 })
       }
     }
     .width(300)
@@ -1283,7 +1300,7 @@ export struct Review {
           .lineHeight(20)
           .width('100%')
       } else {
-        Text(`${this.longPlan.title}${this.longPlan.totalEstimatedMinutes > 0 ? ' · 目标 ' + Math.round(this.longPlan.totalEstimatedMinutes / 60) + ' 小时' : ''}`)
+        Text(`${this.longPlan.title}${this.longPlan.examType.length > 0 ? ' · ' + this.longPlan.examType : ''}${this.longPlan.totalEstimatedMinutes > 0 ? ' · 目标 ' + Math.round(this.longPlan.totalEstimatedMinutes / 60) + ' 小时' : ''}`)
           .fontSize(14)
           .fontColor(Colors.TEXT_PRIMARY)
           .width('100%')

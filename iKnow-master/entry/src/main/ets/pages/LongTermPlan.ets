@@ -1,5 +1,6 @@
 import { router, promptAction } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
+import { SubjectListEditor } from '../components/SubjectList'
 import { StorageService } from '../services/StorageService'
 import { AppStore } from '../store/AppStore'
 import { StudyPlan, SubjectTarget } from '../models/StudyPlan'
@@ -21,7 +22,8 @@ export struct LongTermPlan {
   // —— 目标（LearningGoal）——
   @State examType: string = ''
   @State dateText: string = ''
-  @State subjectsText: string = ''
+  /** 科目：一块一行（与登录引导同一套编辑器） */
+  @State subjects: string[] = []
   // —— 长期计划（StudyPlan）——
   @State title: string = ''
   /** 已解析的科目清单（单独存一份，让 UI 随输入重绘） */
@@ -39,7 +41,7 @@ export struct LongTermPlan {
   aboutToAppear(): void {
     const g = AppStore.getInstance().getGoal()
     this.examType = g.examType
-    this.subjectsText = g.subjects.join('、')
+    this.subjects = g.subjects.slice()
     if (g.targetDate > 0) {
       const d = new Date(g.targetDate)
       this.dateText = `${d.getFullYear()}-${this.pad(d.getMonth() + 1)}-${this.pad(d.getDate())}`
@@ -120,26 +122,13 @@ export struct LongTermPlan {
     return new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
   }
 
-  /** 科目：顿号 / 逗号 / 分号 / 空格 都当分隔符，去空去重 */
-  private parseSubjects(text: string): string[] {
-    const normalized = text
-      .split('，').join('、')
-      .split(',').join('、')
-      .split('；').join('、')
-      .split(';').join('、')
-    const parts = normalized.split('、')
+  /** 科目：去掉空行、去重（保存前必须过一遍，否则会把空行存进库） */
+  private cleanSubjects(): string[] {
     const out: string[] = []
-    for (const raw of parts) {
-      const item = raw.trim()
-      if (item.length === 0) {
-        continue
-      }
-      // 空格也当分隔符（"高数 英语"）
-      for (const s of item.split(' ')) {
-        const v = s.trim()
-        if (v.length > 0 && !out.includes(v)) {
-          out.push(v)
-        }
+    for (const raw of this.subjects) {
+      const v = raw.trim()
+      if (v.length > 0 && out.indexOf(v) < 0) {
+        out.push(v)
       }
     }
     return out
@@ -194,7 +183,7 @@ export struct LongTermPlan {
     const exam = this.examType.trim()
     const target = this.parseDate(this.dateText.trim())
     if (exam.length === 0 && target === 0 && this.subjectsText.trim().length === 0
-      && this.title.trim().length === 0) {
+      && this.title.trim().length === 0 && this.totalHours.trim().length === 0) {
       promptAction.showToast({ message: '还没有填写内容' })
       return
     }
@@ -207,7 +196,7 @@ export struct LongTermPlan {
       g.title = exam
     }
     g.targetDate = target
-    g.subjects = this.subjects.slice()
+    g.subjects = this.parseSubjects(this.subjectsText)
     try {
       await AppStore.getInstance().saveGoal(g)
     } catch (e) {
@@ -313,7 +302,6 @@ export struct LongTermPlan {
           })
           this.field('科目', '例如：高等数学、英语、政治（顿号分隔，可留空）', this.subjectsText, (v: string) => {
             this.subjectsText = v
-            this.syncSubjects(v)
           })
         }
         .padding(18)

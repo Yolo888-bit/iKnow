@@ -1,6 +1,13 @@
 import { Colors } from '../common/Theme'
 import { FocusStateUi } from '../common/FocusStateUi'
 
+/** 一个「状态段」：从 fromSec 到 toSec 一直是同一个状态 */
+interface StateRun {
+  fromSec: number
+  toSec: number
+  state: string
+}
+
 /**
  * 专注状态时间轴（色带图，Canvas 绘制）
  *
@@ -9,7 +16,17 @@ import { FocusStateUi } from '../common/FocusStateUi'
  * 用户看到的就是"纵坐标怎么是一条线"。改成按段涂色的时间轴之后：
  *  - 一眼看出「什么时候是什么状态」「切换了几次」；
  *  - 只有一段时就是一条纯色带，语义正确，不会看起来像坏图；
- *  - 横轴标出分钟刻度（此前 `minutes` 只参与换算、从不显示，等于没有横轴）。
+ *  - 横轴标出分钟刻度。
+ *
+ * ## 横轴口径（这一版修的就是它）
+ * 横轴 = **已判定的学习秒数**（净专注 + 分心，不含答疑 / 休息 / 暂停）。
+ * 之前按 `minute`（取整）定位，而采样间隔 30 s 会让同一分钟落两个点：
+ *  - 同分钟的两点 x 相同 → 段宽 0 → 被 `Math.max(1, …)` 强行撑成 1 px，
+ *    颜色还取自"这一分钟里第一个采样点"，于是色带里专注/分心的宽度
+ *    和复盘里显示的时长对不上；
+ *  - 最后一个采样点之后直接收尾，最后一段状态在图上没有宽度。
+ * 现在：按秒定位 + **把连续同状态的采样点合并成段** + 最后一段延伸到 `endSec`，
+ * 色带里各状态的宽度就与「专注 / 分心时长」严格成比例。
  *
  * 诚实性约定：
  *  - 颜色的含义只有三档（绿=专注 / 黄=轻度分心 / 红=分心），**不是**"专注度"连续值；
@@ -21,9 +38,15 @@ export struct FocusChart {
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings)
   @Prop @Watch('redraw') levels: number[] = []
   @Prop states: string[] = []
-  /** 与 levels 一一对应的「会话内相对分钟」，用于横轴按真实时间排布 */
+  /** 与 levels 一一对应的「累计已判定学习秒数」（优先用它定位） */
+  @Prop seconds: number[] = []
+  /** 与 levels 一一对应的「会话内相对分钟」（seconds 缺失时按 minute × 60 兜底） */
   @Prop minutes: number[] = []
-  /** 多次会话拼接时的分界点（分钟）：画竖线分隔，避免误读成一次连续学习 */
+  /** 横轴终点（秒）。传会话/当天的 judgedSec，保证最后一段状态也被画出来 */
+  @Prop endSec: number = 0
+  /** 多次会话拼接时的分界点（**秒**，与 seconds 同一坐标系） */
+  @Prop separatorsSec: number[] = []
+  /** 旧口径的分界点（分钟）；仅在 separatorsSec 为空时兜底使用 */
   @Prop separators: number[] = []
   /** 是否在图内画图例。调用方自己已经有图例时置 false，避免同一屏出现两份 */
   @Prop showLegend: boolean = true
@@ -55,28 +78,82 @@ export struct FocusChart {
     return `${vp2px(vpSize)}px sans-serif`
   }
 
-  /** 第 i 个采样点的横坐标：有 minutes 时按真实时间比例，否则退回按索引等距 */
-  private xFor(i: number, w: number, pad: number): number {
-    const n = this.levels.length
-    const usable = w - pad * 2
-    if (this.minutes.length !== n || n <= 1) {
-      return pad + (n <= 1 ? 0 : i * usable / (n - 1))
-    }
-    const span = this.minutes[n - 1] - this.minutes[0]
-    if (span <= 0) {
-      return pad + i * usable / (n - 1)
-    }
-    const offset = this.minutes[i] - this.minutes[0]
-    return pad + usable * offset / span
+  private stateAt(i: number): string {
+    return i < this.states.length ? this.states[i] : 'FOCUSED'
   }
 
-  /** 色带覆盖的时间范围（分钟）：minutes 不可用时退回"第 0 分钟 → 第 n-1 分钟" */
-  private timeRange(): number[] {
+  /** 第 i 个采样点的时间位置（秒）：优先 seconds，其次 minutes × 60，最后按索引等距 */
+  private secOf(i: number): number {
     const n = this.levels.length
-    if (this.minutes.length === n && n > 0) {
-      return [this.minutes[0], this.minutes[n - 1]]
+    if (this.seconds.length === n && n > 0) {
+      return this.seconds[i]
     }
-    return [0, Math.max(1, n - 1)]
+    if (this.minutes.length === n && n > 0) {
+      return this.minutes[i] * 60
+    }
+    return i * 60
+  }
+
+  /** 横轴范围（秒）：起点取第一个采样点，终点优先用调用方给的 endSec */
+  private secRange(): number[] {
+    const n = this.levels.length
+    if (n === 0) {
+      return [0, 60]
+    }
+    const start = this.secOf(0)
+    let end = this.secOf(n - 1)
+    if (this.endSec > end) {
+      end = this.endSec
+    }
+    // 只有单个采样点、或时间没有推进时，给一个最小跨度，避免整条带被画成 0 宽
+    if (end - start < 1) {
+      end = start + 60
+    }
+    return [start, end]
+  }
+
+  /**
+   * 把连续同状态的采样点合并成「状态段」。
+   * 不合并的话，一个持续 30 分钟的专注会因为每 30 秒一个采样点被切成 60 个碎片，
+   * 既没必要，也让"段宽 = 时长"这个关系容易被 1 px 下限破坏。
+   */
+  private buildRuns(): StateRun[] {
+    const n = this.levels.length
+    const out: StateRun[] = []
+    if (n === 0) {
+      return out
+    }
+    const end = this.secRange()[1]
+    let runStart = this.secOf(0)
+    let runState = this.stateAt(0)
+    for (let i = 1; i < n; i++) {
+      const s = this.stateAt(i)
+      if (s !== runState) {
+        const cut = this.secOf(i)
+        if (cut > runStart) {
+          out.push({ fromSec: runStart, toSec: cut, state: runState })
+        }
+        runStart = cut
+        runState = s
+      }
+    }
+    // 最后一段延伸到横轴终点：否则最后一个状态在图上没有宽度
+    if (end > runStart) {
+      out.push({ fromSec: runStart, toSec: end, state: runState })
+    }
+    return out
+  }
+
+  /** 分界点（秒）：优先新口径，其次把旧的分钟值 × 60 */
+  private separatorSecs(): number[] {
+    if (this.separatorsSec.length > 0) {
+      return this.separatorsSec
+    }
+    const out: number[] = []
+    for (const m of this.separators) {
+      out.push(m * 60)
+    }
+    return out
   }
 
   private draw(): void {
@@ -93,10 +170,7 @@ export struct FocusChart {
     const bandBottom = h - 30
     const bandH = bandBottom - bandTop
 
-    // ---- 图例：颜色到底代表什么（这是上一版最缺的东西）----
-    // 字号 13：与项目里一直在用的 RadarChart 同档；原来的 9~10 在手机上看不清。
-    // 分界线（白色竖线）不进图例 —— 一是放不下（三档图例 + 长文案会超出画布宽），
-    // 二是它只在按天复盘出现，那里已有文字说明。
+    // ---- 图例：颜色到底代表什么 ----
     if (this.showLegend) {
       const legendStates: string[] = ['FOCUSED', 'SLIGHTLY_DISTRACTED', 'DISTRACTED']
       const legendNames: string[] = ['专注', '轻度分心', '分心']
@@ -118,32 +192,34 @@ export struct FocusChart {
     c.textAlign = 'left'
     c.fillText('分钟', pad, bandTop - 6)
 
-    // ---- 色带：按段涂色 ----
-    if (n === 1) {
-      // 只有一个采样点：整条带就是那一个状态，语义上完全成立
-      c.fillStyle = FocusStateUi.color(this.states.length > 0 ? this.states[0] : 'FOCUSED')
-      c.fillRect(pad, bandTop, w - pad * 2, bandH)
-    } else {
-      for (let i = 0; i < n - 1; i++) {
-        const x1 = this.xFor(i, w, pad)
-        const x2 = this.xFor(i + 1, w, pad)
-        const color = i < this.states.length ? FocusStateUi.color(this.states[i]) : Colors.GREEN
-        c.fillStyle = color
-        c.fillRect(x1, bandTop, Math.max(1, x2 - x1), bandH)
+    const range = this.secRange()
+    const span = range[1] - range[0]
+    const usable = w - pad * 2
+    const xOf = (sec: number): number => pad + usable * (sec - range[0]) / span
+
+    // ---- 色带：按「状态段」涂色，宽度与真实时长严格成比例 ----
+    const runs = this.buildRuns()
+    for (const r of runs) {
+      const x1 = xOf(r.fromSec)
+      const x2 = xOf(r.toSec)
+      const rw = x2 - x1
+      if (rw <= 0) {
+        continue
       }
+      c.fillStyle = FocusStateUi.color(r.state)
+      c.fillRect(x1, bandTop, rw, bandH)
     }
     c.strokeStyle = Colors.LINE
     c.lineWidth = 1
-    c.strokeRect(pad, bandTop, w - pad * 2, bandH)
+    c.strokeRect(pad, bandTop, usable, bandH)
 
     // ---- 多次专注的分界：白色竖线压在色带之上 ----
-    const range = this.timeRange()
-    const span = range[1] - range[0]
-    if (this.separators.length > 0 && span > 0) {
+    const seps = this.separatorSecs()
+    if (seps.length > 0) {
       c.strokeStyle = '#FFFFFF'
       c.lineWidth = 2
-      for (const sep of this.separators) {
-        const x = pad + (w - pad * 2) * (sep - range[0]) / span
+      for (const sep of seps) {
+        const x = xOf(sep)
         if (x <= pad || x >= w - pad) {
           continue
         }
@@ -158,14 +234,15 @@ export struct FocusChart {
     const ticks = 4
     c.font = this.fontOf(11)
     for (let k = 0; k <= ticks; k++) {
-      const x = pad + (w - pad * 2) * k / ticks
+      const x = pad + usable * k / ticks
       c.strokeStyle = Colors.LINE
       c.lineWidth = 1
       c.beginPath()
       c.moveTo(x, bandBottom)
       c.lineTo(x, bandBottom + 5)
       c.stroke()
-      const mv = range[0] + span * k / ticks
+      // 刻度值以分钟显示（横轴内部按秒算）
+      const mv = (range[0] + span * k / ticks) / 60
       c.fillStyle = Colors.TEXT_TERTIARY
       c.textAlign = k === 0 ? 'left' : (k === ticks ? 'right' : 'center')
       c.fillText(`${Math.round(mv)}`, x, bandBottom + 20)

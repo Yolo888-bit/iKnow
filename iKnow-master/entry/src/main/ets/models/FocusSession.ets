@@ -16,7 +16,18 @@ export class FocusEvent {
 /** 专注曲线上的一个采样点（用于复盘图表） */
 @Observed
 export class FocusTimelinePoint {
+  /** 会话内相对分钟（**取整**）。保留给"时钟换算"等按整分钟语义使用的地方 */
   minute: number = 0
+  /**
+   * 会话内相对**已判定学习秒数**（净专注 + 分心，不含答疑/休息/暂停）。
+   *
+   * 为什么需要它：`minute` 是取整的，采样间隔 30 s 时同一分钟会落两个点，
+   * 按分钟画色带等价于"这一分钟取第一个采样点的状态"，于是色带里专注/分心的宽度
+   * 和复盘里显示的时长对不上。按秒定位才能严格成比例。
+   *
+   * 旧记录没有这个字段，`StorageService.parseTimeline` 会按 `minute * 60` 回填。
+   */
+  sec: number = 0
   level: number = 100
   state: FocusState = FocusState.FOCUSED
 }

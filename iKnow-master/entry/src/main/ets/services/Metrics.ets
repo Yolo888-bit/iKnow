@@ -9,6 +9,10 @@ export interface Last30DaysSummary {
   totalHours: number
   completedTasks: number
   focusRate: number
+  /**
+   * 近 30 天逐日「专注度」（100 分制），index 0 = 29 天前、末位 = 今天。
+   * 当天多次专注取各次专注度的平均值；没学的那天是 0。
+   */
   trend: number[]
 }
 
@@ -48,10 +52,16 @@ export interface DaySummary {
   bestPeriod: string
   levels: number[]
   states: string[]
-  /** 与 levels 一一对应的横轴位置（当天累计分钟），供曲线按真实时间排布 */
+  /** 与 levels 一一对应的横轴位置（当天累计分钟，取整），保留给精简展示/兼容 */
   minutes: number[]
-  /** 一天内多次专注时，相邻会话之间的分钟分界（供曲线画虚线分隔） */
+  /** 与 levels 一一对应的横轴位置（当天累计**已判定学习秒数**），曲线按它严格成比例 */
+  seconds: number[]
+  /** 一天内多次专注时，相邻会话之间的分钟分界（保留兼容） */
   separators: number[]
+  /** 同上，单位改成秒 —— 与 seconds 同一坐标系 */
+  separatorsSec: number[]
+  /** 当天参与状态判定的总秒数（色带终点；少算这一段会让最后一种状态没有宽度） */
+  endSec: number
   /**
    * 当天"主会话"（总学习最长的那一次）的结构指标。
    * 用最长的那一次而不是把当天几段拼起来：跨会话算"被打断后多久回来"没有意义。
@@ -227,6 +237,16 @@ export class Metrics {
     return s.distractionDuration
   }
 
+  /**
+   * 参与状态判定的时长 = 净专注 + 分心（秒），**不含答疑 / 休息 / 暂停**。
+   *
+   * 专注曲线时间轴的横轴用它：总学习里含答疑，而答疑期间状态不变、不该占色带宽度，
+   * 拿总学习当横轴会让「专注 : 分心」的视觉比例和复盘里的时长数字对不上。
+   */
+  static judgedSec(s: FocusSession): number {
+    return s.focusDuration + s.distractionDuration
+  }
+
   /** §5 答疑 = QA（计入总，不计净）（秒） */
   static qaSec(s: FocusSession): number {
     return s.qaDuration
@@ -388,16 +408,20 @@ export class Metrics {
     const completedIds: string[] = []
     const trend: number[] = []
 
+    // 每日「专注度」（100 分制）：当天多次专注就取各次专注度的**平均值**，没学就是 0。
+    // 之前这里是「当天净专注分钟数」，纵轴单位是分钟；现在统一成百分比，纵轴 0~100。
     for (let i = 29; i >= 0; i--) {
       const dayStart = TimeUtils.dayStart(now) - i * dayMs
       const dayEnd = dayStart + dayMs
-      let net = 0
+      let rateSum = 0
+      let count = 0
       for (const s of sessions) {
         if (s.startTime >= dayStart && s.startTime < dayEnd) {
-          net += s.focusDuration
+          rateSum += Metrics.focusRatePercent(s)
+          count += 1
         }
       }
-      trend.push(Math.round(net / 60))
+      trend.push(count > 0 ? Math.round(rateSum / count) : 0)
     }
 
     for (const s of sessions) {
@@ -573,8 +597,11 @@ export class Metrics {
     const levels: number[] = []
     const states: string[] = []
     const minutes: number[] = []
+    const seconds: number[] = []
     const separators: number[] = []
+    const separatorsSec: number[] = []
     let dayOffset = 0
+    let dayOffsetSec = 0
 
     for (const s of daySessions) {
       netSec += s.focusDuration
@@ -588,13 +615,19 @@ export class Metrics {
         levels.push(p.level)
         states.push(p.state)
         minutes.push(dayOffset + p.minute)
+        // 横轴用「当天累计已判定学习秒数」：会话之间按各自 judgedSec 衔接，
+        // 这样一天里几段专注之间的时间比例也是真实的
+        seconds.push(dayOffsetSec + (p.sec > 0 ? p.sec : p.minute * 60))
       }
       dayOffset += Math.round(Metrics.totalStudySec(s) / 60)
+      dayOffsetSec += Metrics.judgedSec(s)
       separators.push(dayOffset)
+      separatorsSec.push(dayOffsetSec)
     }
     // 末尾那根就是曲线终点，不需要画分隔线
     if (separators.length > 0) {
       separators.pop()
+      separatorsSec.pop()
     }
 
     const focusRate = studySec > 0 ? Math.round(netSec / studySec * 100) : 0
@@ -614,7 +647,10 @@ export class Metrics {
       levels: levels,
       states: states,
       minutes: minutes,
-      separators: separators
+      seconds: seconds,
+      separators: separators,
+      separatorsSec: separatorsSec,
+      endSec: dayOffsetSec
     }
   }
 

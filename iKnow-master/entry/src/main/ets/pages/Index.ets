@@ -1,6 +1,5 @@
 import { router } from '@kit.ArkUI'
 import { Home } from './Home'
-import { Dashboard } from './Dashboard'
 import { TaskPlanning } from './TaskPlanning'
 import { Review } from './Review'
 import { Mine } from './Mine'
@@ -13,7 +12,7 @@ import { SessionSnapshot } from '../models/SessionSnapshot'
 import { TimeUtils } from '../utils/TimeUtils'
 
 /**
- * 根容器：5 个底部 Tab（专注 / AI 规划 / 复盘 / 工作台 / 我的）
+ * 根容器：4 个底部 Tab（专注 / AI 规划 / 复盘 / 我的）
  *
  * 导航约定（统一模型）：**本页是唯一根页，永不被 replace**。
  * 二级页（Focus / FocusBreak / AIChat / StudyReport 等）统一 pushUrl，
@@ -39,7 +38,7 @@ struct Index {
   /**
    * 从二级页（专注 / 休息 / 复盘）返回根页时再重算一次聚合。
    *
-   * 首页与工作台是 Tabs 的常驻子页，返回**不会**重走 aboutToAppear，也不会触发 onChange，
+   * 首页是 Tabs 的常驻子页，返回**不会**重走 aboutToAppear，也不会触发 onChange，
    * 所以"结束专注后今日数据没变"这类问题只能靠这里兜底 —— 它是最后一个必经点。
    * refreshAggregates() 只做内存重算 + 广播（不读库），开销很小。
    */
@@ -64,11 +63,12 @@ struct Index {
 
   /**
    * 切 Tab 时重算一次聚合。
-   * 首页/工作台是 Tabs 的常驻子页，退出专注后不会重新走 aboutToAppear；
+   * 首页是 Tabs 的常驻子页，退出专注后不会重新走 aboutToAppear；
    * 这里补一道"看之前先刷新"，从根上避免"退出了但今日数据没变"。
    */
   private refreshOnTabSwitch(index: number): void {
-    if (index === 0 || index === 3) {
+    // 首页是 Tabs 常驻子页，返回不会重走 aboutToAppear，切回来时补一次聚合刷新
+    if (index === 0) {
       AppStore.getInstance().refreshAggregates()
     }
   }
@@ -137,12 +137,8 @@ struct Index {
         }.tabBar(this.tabBar('复盘', 2, '📈'))
 
         TabContent() {
-          Dashboard()
-        }.tabBar(this.tabBar('工作台', 3, '📊'))
-
-        TabContent() {
           Mine()
-        }.tabBar(this.tabBar('我的', 4, '👤'))
+        }.tabBar(this.tabBar('我的', 3, '👤'))
       }
       .scrollable(false)
       .barHeight(60)

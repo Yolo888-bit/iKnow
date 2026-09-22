@@ -201,7 +201,16 @@ export class StorageService {
   private parseTimeline(json: string): FocusTimelinePoint[] {
     try {
       const a = JSON.parse(json) as FocusTimelinePoint[]
-      return Array.isArray(a) ? a : []
+      if (!Array.isArray(a)) {
+        return []
+      }
+      // 旧记录没有 sec 字段：按分钟回填，避免下游「按秒定位」时算出 NaN
+      for (const p of a) {
+        if (typeof p.sec !== 'number' || p.sec < 0) {
+          p.sec = p.minute * 60
+        }
+      }
+      return a
     } catch (e) {
       return []
     }

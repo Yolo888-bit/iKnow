@@ -10,7 +10,6 @@ import { TaskStatus } from '../models/Enums'
 import { TimeUtils } from '../utils/TimeUtils'
 import { TaskCard } from '../components/TaskCard'
 import { UserAvatar } from '../components/UserAvatar'
-import { AIService } from '../services/AIService'
 
 /**
  * 专注首页（tab 0）—— 回答 PRD 第十节的三件事：
@@ -35,7 +34,6 @@ export struct Home {
    * 因此它一变就代表"今日聚合已整体算完"。今日数据的具体数值走 refreshPlan() 拉取。
    */
   @StorageProp(StorageKey.DATA_VERSION) @Watch('refreshPlan') dataVersion: number = 0
-  @State goalTitle: string = ''
   @State examType: string = ''
   @State completionRate: number = 0
   @State plan: Task[] = []
@@ -51,15 +49,19 @@ export struct Home {
   @State dashRate: number = 0
   @State dashDone: number = 0
   @State dashTotal: number = 0
-  /** 顶部标语：贴合目标的励志短句（AI 生成，本地文案表兜底） */
-  @State slogan: string = ''
+  /** 顶部问候语（按当前时间） */
+  @State greeting: string = ''
+  /** 今日任务是否展开（可折叠） */
+  @State tasksExpanded: boolean = true
+  /** 目标日期文案（目标总览里展示） */
+  @State targetDateText: string = ''
 
   aboutToAppear(): void {
     this.refreshPlan()
   }
 
   refreshPlan(): void {
-    // 今日任务：**未完成置顶、已完成自动沉底**；同组内保持原有顺序（稳定分桶，
+    // 今日任务：**已完成置顶、未完成自动沉底**；同组内保持原有顺序（稳定分桶，
     // 不改变用户/AI 排好的先后）。必须新建数组：赋同一个引用不会触发 @State 重绘。
     const source = AppStore.getInstance().getCurrentPlan()
     const todo: Task[] = []
@@ -71,10 +73,9 @@ export struct Home {
         todo.push(t)
       }
     }
-    this.plan = todo.concat(finished)
+    this.plan = finished.concat(todo)
 
     const goal = AppStore.getInstance().getGoal()
-    this.goalTitle = goal.title
     this.examType = goal.examType
 
     // 今日数据：直接读 store 里已经算好的聚合结果（权威值），不看镜像
@@ -84,7 +85,13 @@ export struct Home {
     this.dashDone = d.todayCompletedTasks
     this.dashTotal = d.todayTotalTasks
     this.completionRate = this.dashTotal > 0 ? Math.round(this.dashDone / this.dashTotal * 100) : 0
-    this.loadSlogan()
+    this.greeting = TimeUtils.greeting(Date.now())
+    if (goal.targetDate > 0) {
+      const gd = new Date(goal.targetDate)
+      this.targetDateText = `${gd.getFullYear()} 年 ${gd.getMonth() + 1} 月 ${gd.getDate()} 日`
+    } else {
+      this.targetDateText = ''
+    }
   }
 
   /** 今日计划里已完成的数量（卡片右上角用） */
@@ -107,34 +114,20 @@ export struct Home {
     this.refreshPlan()
   }
 
-  /**
-   * 标语：先用本地文案表立即上屏（不出现空白），
-   * 再用大模型生成更贴合的替换；结果由 AIService 缓存，目标变更时失效。
-   */
-  private loadSlogan(): void {
-    const goal = AppStore.getInstance().getGoal()
-    this.slogan = AIService.getInstance().localSlogan(goal.examType)
-    AIService.getInstance().slogan(goal.examType, this.examDays).then((s: string) => {
-      if (s.length > 0) {
-        this.slogan = s
-      }
-    })
-  }
-
   private displayName(): string {
     return this.nickname.length > 0 ? this.nickname : '同学'
   }
 
-  /** 顶部副标题：昵称 + 目标剩余天数（不显示时间问候） */
-  private subLine(): string {
+  /** 目标总览脚下那行提示：没填日期时换一种说法，填了就给倒计时 */
+  private examHint(): string {
     if (this.examType.length === 0) {
-      return `${this.displayName()}，先去「我的 → 长期计划与目标」定个目标吧`
+      return '在「我的 → 长期计划与目标」里填写目标与日期，倒计时才会准确'
     }
     const d = this.examDaysText()
     if (d === '—') {
-      return `${this.displayName()} · ${this.examType}还没填考试日期`
+      return `还没填「${this.examType}」的考试日期，补上之后倒计时才准`
     }
-    return `${this.displayName()} · 距离${this.examType}还有 ${d} 天`
+    return `距离 ${this.examType} 还有 ${d} 天，按节奏稳步推进`
   }
 
   /** 倒计时主数值：未设置或已过期都显示「—」（TimeUtils.daysUntil 会把过去的时间夹到 0） */
@@ -277,25 +270,25 @@ export struct Home {
   build() {
     Scroll() {
       Column({ space: Spacing.LG }) {
-        // 顶部：贴合目标的励志标语（不再按时间显示问候语）
+        // 顶部：问候 + 头像（原工作台的顶部搬到这里）
         Row() {
           Column() {
-            Text(this.slogan.length > 0 ? this.slogan : '定个目标，稳步推进')
-              .fontSize(28)
+            Text(`${this.greeting}，${this.displayName()}`)
+              .fontSize(26)
               .fontWeight(FontWeight.Bold)
-              .fontColor(Colors.PRIMARY_DARK)
+              .fontColor(Colors.TEXT_PRIMARY)
               .width('100%')
-            Text(this.subLine())
+            Text('今天也一起稳稳推进吧')
               .fontSize(13)
               .fontColor(Colors.TEXT_SECONDARY)
-              .margin({ top: 8 })
+              .margin({ top: 6 })
               .width('100%')
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
 
           Stack() {
-            UserAvatar({ avatar: this.avatar, diameter: 48, bg: Colors.CARD })
+            UserAvatar({ avatar: this.avatar, diameter: 48, bg: Colors.PRIMARY_SOFT })
             // 摄像头指示灯只在真正开启感知时亮起
             if (this.cameraOn()) {
               Circle()
@@ -308,6 +301,70 @@ export struct Home {
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
+
+        // 目标总览（从工作台搬过来）
+        // 注意：这里**不提供**「调整目标」入口 —— 按需求直接去掉，
+        // 要改目标统一走「我的 → 长期计划与目标」。
+        Column() {
+          Text('目标总览')
+            .fontSize(14)
+            .fontColor(Colors.TEXT_SECONDARY)
+            .width('100%')
+
+          if (this.examType.length === 0) {
+            Text('还没设置目标')
+              .fontSize(22)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ top: 8 })
+              .width('100%')
+            Text('在「我的 → 长期计划与目标」里填写目标与日期，倒计时才会准确')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .margin({ top: 10 })
+              .width('100%')
+          } else {
+            Row() {
+              Column() {
+                Text(this.examType)
+                  .fontSize(22)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Colors.PRIMARY_DARK)
+                  .margin({ top: 8 })
+                Text(this.targetDateText.length > 0 ? `目标日期 ${this.targetDateText}` : '未设置目标日期')
+                  .fontSize(12)
+                  .fontColor(Colors.TEXT_SECONDARY)
+                  .margin({ top: 6 })
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+
+              Column() {
+                Text(this.examDaysText())
+                  .fontSize(34)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Colors.TEXT_PRIMARY)
+                Text(this.examDaysSub())
+                  .fontSize(12)
+                  .fontColor(Colors.TEXT_SECONDARY)
+              }
+              .alignItems(HorizontalAlign.Center)
+            }
+            .width('100%')
+
+            Text(this.examHint())
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .margin({ top: 12 })
+              .width('100%')
+          }
+        }
+        .width('100%')
+        .padding(20)
+        .backgroundColor(Colors.CARD)
+        .borderRadius(Radius.LG)
+        .alignItems(HorizontalAlign.Start)
+        .shadow({ radius: 18, color: Colors.SHADOW, offsetX: 0, offsetY: 6 })
 
         // 专注进行中：返回键留在后台的会话不丢，从这里继续
         if (this.focusRunningFlag === 1) {
@@ -332,61 +389,6 @@ export struct Home {
           .borderRadius(Radius.MD)
         }
 
-        // 今日目标（未设置时给明确指引，不显示假倒计时）
-        Column() {
-          Text('今日目标')
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Colors.TEXT_PRIMARY)
-            .width('100%')
-
-          if (this.examType.length === 0) {
-            Text('还没设置目标考试')
-              .fontSize(16)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .margin({ top: 10 })
-              .width('100%')
-            Text('在「我的 → 长期计划与目标」里填写')
-              .fontSize(12)
-              .fontColor(Colors.TEXT_TERTIARY)
-              .margin({ top: 6 })
-              .width('100%')
-          } else {
-            Row({ space: 16 }) {
-              Column() {
-                Text(this.examType)
-                  .fontSize(20)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(Colors.PRIMARY_DARK)
-                Text(this.goalTitle)
-                  .fontSize(13)
-                  .fontColor(Colors.TEXT_SECONDARY)
-                  .margin({ top: 4 })
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-
-              Column() {
-                Text(this.examDaysText())
-                  .fontSize(28)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(Colors.TEXT_PRIMARY)
-                Text(this.examDaysSub())
-                  .fontSize(12)
-                  .fontColor(Colors.TEXT_SECONDARY)
-              }
-              .alignItems(HorizontalAlign.Center)
-            }
-            .width('100%')
-            .margin({ top: 12 })
-          }
-        }
-        .width('100%')
-        .padding(20)
-        .backgroundColor(Colors.CARD)
-        .borderRadius(Radius.LG)
-        .shadow({ radius: 18, color: Colors.SHADOW, offsetX: 0, offsetY: 6 })
-
         // 今日任务：与其他模块同款卡片（标题左右对齐一致），勾选即完成并同步进度
         Column() {
           Row() {
@@ -400,9 +402,17 @@ export struct Home {
               : `${this.planDone()} / ${this.plan.length} 已完成`)
               .fontSize(13)
               .fontColor(Colors.TEXT_SECONDARY)
+            // 折叠开关：任务多的时候可以收起来
+            Text(this.tasksExpanded ? '收起 ▴' : '展开 ▾')
+              .fontSize(12)
+              .fontColor(Colors.PRIMARY_DARK)
+              .margin({ left: 10 })
           }
           .width('100%')
           .margin({ bottom: 12 })
+          .onClick(() => {
+            this.tasksExpanded = !this.tasksExpanded
+          })
 
           if (this.plan.length === 0) {
             Column() {
@@ -417,6 +427,12 @@ export struct Home {
             .width('100%')
             .padding({ top: 8, bottom: 8 })
             .alignItems(HorizontalAlign.Start)
+          } else if (!this.tasksExpanded) {
+            Text(`已收起 ${this.plan.length} 个任务，点右上角展开`)
+              .fontSize(12)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .width('100%')
+              .padding({ top: 4, bottom: 4 })
           } else {
             Column({ space: Spacing.SM }) {
               ForEach(this.plan, (task: Task) => {
@@ -456,7 +472,7 @@ export struct Home {
           Row({ space: 8 }) {
             this.statTile(`${this.liveRate()}%`, '净专注率')
             this.statTile(this.focusSecondsText(), '今日专注时长')
-            // 口径写清：这是**今日计划**的勾选完成率，与工作台「目标进度」（各科目标 vs 实际投入）不是同一个数
+            // 口径写清：这是**今日计划**的勾选完成率，与「长期计划与目标」里的各科目标进度不是同一个数
           this.statTile(this.dashTotal > 0 ? `${this.completionRate}%` : '—', '今日任务完成率')
           }
           .width('100%')

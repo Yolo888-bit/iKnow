@@ -357,6 +357,9 @@ export class FocusController {
     // 任务归属曲线的初始点：没有它，第一段（0 分钟 → 首次切换任务）没有归属，
     // 分段反算时开头这一段会被整段丢掉
     this.recordTaskTimeline()
+    // 状态时间轴的初始点（sec = 0）：否则第一个采样点要等到 30 秒后才落，
+    // 开头这半分钟永远不会被画出来，色带总宽会短于"分心 + 专注"的实际时长
+    this.sampleTimeline()
     this.questions = []
     this.bindPerception()
   }
@@ -771,6 +774,9 @@ export class FocusController {
   private sampleTimeline(): void {
     const p = new FocusTimelinePoint()
     p.minute = Math.floor(this.totalSec / 60)
+    // 横轴按「已判定的学习秒数」走：答疑 / 休息 / 暂停这段横轴不前进，
+    // 这样色带里专注与分心的宽度才能和复盘里的时长数字严格成比例
+    p.sec = Math.round(this.focusSec + this.distractionSec)
     p.level = this.levelForState(this.state)
     p.state = this.state
     this.timeline.push(p)

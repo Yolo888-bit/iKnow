@@ -59,7 +59,7 @@ struct Login {
       this.errorMsg = r.message
       return
     }
-    // 用户名全局生效（首页 / 工作台 / 我的 都会显示它）
+    // 用户名全局生效（首页 / 我的 都会显示它）
     await AppStore.getInstance().applyLoginUser(r.username)
 
     this.saving = false

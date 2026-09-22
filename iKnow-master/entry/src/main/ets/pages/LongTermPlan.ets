@@ -14,7 +14,7 @@ import { StudyPlan, SubjectTarget } from '../models/StudyPlan'
  *  - 长期计划（`StudyPlan`）只存"计划名 + 周期 + 各科目标分钟"，科目键必须取自上面的清单；
  *  - `totalEstimatedMinutes` 是**派生**的合计（= Σ 各科目标），只读展示，不让它成为第二个真值。
  *
- * 进度口径：工作台「目标进度」的分母 = 各科目标之和，分子 = 任务的**实际投入**
+ * 进度口径：各科目标进度（现在只展示在复盘页）的分母 = 各科目标之和，分子 = 任务的**实际投入**
  * （由专注计时自动累计）。所以这里填的是"每科计划投多少"，不是"完成了几个任务"。
  */
 @Entry
@@ -45,9 +45,9 @@ export struct LongTermPlan {
       const d = new Date(g.targetDate)
       this.dateText = `${d.getFullYear()}-${this.pad(d.getMonth() + 1)}-${this.pad(d.getDate())}`
     }
-    // 走 AppStore.loadPlan()：与工作台**同一个对象**。
-    // 之前这里直接读库，而工作台读内存，两条来源不一致时就会出现
-    // "工作台改过了、这一页还是旧的"（实测反馈）。
+    // 走 AppStore.loadPlan()：全局**同一个对象**。
+    // 之前这里直接读库、别处读内存，两条来源不一致时就会出现
+    // "那边改过了、这一页还是旧的"（实测反馈）。
     AppStore.getInstance().loadPlan().then((p: StudyPlan | null) => {
       this.applyPlan(p)
     }).catch(() => {

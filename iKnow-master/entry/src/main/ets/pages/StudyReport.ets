@@ -47,6 +47,10 @@ export struct StudyReport {
   @State levels: number[] = []
   @State states: string[] = []
   @State minutes: number[] = []
+  /** 横轴：累计已判定学习秒数（与 levels 一一对应） */
+  @State seconds: number[] = []
+  /** 横轴终点（秒），保证最后一段状态也有宽度 */
+  @State judgedSec: number = 0
   /** 本次专注得分 = 100 − 走神占比（取整，夹 0~100） */
   @State score: number = 0
   /** 走神时间占总学习时间的百分比（取整） */
@@ -132,14 +136,20 @@ export struct StudyReport {
     const levels: number[] = []
     const states: string[] = []
     const minutes: number[] = []
+    const seconds: number[] = []
     for (const p of session.timeline) {
       levels.push(p.level)
       states.push(p.state)
       minutes.push(p.minute)
+      // 横轴按秒走（旧记录由 StorageService 回填），色带宽度才能和时长数字对上
+      seconds.push(p.sec > 0 ? p.sec : p.minute * 60)
     }
     this.levels = levels
     this.states = states
     this.minutes = minutes
+    this.seconds = seconds
+    // 横轴终点 = 本次参与状态判定的时长（不含答疑/休息/暂停）
+    this.judgedSec = Metrics.judgedSec(session)
     this.loadObservations(session.id)
   }
 
@@ -302,7 +312,19 @@ export struct StudyReport {
           // ③ 专注曲线
           Column() {
             this.sectionTitle('专注曲线')
-            FocusChart({ levels: this.levels, states: this.states, minutes: this.minutes })
+            FocusChart({
+              levels: this.levels,
+              states: this.states,
+              seconds: this.seconds,
+              minutes: this.minutes,
+              endSec: this.judgedSec
+            })
+            // 口径自解释：横轴只算"参与状态判定的时间"，色带宽度才和上面的时长数字成比例
+            Text(`横轴：本次已判定学习 0–${Math.round(this.judgedSec / 60)} 分钟（不含答疑/休息/暂停）；色带宽度与「净专注 / 分心」时长成比例`)
+              .fontSize(11)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .width('100%')
+              .margin({ top: 6 })
           }
           .reportCard()
 

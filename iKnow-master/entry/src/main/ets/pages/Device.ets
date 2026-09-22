@@ -7,7 +7,7 @@ import { BleWatchService } from '../services/BleWatchService'
 import { CameraService } from '../services/CameraService'
 import { PermissionService } from '../services/PermissionService'
 
-/** 设备连接（含真实 BLE 心率设备 + 设备自检）。模拟工作台已移到「工作台 → 模拟状态」。 */
+/** 设备连接（含真实 BLE 心率设备 + 设备自检）。模拟状态已移到「专注页 → 模拟状态」。 */
 @Entry
 @Component
 export struct Device {
@@ -261,7 +261,7 @@ export struct Device {
         .deviceCard()
 
         // 模拟手表（只保留"是否佩戴"这一个设备属性；
-        // 状态/信号的手动驱动已统一移到「工作台 → 模拟状态」）
+        // 状态/信号的手动驱动已统一移到「专注页 → 模拟状态」）
         Column() {
           Text('模拟手表')
             .fontSize(16)
@@ -300,7 +300,7 @@ export struct Device {
           .width('100%')
           .padding({ top: 14, bottom: 4 })
 
-          Text('要手动驱动状态（做题 / 看手机 / 趴桌 / 离开…），请到「工作台 → 模拟状态」。')
+          Text('要手动驱动状态（做题 / 看手机 / 趴桌 / 离开…），请到「专注页 → 模拟状态」。')
             .fontSize(11)
             .fontColor(Colors.TEXT_TERTIARY)
             .lineHeight(16)

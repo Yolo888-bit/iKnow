@@ -7,7 +7,7 @@ export class StorageKey {
   static readonly USER_AVATAR = 'ik_user_avatar'
   static readonly USER_PERSONALITY = 'ik_user_personality'
 
-  // 首页 / 工作台聚合
+  // 首页聚合（原工作台页面已移除）
   static readonly TODAY_FOCUS_SEC = 'ik_today_focus_sec'
   static readonly TODAY_NET_FOCUS_SEC = 'ik_today_net_focus_sec'
   static readonly TODAY_DONE_TASKS = 'ik_today_done_tasks'

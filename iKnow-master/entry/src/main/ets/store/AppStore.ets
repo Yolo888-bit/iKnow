@@ -285,6 +285,42 @@ export class AppStore {
   }
 
   /**
+   * 「AI 规划中的任务 + 专注里实际用过的任务」按 id 去重后的合并清单。
+   *
+   * 工作台「总体进度」与复盘「任务进度」共用这一份口径 —— 避免两处各算一套，
+   * 出现"工作台 8 个任务、复盘 6 个任务"这种对不上的情况。
+   */
+  mergedTasks(): Task[] {
+    const out: Task[] = []
+    const seen: string[] = []
+    for (const t of this.currentPlan) {
+      if (seen.indexOf(t.id) < 0) {
+        seen.push(t.id)
+        out.push(t)
+      }
+    }
+    for (const t of this.tasks) {
+      if (seen.indexOf(t.id) < 0) {
+        seen.push(t.id)
+        out.push(t)
+      }
+    }
+    return out
+  }
+
+  /** 任务进度：[已完成累计, 规划任务总数]，口径同 `mergedTasks()` */
+  taskProgressCounts(): number[] {
+    const all: Task[] = this.mergedTasks()
+    let done = 0
+    for (const t of all) {
+      if (t.done || t.status === TaskStatus.DONE) {
+        done += 1
+      }
+    }
+    return [done, all.length]
+  }
+
+  /**
    * 当前这轮今日计划是否**已经被用过**（制定完之后跑过至少一次专注）。
    *
    * 规划页据此决定是"在现有清单上做增量"还是"开一轮全新的规划"：

@@ -5,7 +5,6 @@ import { AppStore } from '../store/AppStore'
 import { Metrics, Last30DaysSummary, PracticeSummaryItem, HabitInsight, DaySummary } from '../services/Metrics'
 import { AIService } from '../services/AIService'
 import { FocusProfile } from '../models/FocusProfile'
-import { StudyPlan } from '../models/StudyPlan'
 import { RadarChart } from '../components/RadarChart'
 import { FocusChart } from '../components/FocusChart'
 import { CircularProgress } from '../components/CircularProgress'
@@ -13,7 +12,23 @@ import { FocusSession } from '../models/FocusSession'
 import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
 import { DateChip } from '../components/DateChip'
+import { BarChart } from '../components/BarChart'
 import { hilog } from '@kit.PerformanceAnalysisKit'
+
+/**
+ * 折线纵轴量程（**百分制专注度** 0~100）：按峰值挑一档"好看"的量程。
+ *  - 档位都取偶数，保证「一半」刻度落在整数上；
+ *  - 峰值很小时不回退到 100，否则低迷期曲线会一直贴着底、看不出起伏。
+ */
+function niceMax(peak: number): number {
+  const ladder: number[] = [20, 30, 40, 50, 60, 80, 100]
+  for (const v of ladder) {
+    if (peak <= v) {
+      return v
+    }
+  }
+  return 100
+}
 
 /**
  * 长期学习总结 / 单日学习复盘 —— 单屏区块式复盘页
@@ -28,13 +43,17 @@ export struct Review {
   // ---------- 长期总结状态 ----------
   @State summary: Last30DaysSummary = { totalHours: 0, completedTasks: 0, focusRate: 0, trend: [] }
   @State practice: PracticeSummaryItem[] = []
+  /** 任务进度：[已完成累计, 规划任务总数]（口径与工作台一致，走 AppStore.mergedTasks） */
+  @State taskDone: number = 0
+  @State taskTotal: number = 0
+  /** 近 7 天趋势（从工作台搬过来的模块用） */
+  @State weekTrend: number[] = []
+  @StorageProp(StorageKey.WEEK_FOCUS_SEC) weekFocus: number = 0
   @State habit: HabitInsight = { bestWindow: '', bestRate: 0, lowWindow: '', lowNote: '', advice: '' }
   @State aiAdvice: string = ''
   @State profile: FocusProfile = new FocusProfile()
   @State dimValues: number[] = []
   @State canShowRadar: boolean = false
-  /** 长期计划（study_plan 表，单记录）；长期视图里的「长期计划与目标」卡片读它 */
-  @State longPlan: StudyPlan | null = null
 
   // ---------- 单日复盘状态 ----------
   /** 0 = 长期学习总结；1 = 某天学习总结 */
@@ -53,7 +72,10 @@ export struct Review {
     levels: [],
     states: [],
     minutes: [],
-    separators: []
+    seconds: [],
+    separators: [],
+    separatorsSec: [],
+    endSec: 0
   }
   @State dayInsight: string = ''
   @State daySuggestions: string[] = []
@@ -127,6 +149,11 @@ export struct Review {
 
     this.summary = Metrics.last30DaysSummary(sessions, tasks, now)
     this.practice = Metrics.practiceSummary(sessions, tasks)
+    // 任务进度：完成累计 / 规划总数
+    const counts: number[] = store.taskProgressCounts()
+    this.taskDone = counts[0]
+    this.taskTotal = counts[1]
+    this.weekTrend = store.getDashboard().weekTrend
     this.habit = Metrics.habitInsights(sessions)
     // 排查用：把库里实际加载到的会话数打到日志，便于判断"历史是否真的落库"
     hilog.info(0x0000, 'iKnow.Review', '复盘数据：会话 %{public}d 条，任务 %{public}d 条',
@@ -148,14 +175,6 @@ export struct Review {
     this.aiAdvice = AIService.getInstance().longTermAnalysis(this.profile, hardest,
       Metrics.trend7v7(sessions, now), Metrics.streaks(sessions, now))
 
-    // 长期计划（单记录）：走 AppStore.loadPlan()，与工作台/设置页**同一个对象**，
-    // 避免"工作台改过了、这里还是旧值"
-    AppStore.getInstance().loadPlan().then((p: StudyPlan | null) => {
-      this.longPlan = p
-    }).catch(() => {
-      this.longPlan = null
-    })
-
     this.buildDayMarks(sessions)
 
     // 按天视图下同步刷新当天数据，否则结束后仍显示旧值
@@ -168,23 +187,6 @@ export struct Review {
     if (this.lineReady) {
       this.onLineChartReady()
     }
-  }
-
-  /** 目标一行：考试 + 倒计时 + 科目（空则如实说明，指路到设置页） */
-  private goalLine(): string {
-    const g = AppStore.getInstance().getGoal()
-    if (g.examType.length === 0 && g.subjects.length === 0) {
-      return '还没设置目标考试与科目，在「长期计划与目标」里填写后，倒计时与规划会更准。'
-    }
-    const parts: string[] = []
-    if (g.examType.length > 0) {
-      const days = g.targetDate > 0 ? `，距考试 ${TimeUtils.daysUntil(g.targetDate, Date.now())} 天` : '（未填考试日期）'
-      parts.push(`目标：${g.examType}${days}`)
-    }
-    if (g.subjects.length > 0) {
-      parts.push(`科目：${g.subjects.join('、')}`)
-    }
-    return parts.join(' · ')
   }
 
   /**
@@ -612,15 +614,15 @@ export struct Review {
     const chartH = h - padTop - padBottom
     const baseY = padTop + chartH
 
-    // 量程固定化：原来取自身最大值 —— 只要有一天非 0 就顶到满格，
-    // 无法从高度判断"这天究竟学了多少"。改为 60 分钟起步、按 30 向上取整，并标出刻度。
+    // 量程自适应：原来固定 60 分钟起步，只要每天只有几分钟，
+    // 折线就永远贴着底部，完全看不出起伏。改为按峰值挑一档"好看"的量程。
     let peak = 0
     for (const v of values) {
       if (v > peak) {
         peak = v
       }
     }
-    const maxV = Math.max(60, Math.ceil(peak / 30) * 30)
+    const maxV = niceMax(peak)
     const n = values.length
     const stepX = n > 1 ? chartW / (n - 1) : chartW
 
@@ -642,7 +644,7 @@ export struct Review {
     c.textAlign = 'left'
     c.fillStyle = Colors.TEXT_TERTIARY
     c.font = this.lineFont(10)
-    c.fillText('分钟', padLeft - 32, 14)
+    c.fillText('分', padLeft - 24, 14)
 
     const points: number[][] = []
     for (let i = 0; i < n; i++) {
@@ -778,7 +780,8 @@ export struct Review {
     return `${d.getMonth() + 1}月${d.getDate()}日`
   }
 
-  private activeMinutes(): number {
+  /** 选中那天的专注度（100 分制） */
+  private activeValue(): number {
     const values = this.summary.trend
     if (this.activeIndex < 0 || this.activeIndex >= values.length) {
       return 0
@@ -922,24 +925,25 @@ export struct Review {
     const avgA = a / half
     const avgB = b / (t.length - half)
     if (avgA <= 0 && avgB <= 0) {
-      return '近 30 天暂无每日净专注记录'
+      return '近 30 天暂无每日专注记录'
     }
     const pct = avgA > 0 ? Math.round((avgB - avgA) / avgA * 100) : 0
     if (pct >= 10) {
-      return `后半段日均净专注比前半段高约 ${pct}%`
+      return `后半段日均专注度比前半段高约 ${pct}%`
     }
     if (pct <= -10) {
-      return `后半段日均净专注比前半段低约 ${Math.abs(pct)}%`
+      return `后半段日均专注度比前半段低约 ${Math.abs(pct)}%`
     }
-    return `日均净专注基本持平（前后半段相差 ${Math.abs(pct)}% 以内）`
+    return `日均专注度基本持平（前后半段相差 ${Math.abs(pct)}% 以内）`
   }
 
   /** 曲线口径：明确纵轴是三档等级、横轴是当天累计分钟，多次专注用虚线分隔 */
   private curveCaption(): string {
-    const n = this.day.minutes.length
-    const span = n > 1 ? this.day.minutes[n - 1] - this.day.minutes[0] : 0
+    // 横轴口径 = 已判定学习时长（净专注 + 分心），不含答疑/休息/暂停，
+    // 这样色带里绿/黄/红各段的宽度与上方「专注率 / 分心」的时长数字严格成比例
+    const span = Math.round(this.day.endSec / 60)
     // 图已改为状态时间轴（色带）：横轴是时间，颜色只有三档含义，不再有"纵轴等级"
-    const base = `横轴：当天累计学习 0–${span} 分钟；色带按状态分段涂色（绿=专注 / 黄=轻度分心 / 红=分心）`
+    const base = `横轴：当天累计已判定学习 0–${span} 分钟（不含答疑/休息/暂停）；色带按状态分段涂色（绿=专注 / 黄=轻度分心 / 红=分心）`
     if (this.day.sessionCount > 1) {
       return `${base}；当天共 ${this.day.sessionCount} 次专注，白线为两次之间的分界`
     }
@@ -992,8 +996,10 @@ export struct Review {
           FocusChart({
             levels: this.day.levels,
             states: this.day.states,
+            seconds: this.day.seconds,
             minutes: this.day.minutes,
-            separators: this.day.separators,
+            separatorsSec: this.day.separatorsSec,
+            endSec: this.day.endSec,
             showLegend: false
           })
             .width('100%')
@@ -1110,6 +1116,21 @@ export struct Review {
       })
   }
 
+  /** 近 7 天柱状图的横轴标签：柱子是"6 天前 → 今天"的滚动窗口 */
+  private weekDateLabels(): string[] {
+    const out: string[] = []
+    const base = TimeUtils.dayStart(Date.now())
+    for (let day = 6; day >= 0; day--) {
+      out.push(TimeUtils.formatMonthDay(base - day * 24 * 3600 * 1000))
+    }
+    return out
+  }
+
+  /** 任务进度百分比（无规划任务时为 0） */
+  private taskPercent(): number {
+    return this.taskTotal > 0 ? Math.round(this.taskDone / this.taskTotal * 100) : 0
+  }
+
   /** 长期学习总结视图 */
   @Builder
   longView() {
@@ -1120,6 +1141,13 @@ export struct Review {
         .fontWeight(FontWeight.Bold)
         .fontColor(Colors.TEXT_PRIMARY)
         .width('100%')
+      // 口径自解释：纵轴是「每日专注度」而不是时长，否则低矮的折线会被理解成"没学习"
+      Text('纵轴：每日专注度（100 分制）。当天多次专注取这几次专注度的平均值，没学习的那天是 0')
+        .fontSize(11)
+        .fontColor(Colors.TEXT_TERTIARY)
+        .lineHeight(16)
+        .width('100%')
+        .margin({ top: 4 })
       Text(this.sampleLine())
         .fontSize(11)
         .fontColor(Colors.TEXT_TERTIARY)
@@ -1149,7 +1177,7 @@ export struct Review {
             Text(this.activeDateLabel())
               .fontSize(10)
               .fontColor('#FFFFFF')
-            Text(`${this.activeMinutes()} 分钟`)
+            Text(`${this.activeValue()} 分`)
               .fontSize(13)
               .fontWeight(FontWeight.Bold)
               .fontColor('#FFFFFF')
@@ -1213,83 +1241,144 @@ export struct Review {
       .borderRadius(Radius.LG)
       .alignItems(HorizontalAlign.Start)
 
+      // 任务进度：完成累计 / 规划任务总数（口径与工作台一致）
       Column({ space: Spacing.SM }) {
-        // 原先这里有一个「›」，暗示可点开详情页，但并没有这个页面 —— 去掉误导
-        Text('练习内容总结')
+        Text('任务进度')
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(Colors.TEXT_PRIMARY)
           .width('100%')
-        // 窄卡片放不下全部练习内容，这里给一个明确的入口看完整列表
-        Text('查看全部练习内容 ›')
-          .fontSize(12)
-          .fontColor(Colors.PRIMARY_DARK)
-          .width('100%')
-          .onClick(() => {
-            router.pushUrl({ url: 'pages/PracticeDetail' })
-          })
 
-        if (this.practice.length > 0) {
-          ForEach(this.practice, (item: PracticeSummaryItem, index: number) => {
-            Row() {
-              Column() {
-                Text(`${item.subject}：${item.content}`)
-                  .fontSize(13)
-                  .fontColor(Colors.TEXT_PRIMARY)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-
-              Text(`${item.count}次`)
-                .fontSize(13)
-                .fontColor(Colors.TEXT_SECONDARY)
-                .width(38)
-                .textAlign(TextAlign.End)
-            }
-            .width('100%')
-            .padding({ top: 6, bottom: 6 })
-            // key 带上次数：科目与序号都没变、只更新了次数时，ArkUI 会复用旧节点不重绘
-          }, (item: PracticeSummaryItem, index: number) => `${item.subject}_${index}_${item.count}`)
-
-          // 原先这里是「全科稳步提升 / 数学进步明显」两个写死的标签，与用户数据无关。
-          // 两个标签改成竖排：卡片内容宽约 124vp，并排需要约 200vp，会直接画到相邻卡片上。
-          Column({ space: 6 }) {
-            Text(`累计完成 ${this.summary.completedTasks} 个任务`)
-              .fontSize(11)
-              .fontColor(Colors.PRIMARY_DARK)
-              .padding({ top: 4, bottom: 4, left: 8, right: 8 })
-              .backgroundColor(Colors.PRIMARY_SOFT)
-              .borderRadius(10)
-            Text(`净专注率 ${this.summary.focusRate}%`)
-              .fontSize(11)
-              .fontColor(Colors.PRIMARY_DARK)
-              .padding({ top: 4, bottom: 4, left: 8, right: 8 })
-              .backgroundColor(Colors.PRIMARY_SOFT)
-              .borderRadius(10)
-          }
-          .alignItems(HorizontalAlign.Start)
-          .margin({ top: 6 })
-        } else {
-          Text('暂无练习记录')
-            .fontSize(13)
+        Row() {
+          Text(`${this.taskDone}`)
+            .fontSize(30)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Colors.PRIMARY_DARK)
+          Text(` / ${this.taskTotal}`)
+            .fontSize(15)
             .fontColor(Colors.TEXT_SECONDARY)
-            .margin({ top: 20, bottom: 20 })
-            .width('100%')
-            .textAlign(TextAlign.Center)
+            .margin({ bottom: 4 })
         }
+        .alignItems(VerticalAlign.Bottom)
+        .width('100%')
+
+        Text('已完成 / 规划任务总数')
+          .fontSize(11)
+          .fontColor(Colors.TEXT_TERTIARY)
+          .width('100%')
+
+        Progress({ value: this.taskDone, total: Math.max(1, this.taskTotal), type: ProgressType.Linear })
+          .color(Colors.PRIMARY)
+          .backgroundColor(Colors.LINE)
+          .width('100%')
+
+        Text(this.taskTotal > 0 ? `完成度 ${this.taskPercent()}%` : '还没有规划任务')
+          .fontSize(12)
+          .fontColor(Colors.TEXT_SECONDARY)
+          .width('100%')
       }
       .layoutWeight(1)
       .padding(14)
       .backgroundColor(Colors.CARD)
       .borderRadius(Radius.LG)
       .alignItems(HorizontalAlign.Start)
-      // 兜底：窄卡片里任何内容算宽了都不许画出去（此前没有这层保护，溢出会压到相邻卡片上）
       .clip(true)
     }
     .width('100%')
     .alignItems(VerticalAlign.Top)
+
+    // 练习内容总结（从窄卡片里单开出来，与「长期建议」一样占整行）
+    Column({ space: Spacing.SM }) {
+      Row() {
+        Text('练习内容总结')
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Colors.TEXT_PRIMARY)
+        Blank()
+        Text('查看全部 ›')
+          .fontSize(12)
+          .fontColor(Colors.PRIMARY_DARK)
+          .onClick(() => {
+            router.pushUrl({ url: 'pages/PracticeDetail' })
+          })
+      }
+      .width('100%')
+
+      if (this.practice.length > 0) {
+        ForEach(this.practice, (item: PracticeSummaryItem, index: number) => {
+          Row() {
+            Text(`${item.subject}：${item.content}`)
+              .fontSize(13)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+            Text(`${item.count} 次`)
+              .fontSize(13)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ left: 10 })
+          }
+          .width('100%')
+          .padding({ top: 6, bottom: 6 })
+          // key 带上次数：只更新次数时 ArkUI 会复用旧节点不重绘
+        }, (item: PracticeSummaryItem, index: number) => `${item.subject}_${index}_${item.count}`)
+
+        Row({ space: 8 }) {
+          Text(`累计完成 ${this.summary.completedTasks} 个任务`)
+            .fontSize(11)
+            .fontColor(Colors.PRIMARY_DARK)
+            .padding({ top: 4, bottom: 4, left: 8, right: 8 })
+            .backgroundColor(Colors.PRIMARY_SOFT)
+            .borderRadius(10)
+          Text(`净专注率 ${this.summary.focusRate}%`)
+            .fontSize(11)
+            .fontColor(Colors.PRIMARY_DARK)
+            .padding({ top: 4, bottom: 4, left: 8, right: 8 })
+            .backgroundColor(Colors.PRIMARY_SOFT)
+            .borderRadius(10)
+        }
+        .width('100%')
+        .margin({ top: 6 })
+      } else {
+        Text('暂无练习记录')
+          .fontSize(13)
+          .fontColor(Colors.TEXT_SECONDARY)
+          .margin({ top: 20, bottom: 20 })
+          .width('100%')
+          .textAlign(TextAlign.Center)
+      }
+    }
+    .width('100%')
+    .padding(18)
+    .backgroundColor(Colors.CARD)
+    .borderRadius(Radius.LG)
+    .alignItems(HorizontalAlign.Start)
+
+    // 长期趋势（从工作台搬过来，放在「长期建议」和「练习内容总结」中间）
+    Column({ space: Spacing.SM }) {
+      Text('长期趋势')
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Colors.TEXT_PRIMARY)
+        .width('100%')
+      Text('近 7 天净专注时长（分钟）')
+        .fontSize(12)
+        .fontColor(Colors.TEXT_TERTIARY)
+        .width('100%')
+        .margin({ bottom: 10 })
+      BarChart({ values: this.weekTrend, labels: this.weekDateLabels() })
+        .width('100%')
+      Text(`本周累计净专注 ${TimeUtils.formatHMin(this.weekFocus)}`)
+        .fontSize(13)
+        .fontColor(Colors.TEXT_SECONDARY)
+        .margin({ top: 10 })
+        .width('100%')
+    }
+    .width('100%')
+    .padding(18)
+    .backgroundColor(Colors.CARD)
+    .borderRadius(Radius.LG)
+    .alignItems(HorizontalAlign.Start)
 
     // 长期建议
     Column({ space: Spacing.SM }) {
@@ -1361,58 +1450,6 @@ export struct Review {
       }
       .margin({ top: 4 })
       }
-    }
-    .width('100%')
-    .padding(18)
-    .backgroundColor(Colors.CARD)
-    .borderRadius(Radius.LG)
-    .alignItems(HorizontalAlign.Start)
-
-    // 长期计划与目标（原「规划提升方案」的位置）
-    // 注意：这个地方**不应该**跳到单次/当日的规划器——那是"今天做什么"，
-    // 与"长期总结"语境是断的，还会把今日计划冲掉。所以改成设置长期计划本身。
-    Column({ space: Spacing.SM }) {
-      Row() {
-        Text('长期计划与目标')
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Colors.TEXT_PRIMARY)
-        Blank()
-        Text(this.longPlan === null ? '未设置' : '已设置')
-          .fontSize(12)
-          .fontColor(this.longPlan === null ? Colors.TEXT_TERTIARY : Colors.GREEN)
-      }
-      .width('100%')
-
-      Text(this.goalLine())
-        .fontSize(12)
-        .fontColor(Colors.TEXT_SECONDARY)
-        .lineHeight(18)
-        .width('100%')
-
-      if (this.longPlan === null) {
-        Text('还没有长期计划。设一个"这段时间要做成什么"，规划时会作为背景参考。')
-          .fontSize(13)
-          .fontColor(Colors.TEXT_SECONDARY)
-          .lineHeight(20)
-          .width('100%')
-      } else {
-        Text(`${this.longPlan.title}${this.longPlan.totalEstimatedMinutes > 0 ? ' · 目标 ' + Math.round(this.longPlan.totalEstimatedMinutes / 60) + ' 小时' : ''}`)
-          .fontSize(14)
-          .fontColor(Colors.TEXT_PRIMARY)
-          .width('100%')
-      }
-
-      Button('修改长期计划与目标')
-        .type(ButtonType.Capsule)
-        .fontSize(14)
-        .fontColor(Colors.TEXT_PRIMARY)
-        .backgroundColor(Colors.PRIMARY_SOFT)
-        .width('70%')
-        .margin({ top: 6 })
-        .onClick(() => {
-          router.pushUrl({ url: 'pages/LongTermPlan' })
-        })
     }
     .width('100%')
     .padding(18)

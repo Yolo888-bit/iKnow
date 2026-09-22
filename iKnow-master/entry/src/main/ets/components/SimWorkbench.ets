@@ -8,7 +8,7 @@ import { WatchEventEngine } from '../services/WatchEventEngine'
 import { SimActivity } from '../services/WatchSignalSimulator'
 
 /**
- * 模拟工作台（唯一实现，专注页与工作台共用）
+ * 模拟状态控制台（唯一实现，排在专注页里）
  *
  * ⚠️ 这里的一切都是**演示用输入**，不是真实测量/真实识别：
  *  - ① 目标状态：注入一条"云端识别结果"。云端识别结果的取值与

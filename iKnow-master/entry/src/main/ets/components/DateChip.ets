@@ -5,7 +5,7 @@ import { Colors } from '../common/Theme'
  *
  * 外形是一个日历（顶部彩条 + 两个挂环），里面的数字**随日期变化**：
  * 今天是 19 号就显示 19，不会是一个写死的日历 emoji。
- * 工作台 / 复盘页共用，保证视觉一致。
+ * 复盘页使用（原工作台已移除）。
  */
 @Component
 export struct DateChip {

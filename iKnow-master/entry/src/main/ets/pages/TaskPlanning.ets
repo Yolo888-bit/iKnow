@@ -12,11 +12,18 @@ import { Task } from '../models/Task'
 import { MessageRole } from '../models/Enums'
 import { IdUtils } from '../utils/IdUtils'
 import { Metrics } from '../services/Metrics'
-import { StorageService } from '../services/StorageService'
 import { StudyPlan } from '../models/StudyPlan'
 import { TimeUtils } from '../utils/TimeUtils'
 import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
 import { UserAvatar } from '../components/UserAvatar'
+import { VoiceInputButton } from '../components/VoiceInputButton'
+
+/**
+ * 手动新增的哨兵 id：`editId` 等于它时，`editPanel` 走"新增"而不是"编辑"分支，
+ * 从而复用同一个表单弹窗，不必再写一份几乎一样的 UI。
+ * （ArkUI 的 struct 里不能声明 static 成员，所以放在模块作用域。）
+ */
+const NEW_TASK_ID = '__new__'
 
 /**
  * 任务规划 —— 微信式一问一答的对话规划
@@ -33,7 +40,7 @@ import { UserAvatar } from '../components/UserAvatar'
 @Component
 export struct TaskPlanning {
   @State messages: AIMessage[] = []
-  /** 用户已发言轮数（兜底用：聊太多轮还没出计划就直接生成） */
+  /** 用户已发言轮数（兜底用：追问到第 3 轮还没出计划就直接生成） */
   @State turns: number = 0
   /** 出计划后是否仍显示输入框（用户点「继续调整」时置 true） */
   @State showComposer: boolean = false
@@ -60,24 +67,37 @@ export struct TaskPlanning {
   private userTexts: string[] = []
   /** 长期计划摘要（来自 study_plan；作为规划的背景参考，随上下文注入提示词） */
   private longPlanText: string = ''
+  /** 本次进入是"新一轮规划"（上一轮已执行过），开场白后补一句说明 */
+  private freshRoundNotice: boolean = false
 
   aboutToAppear(): void {
     // 徽标要如实反映"这次到底是走大模型还是本地模板"，不能无条件亮绿灯
     this.gatewayReady = AIService.getInstance().isGatewayReady()
-    // 已有的今日计划先载入「待确认任务」。
-    // 这样整轮对话是**在现有清单上做增量**，而不是每次从空列表重排一遍 ——
-    // 否则"先排了高数、再聊着加英语"时，高数那几条会被下一轮结果整体冲掉。
-    const existing = AppStore.getInstance().getCurrentPlan()
-    if (existing.length > 0) {
+    // 已有的今日计划先载入「待确认任务」——**但只在这轮计划还没被用过时**。
+    // 规则见 AppStore.isPlanRoundUsed()：
+    //  · 刚排完、还没开始做 → 增量（"先排高数、再加英语"时，高数那几条不会被冲掉）；
+    //  · 已经跑过至少一次专注 → 那一轮已经执行完，这次是**新一轮规划**，
+    //    不再把旧清单当作"请勿重复输出"的基准，否则模型会一直以为在上一轮基础上改。
+    const store = AppStore.getInstance()
+    const used = store.isPlanRoundUsed()
+    const existing = store.getCurrentPlan()
+    if (!used && existing.length > 0) {
       const loaded: Task[] = []
       for (const t of existing) {
         loaded.push(t.copy())
       }
       this.tasks = loaded
+    } else if (used && existing.length > 0) {
+      this.freshRoundNotice = true
     }
     this.pushAI(AIService.getInstance().planningIntro())
+    if (this.freshRoundNotice) {
+      // 开场白之后再说"为什么这次列表是空的"：旧计划还在库里，未完成的也会作为背景给到模型
+      this.pushAI('上一轮计划已经执行过了，我们从新的一份开始排；还没做完的我会一并考虑进去。')
+    }
     // 长期计划：在「复盘 → 长期计划」里设置，这里读出来当背景参考
-    StorageService.getInstance().loadStudyPlan().then((p: StudyPlan | null) => {
+    // 走 AppStore.loadPlan()：与工作台/设置页同一个对象（避免读到旧值）
+    AppStore.getInstance().loadPlan().then((p: StudyPlan | null) => {
       if (p === null || p.title.length === 0) {
         return
       }
@@ -130,9 +150,11 @@ export struct TaskPlanning {
 
   /**
    * 每次发言都带完整历史调用 task_dialog：
-   *  - 模型正常聊天、按需追问；
+   *  - 模型正常聊天、按需追问（一次只问一个最关键的缺口）；
    *  - 一旦判断信息够了，直接返回 done=true + tasks → 立刻出计划；
-   *  - 聊满 4 轮仍未给计划 → 兜底走 task_plan 直接拆任务。
+   *  - 追问满 3 轮仍未给计划 → 兜底走 task_plan 直接拆任务。
+   *
+   * `step` 传 0 基轮次（第一条用户消息 = 0），本地模板按它分支提几个问题。
    */
   private async send(): Promise<void> {
     const text = this.inputValue.trim()
@@ -148,7 +170,7 @@ export struct TaskPlanning {
     this.streaming = true
     this.streamingText = ''
     const input: PlanningDialogInput = {
-      step: this.turns,
+      step: this.turns - 1,
       userInput: text,
       history: this.history,
       planningContext: this.buildPlanningContext()
@@ -176,9 +198,10 @@ export struct TaskPlanning {
       this.applyPlan(got)
       return
     }
-    // 兜底：已经追问过一轮（第 2 轮）还没出计划，就按已收集的信息直接生成。
-    // 原来是 4 轮，用户要连答 4 个问题才看到计划 —— 提示词已改为「最多追问 1 轮」，这里对齐。
-    if (this.turns >= 2) {
+    // 兜底：追问满 3 轮还没出计划，就按已收集的信息直接生成。
+    // turns = 用户发言次数。模型在第 1~3 次发言后各可追问 1 个问题；
+    // 到第 4 次发言仍未给计划时，说明它在原地打转，这里强制出计划（提示词口径同为「最多追问 3 轮」）。
+    if (this.turns >= 4) {
       await this.generatePlan()
     }
   }
@@ -378,9 +401,47 @@ export struct TaskPlanning {
     this.draftMinutes = t.estimatedDuration
   }
 
+  /**
+   * 手动新建任务。**不调 `AppStore.addPlanTask()`** —— 那个方法直接写 `currentPlan` 并落库，
+   * 会绕过「待确认任务 → 确认并开始」这条链路，用户还没确认就先出现在今天的清单里。
+   * 这里只往 `this.tasks` 推一条，与 AI 给出的任务走同一套勾选/编辑/开始流程。
+   */
+  private startAdd(): void {
+    this.editId = NEW_TASK_ID
+    this.draftTitle = ''
+    this.draftSubject = ''
+    this.draftMinutes = 30
+  }
+
   private saveEdit(): void {
     const title = this.draftTitle.trim()
     const subject = this.draftSubject.trim()
+    if (this.editId === NEW_TASK_ID) {
+      if (title.length === 0) {
+        promptAction.showToast({ message: '给这条任务起个名字吧' })
+        return
+      }
+      const t = new Task()
+      t.id = IdUtils.uuid()
+      t.title = title
+      t.subject = subject
+      t.estimatedDuration = this.draftMinutes
+      t.sortOrder = this.tasks.length
+      t.createdAt = Date.now()
+      // 手动任务与 AI 任务一样归属当前长期计划（与 AppStore.addPlanTask 的口径一致）
+      t.planId = StudyPlan.PLAN_SINGLETON_ID
+      const next: Task[] = this.tasks.slice()
+      next.push(t)
+      this.tasks = next
+      // 已经点过圆圈 = 进入了显式选择模式，新增项默认也选中（否则「确认并开始」会把它静默丢掉）
+      if (this.confirmedIds.length > 0) {
+        const merged: string[] = this.confirmedIds.slice()
+        merged.push(t.id)
+        this.confirmedIds = merged
+      }
+      this.editId = ''
+      return
+    }
     const next: Task[] = []
     for (const t of this.tasks) {
       const c = t.copy()
@@ -679,7 +740,19 @@ export struct TaskPlanning {
         .fontColor(Colors.TEXT_PRIMARY)
         .width('100%')
         .textAlign(TextAlign.Center)
-        .margin({ top: 6, bottom: 16 })
+        .margin({ top: 6, bottom: this.tasks.length === 0 ? 6 : 16 })
+
+      // 还没有任务时把 AI 摆在前头：这一页的主路径本来就是"聊两句就排好"，
+      // 手动新建是给"我心里已经很清楚要做什么"的人留的次要出路。
+      if (this.tasks.length === 0) {
+        Text('跟我说一句"今晚想复习高数"，我来帮你拆成能直接动手的任务')
+          .fontSize(12)
+          .fontColor(Colors.TEXT_TERTIARY)
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .lineHeight(18)
+          .margin({ bottom: 16 })
+      }
 
       Column({ space: 16 }) {
         // key 里带上时长与勾选态：只用 t.id 时，改了时长 ArkUI 会复用旧节点，
@@ -693,14 +766,28 @@ export struct TaskPlanning {
 
       // 有计划后仍可回到对话继续追加需求（如"再加上英语"）。
       // 做成开关而不是一次性按钮：否则点开就没法收起，输入栏会一直占着底部。
-      Text(this.showComposer ? '收起对话' : '💬 继续补充 / 调整')
+      // 清单为空时不出现 —— 那时"继续补充"没有对象，底部本来就是常驻输入栏。
+      if (this.tasks.length > 0) {
+        Text(this.showComposer ? '收起对话' : '💬 继续补充 / 调整')
+          .fontSize(12)
+          .fontColor(Colors.TEXT_SECONDARY)
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .margin({ top: 16 })
+          .onClick(() => {
+            this.showComposer = !this.showComposer
+          })
+      }
+
+      // 次要出路：已经想清楚要做什么的人不必走对话。样式刻意弱化，避免和上面那条抢注意力。
+      Text('✍️ 手动添加任务')
         .fontSize(12)
-        .fontColor(Colors.TEXT_SECONDARY)
+        .fontColor(Colors.TEXT_TERTIARY)
         .width('100%')
         .textAlign(TextAlign.Center)
-        .margin({ top: 16 })
+        .margin({ top: 10, bottom: 4 })
         .onClick(() => {
-          this.showComposer = !this.showComposer
+          this.startAdd()
         })
     }
     .width('100%')
@@ -710,7 +797,7 @@ export struct TaskPlanning {
   editPanel() {
     Column() {
       Column() {
-        Text('编辑任务')
+        Text(this.editId === NEW_TASK_ID ? '新增任务' : '编辑任务')
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
           .fontColor(Colors.TEXT_PRIMARY)
@@ -775,16 +862,19 @@ export struct TaskPlanning {
         .margin({ top: 16 })
 
         Row({ space: 12 }) {
-          Button('删除')
-            .layoutWeight(1)
-            .height(46)
-            .fontSize(15)
-            .fontColor(Colors.CAMERA_RED)
-            .backgroundColor(Colors.BG)
-            .borderRadius(Radius.MD)
-            .onClick(() => {
-              this.deleteTask()
-            })
+          // 新增模式没有可删的条目，这个按钮不渲染
+          if (this.editId !== NEW_TASK_ID) {
+            Button('删除')
+              .layoutWeight(1)
+              .height(46)
+              .fontSize(15)
+              .fontColor(Colors.CAMERA_RED)
+              .backgroundColor(Colors.BG)
+              .borderRadius(Radius.MD)
+              .onClick(() => {
+                this.deleteTask()
+              })
+          }
           Button('取消')
             .layoutWeight(1)
             .height(46)
@@ -836,6 +926,15 @@ export struct TaskPlanning {
         .onSubmit(() => {
           this.send()
         })
+
+      // 按住说话：识别结果写回输入框，用户确认后再发（不自动发送，留出纠错余地）
+      VoiceInputButton({
+        onFinal: (text: string) => {
+          if (text.length > 0) {
+            this.inputValue = text
+          }
+        }
+      })
 
       Button('发送')
         .height(44)
@@ -942,9 +1041,8 @@ export struct TaskPlanning {
               this.aiBubble('正在思考…')
             }
 
-            if (this.tasks.length > 0) {
-              this.planSection()
-            }
+            // 无条件渲染：清单为空时这一块要承担"引导用 AI 建任务 + 手动新建入口"的职责
+            this.planSection()
           }
           .width('100%')
           .padding({ left: 16, right: 16, top: 10, bottom: 18 })

@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI'
+import { router, promptAction } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
@@ -531,13 +531,21 @@ export struct Dashboard {
                     .borderRadius(Radius.MD)
                     .margin({ top: 8 })
                     .onClick(() => {
+                      // 必须接住失败：落库失败时界面上的数字已经变了、库里没变，
+                      // 「我的 → 长期计划与目标」会显示成"没生效"，静默失败最难排查
                       AppStore.getInstance().raiseSubjectTarget(row.subject, row.actualMinutes)
+                        .catch(() => {
+                          promptAction.showToast({ message: '目标上调失败，请重试' })
+                        })
                     })
                 }
               }
               .width('100%')
               .margin({ top: 14 })
-            }, (row: SubjectProgressRow) => row.subject)
+              // key 必须带上数值：只用科目名的话，科目没变、只是目标/投入变了时，
+              // ArkUI 会按相同 key 复用旧节点 → 数字不重绘（复盘日历踩过同一个坑）
+            }, (row: SubjectProgressRow) =>
+            `${row.subject}_${row.targetMinutes}_${row.actualMinutes}_${row.doneTasks}_${row.totalTasks}`)
           }
         }
         .dashCard()

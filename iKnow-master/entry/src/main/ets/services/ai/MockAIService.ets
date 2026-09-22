@@ -281,13 +281,25 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     }
   }
 
+  /**
+   * 本地模板的追问轮次必须和 `Prompts.taskDialog` 的口径一致：
+   * 按「做什么动作 → 量或范围 → 可用时间」的顺序最多追问 3 轮（0 基 step 0/1/2），
+   * 第 4 次发言直接出计划。
+   *
+   * ⚠️ 历史 bug：这里的分支写的是 `step === 0`，而页面之前传的是 **1 基**轮次，
+   * 于是第一个分支永远命中不了 —— 本地模板实际只问了 1 轮就出计划，
+   * 表现为"没配 Key 时 AI 一轮就把任务排完了"。页面已改为传 0 基（`step: turns - 1`）。
+   */
   private async produceDialog(input: PlanningDialogInput): Promise<PlanningDialogResult> {
     await this.delay(420)
     if (input.step === 0) {
-      return { reply: '好的，大概有多少时间可以学习呢？', done: false }
+      return { reply: '可以，具体想做哪几种？比如看例题、做课后题、整理错题，还是背单词？', done: false }
     }
     if (input.step === 1) {
-      return { reply: '有没有特别想优先完成的部分？', done: false }
+      return { reply: '大概什么量呢？比如做多少道题、看多少页。', done: false }
+    }
+    if (input.step === 2) {
+      return { reply: '今天大概能坐下来学多久？我好安排每块的时间。', done: false }
     }
     // 本地兜底也必须基于用户说过的话来生成任务，绝不返回「优先任务块 A」这类占位符
     const text = this.composeUserText(input)

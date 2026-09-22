@@ -13,6 +13,7 @@ import { IdUtils } from '../utils/IdUtils'
 import { TimeUtils } from '../utils/TimeUtils'
 import { AITag } from '../components/AITag'
 import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
+import { VoiceInputButton } from '../components/VoiceInputButton'
 
 /** 专注中的 AI 答疑（计时不中断） */
 @Entry
@@ -384,8 +385,8 @@ export struct AIChat {
           .layoutWeight(1)
           .align(Alignment.Top)
 
-          Row() {
-            TextInput({ placeholder: '输入你的问题…' })
+          Row({ space: 10 }) {
+            TextInput({ placeholder: '输入你的问题…', text: this.inputValue })
               .fontSize(15)
               .height(44)
               .layoutWeight(1)
@@ -398,13 +399,21 @@ export struct AIChat {
                 this.send()
               })
 
+            // 按住说话：识别结果写回输入框，用户可以改完再发（不自动发送，留出纠错余地）
+            VoiceInputButton({
+              onFinal: (text: string) => {
+                if (text.length > 0) {
+                  this.inputValue = text
+                }
+              }
+            })
+
             Button('发送')
               .height(44)
               .fontSize(15)
               .fontColor(Color.White)
               .backgroundColor(Colors.QA_ACCENT)
               .borderRadius(22)
-              .margin({ left: 10 })
               .onClick(() => {
                 this.send()
               })

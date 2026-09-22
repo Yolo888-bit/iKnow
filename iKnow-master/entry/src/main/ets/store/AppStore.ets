@@ -103,6 +103,9 @@ export class AppStore {
     }
     // 长期计划（单记录）读一次进内存：目标进度的分母、规划背景都从它取
     this.plan = await StorageService.getInstance().loadStudyPlan()
+    // 一次性回填历史任务的计划归属（见方法注释）：不做的话老数据全部落在
+    // 「未计入目标」里，「各科目标进度」会恒为 0，看起来就是"改了目标但进度不动"
+    await this.backfillTaskPlanId()
     // 登录用户名全局生效：重新启动（自动登录）时也要把持久化昵称写回 AppStorage，
     // 否则会用 initAppStorageDefaults 的默认值，首页问候语显示成默认名。
     if (this.user.nickname.length > 0) {
@@ -198,6 +201,50 @@ export class AppStore {
   }
 
   /**
+   * 一次性回填：给历史任务补上 `planId`。
+   *
+   * `planId` 是本轮新加的归属字段，**老库里的任务全是空**。而「目标进度」只统计
+   * `planId === 当前计划 id` 的任务 —— 不回填的话，这些历史任务会全部落进
+   * 「未计入目标」，各科进度恒为 0（现象就是"计划数据有了，但进度不跟着动"）。
+   * 这些任务当年全部来自规划（那时还没有归属字段），所以统一归到当前计划是符合事实的。
+   *
+   * 幂等：只处理 `planId === ''` 的，回填完再跑没有可处理项。
+   */
+  private async backfillTaskPlanId(): Promise<void> {
+    let fixed = 0
+    for (const t of this.tasks) {
+      if (t.planId.length > 0) {
+        continue
+      }
+      t.planId = StudyPlan.PLAN_SINGLETON_ID
+      try {
+        await StorageService.getInstance().saveTask(t)
+        fixed++
+      } catch (e) {
+        // 单条失败不影响其它任务
+      }
+    }
+    if (fixed > 0) {
+      hilog.info(0x0000, 'iKnow.Store', '历史任务回填计划归属：%{public}d 条', fixed)
+    }
+  }
+
+  /**
+   * 读长期计划：**内存里已有就用它**，没有再读库并缓存。
+   *
+   * 页面一律走这里、不要各自 `StorageService.loadStudyPlan()` ——
+   * 否则会变成"工作台读内存、设置页读库"两套来源：一旦某一步没落库成功，
+   * 就出现"工作台改过了、我的 → 长期计划与目标还是旧的"这种不一致。
+   */
+  async loadPlan(): Promise<StudyPlan | null> {
+    if (this.plan !== null) {
+      return this.plan
+    }
+    this.plan = await StorageService.getInstance().loadStudyPlan()
+    return this.plan
+  }
+
+  /**
    * 把某科目标上调到指定分钟（D6 的"一键上调"）。
    * 超额时进度条会停在 100% 失去区分度，所以给用户一个把目标对齐到真实投入的出口。
    */
@@ -235,6 +282,36 @@ export class AppStore {
 
   getCurrentPlan(): Task[] {
     return this.currentPlan
+  }
+
+  /**
+   * 当前这轮今日计划是否**已经被用过**（制定完之后跑过至少一次专注）。
+   *
+   * 规划页据此决定是"在现有清单上做增量"还是"开一轮全新的规划"：
+   *  - **没用过** → 增量：用户可能正在同一轮里"先排高数、再加英语"（C2 的诉求）；
+   *  - **用过** → 全新：那一轮已经执行过了，再规划就是**新一轮**，
+   *    不该再被旧清单绑成"在上一次的基础上改"（实测反馈）。
+   *
+   * 判据可由现有数据推导，不需要新增字段：任务的 `createdAt`（规划确认即落库）
+   * 之后是否出现过新的会话开始时间。
+   * **旧任务不会因此丢失** —— 它们仍在库里，并会以「最近未完成任务」作为背景注入提示词。
+   */
+  isPlanRoundUsed(): boolean {
+    let earliest = -1
+    for (const t of this.currentPlan) {
+      if (t.createdAt > 0 && (earliest < 0 || t.createdAt < earliest)) {
+        earliest = t.createdAt
+      }
+    }
+    if (earliest < 0) {
+      return false
+    }
+    for (const s of this.sessions) {
+      if (s.startTime >= earliest) {
+        return true
+      }
+    }
+    return false
   }
 
   getCurrentReport(): StudyReport | null {

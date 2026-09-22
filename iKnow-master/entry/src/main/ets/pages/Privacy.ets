@@ -3,6 +3,7 @@ import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { StorageService } from '../services/StorageService'
+import { PermissionService } from '../services/PermissionService'
 
 /**
  * 隐私与数据（合规：如实说明数据流向 + 数据管理）
@@ -20,7 +21,9 @@ import { StorageService } from '../services/StorageService'
 export struct Privacy {
   @State showClearConfirm: boolean = false
   @State vibrateOn: boolean = true
-  @State voiceOn: boolean = false
+  @State voiceOn: boolean = true
+  /** 麦克风（语音输入）的系统授权状态：只读展示，不再做成"假开关" */
+  @State micOn: boolean = false
 
   aboutToAppear(): void {
     StorageService.getInstance().loadKv(StorageKey.VIBRATE_ON).then((v: string) => {
@@ -28,9 +31,11 @@ export struct Privacy {
       AppStorage.setOrCreate<number>(StorageKey.VIBRATE_ON, this.vibrateOn ? 1 : 0)
     }).catch(() => {})
     StorageService.getInstance().loadKv(StorageKey.VOICE_ON).then((v: string) => {
-      this.voiceOn = v === '1'
+      // 缺省为开：语音提醒改成本机音频文件后不再依赖系统语音能力，默认开着才有意义
+      this.voiceOn = v !== '0'
       AppStorage.setOrCreate<number>(StorageKey.VOICE_ON, this.voiceOn ? 1 : 0)
     }).catch(() => {})
+    this.micOn = PermissionService.getInstance().isMicrophoneOn()
   }
 
   private clearImages(): void {
@@ -95,12 +100,36 @@ export struct Privacy {
               AppStorage.setOrCreate<number>(StorageKey.VOICE_ON, v ? 1 : 0)
               StorageService.getInstance().saveKv(StorageKey.VOICE_ON, v ? '1' : '0').catch(() => {})
             })
-            Text('语音提醒依赖系统语音能力，部分设备不支持；不支持时会自动跳过，不影响其他提醒。')
+            Text(`语音提醒由系统语音合成朗读（按离线模式请求），合成不可用时改用 App 内置的提醒音频\n`
+              + `✓ 只在确认分心时响：识别到「看手机」或画面里没有人\n`
+              + `✓ 「趴在桌上」这类轻度状态只出提示卡片，不出声\n`
+              + `✓ 切到其他应用期间不响（回到 App 时才记一条卡片）\n`
+              + `✓ 同一段专注内受冷却与提醒次数上限约束，不会反复响`)
               .fontSize(11)
               .fontColor(Colors.TEXT_TERTIARY)
               .lineHeight(16)
               .width('100%')
               .margin({ top: 8 })
+          }
+          .privacyCard()
+
+          // 语音输入（麦克风）
+          Column() {
+            Text('麦克风')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .width('100%')
+
+            Text(`系统授权状态：${this.micOn ? '已授权' : '未授权'}\n`
+              + '✓ 只在任务规划 / 专注答疑里按住说话时采集，其余时间不采集\n'
+              + '✓ 语音交给系统语音识别服务按在线模式转成文字，音频本身不由本 App 保存\n'
+              + '✓ 未授权时不影响使用，输入框照常可以打字')
+              .fontSize(13)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(22)
+              .width('100%')
+              .margin({ top: 10 })
           }
           .privacyCard()
 

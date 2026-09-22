@@ -1,4 +1,5 @@
 import { router, promptAction } from '@kit.ArkUI'
+import { hilog } from '@kit.PerformanceAnalysisKit'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { SubjectListEditor } from '../components/SubjectList'
 import { StorageService } from '../services/StorageService'
@@ -22,12 +23,10 @@ export struct LongTermPlan {
   // —— 目标（LearningGoal）——
   @State examType: string = ''
   @State dateText: string = ''
-  /** 科目：一块一行（与登录引导同一套编辑器） */
+  /** 科目清单：**一块一行**，用 `SubjectListEditor` 编辑（与引导向导同一套交互） */
   @State subjects: string[] = []
   // —— 长期计划（StudyPlan）——
   @State title: string = ''
-  /** 已解析的科目清单（单独存一份，让 UI 随输入重绘） */
-  @State subjects: string[] = []
   /** 与 subjects 一一对应的目标时长（小时，字符串便于编辑） */
   @State targetHours: string[] = []
   /** 迁移遗留的"未分配目标"（小时）；> 0 表示旧版只设过总目标、还没分到科目 */
@@ -46,25 +45,34 @@ export struct LongTermPlan {
       const d = new Date(g.targetDate)
       this.dateText = `${d.getFullYear()}-${this.pad(d.getMonth() + 1)}-${this.pad(d.getDate())}`
     }
-    StorageService.getInstance().loadStudyPlan().then((p: StudyPlan | null) => {
-      if (p === null) {
-        this.syncSubjects(this.subjectsText)
-        return
-      }
-      this.loaded = p
-      this.title = p.title
-      this.saved = true
-      for (const st of p.subjectTargets) {
-        if (st.subject.length > 0) {
-          this.targetMap.set(st.subject, st.targetMinutes)
-        }
-      }
-      this.unassignedHours = this.minutesToHoursText(StudyPlan.unassignedMinutes(p))
-      this.syncSubjects(this.subjectsText)
+    // 走 AppStore.loadPlan()：与工作台**同一个对象**。
+    // 之前这里直接读库，而工作台读内存，两条来源不一致时就会出现
+    // "工作台改过了、这一页还是旧的"（实测反馈）。
+    AppStore.getInstance().loadPlan().then((p: StudyPlan | null) => {
+      this.applyPlan(p)
     }).catch(() => {
       // 读不到就是"还没设置过"
-      this.syncSubjects(this.subjectsText)
+      this.syncTargetInputs()
     })
+  }
+
+  /** 把计划灌进页面状态；`loaded` 记下对象本身，保存时复用它（不产生第二份真值） */
+  private applyPlan(p: StudyPlan | null): void {
+    if (p === null) {
+      this.syncTargetInputs()
+      return
+    }
+    this.loaded = p
+    this.title = p.title
+    this.saved = true
+    this.targetMap.clear()
+    for (const st of p.subjectTargets) {
+      if (st.subject.length > 0) {
+        this.targetMap.set(st.subject, st.targetMinutes)
+      }
+    }
+    this.unassignedHours = this.minutesToHoursText(StudyPlan.unassignedMinutes(p))
+    this.syncTargetInputs()
   }
 
   private pad(n: number): string {
@@ -86,24 +94,25 @@ export struct LongTermPlan {
 
   /** 把当前输入框里的值收进 targetMap（改科目清单前必须先收，否则刚改的时长会丢） */
   private flushInputs(): void {
+    // targetHours 还没建起来时（首次加载）不要回写：那时数组是空的，
+    // 会用 0 把刚从库里读出来的各科目标覆盖掉
+    if (this.targetHours.length !== this.subjects.length) {
+      return
+    }
     for (let i = 0; i < this.subjects.length; i++) {
       this.targetMap.set(this.subjects[i], this.hoursToMinutes(this.targetHours[i]))
     }
   }
 
-  /** 科目清单变化后重建输入框：已有目标的科目回填，新科目留空 */
-  private syncSubjects(text: string): void {
-    if (this.subjects.length > 0) {
-      this.flushInputs()
-    }
-    const list = this.parseSubjects(text)
+  /** 科目清单变化后重建时长输入框：已有目标的科目回填，新科目留空 */
+  private syncTargetInputs(): void {
+    this.flushInputs()
     const hours: string[] = []
-    for (const s of list) {
+    for (const s of this.subjects) {
       const raw: number | undefined = this.targetMap.get(s)
       const min = raw !== undefined ? raw : 0
       hours.push(min > 0 ? `${this.minutesToHoursText(min)}` : '')
     }
-    this.subjects = list
     this.targetHours = hours
   }
 
@@ -182,8 +191,9 @@ export struct LongTermPlan {
   private async save(): Promise<void> {
     const exam = this.examType.trim()
     const target = this.parseDate(this.dateText.trim())
-    if (exam.length === 0 && target === 0 && this.subjectsText.trim().length === 0
-      && this.title.trim().length === 0 && this.totalHours.trim().length === 0) {
+    // 注意：不再判断"目标总时长"——合计已改为由各科目标派生，页面上没有这个输入框了
+    if (exam.length === 0 && target === 0 && this.subjects.length === 0
+      && this.title.trim().length === 0) {
       promptAction.showToast({ message: '还没有填写内容' })
       return
     }
@@ -196,7 +206,8 @@ export struct LongTermPlan {
       g.title = exam
     }
     g.targetDate = target
-    g.subjects = this.parseSubjects(this.subjectsText)
+    // 保存前再过一遍 cleanSubjects()：去掉空行/重复，避免把脏数据写进"科目唯一来源"
+    g.subjects = this.cleanSubjects()
     try {
       await AppStore.getInstance().saveGoal(g)
     } catch (e) {
@@ -231,10 +242,17 @@ export struct LongTermPlan {
       promptAction.showToast({ message: '长期计划保存失败，请重试' })
       return
     }
-    // 让工作台的目标进度立刻用上新分母（不必等下次重启）
+    // 让工作台的目标进度立刻用上新分母（不必等下次重启）。
+    // 这一段必须有确定的收尾：之前 `refreshAggregates()` 没有 try/catch，
+    // 一旦它抛错，后面的提示与返回都不会执行 —— 表现为"点了保存什么都没发生"，最难排查。
     AppStore.getInstance().setPlan(plan)
-    await AppStore.getInstance().refreshAggregates()
-    promptAction.showToast({ message: '已保存，倒计时与目标进度会按这个来' })
+    try {
+      await AppStore.getInstance().refreshAggregates()
+      promptAction.showToast({ message: '已保存，倒计时与目标进度会按这个来' })
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Plan', '保存后刷新聚合失败：%{public}s', e.message)
+      promptAction.showToast({ message: '已保存，但界面刷新失败，请退出重进' })
+    }
     router.back()
   }
 
@@ -300,9 +318,23 @@ export struct LongTermPlan {
           this.field('考试日期', '例如：2026-12-20（可留空）', this.dateText, (v: string) => {
             this.dateText = v
           })
-          this.field('科目', '例如：高等数学、英语、政治（顿号分隔，可留空）', this.subjectsText, (v: string) => {
-            this.subjectsText = v
+          // 科目：一块一行（与引导向导共用同一个编辑器组件）
+          Text('科目')
+            .fontSize(13)
+            .fontColor(Colors.TEXT_SECONDARY)
+            .width('100%')
+            .margin({ top: 16 })
+          SubjectListEditor({
+            items: this.subjects,
+            placeholder: '例如：高等数学',
+            addLabel: '添加一科',
+            onChange: (v: string[]) => {
+              this.subjects = v
+              // 科目一行变化就重建时长输入框（新科目留空，已有目标回填）
+              this.syncTargetInputs()
+            }
           })
+            .margin({ top: 8 })
         }
         .padding(18)
         .backgroundColor(Colors.CARD)

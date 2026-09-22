@@ -111,6 +111,16 @@ export class FocusController {
   private lastDecision: CompanionDecision | null = null
   private permSubscribed: boolean = false
 
+  /**
+   * 语音提醒的**待定线索**（'' / 'PHONE' / 'AWAY'）。
+   *
+   * 由 `onObservation()` 在看到明确的观察状态时写入，由 `onDetection()` 在
+   * **真正转入「分心」**的那一次判定里消费掉，用完即清 —— 因此它天然受去抖、
+   * 置信度地板、形态冷却与干预预算的约束，不会在"没真的分心"时响。
+   * 会话边界必须清空，否则会跨会话残留。
+   */
+  private pendingVoiceCue: string = ''
+
   static getInstance(): FocusController {
     if (FocusController.inst === null) {
       FocusController.inst = new FocusController()
@@ -474,6 +484,8 @@ export class FocusController {
     this.lastConfidence = 0
     this.manualInject = false
     this.simInjectPending = false
+    // 待定的语音线索必须跨会话清空，否则上一段留下的"看手机"会打到下一段
+    this.pendingVoiceCue = ''
     this.clearSimTimer()
     this.resetBackgroundProbe()
   }
@@ -548,6 +560,11 @@ export class FocusController {
     // 演示注入标记是**一次性**的：无论本次是否真的切换，都在这里消费掉
     const manual = this.manualInject
     this.manualInject = false
+    // 语音提醒线索同理：**只对触发它的这一次判定有效**。
+    // 先取走再判断，这样"被去抖拦下 / 没真的转到分心"时线索自动作废，
+    // 不会挂到很久之后的某一次状态切换上突然响一声。
+    const cue = this.pendingVoiceCue
+    this.pendingVoiceCue = ''
     if (!this.running || this.qaMode || this.resting || this.paused) {
       return
     }
@@ -568,6 +585,17 @@ export class FocusController {
     const coolOk = manual || this.cooldownElapsed(target)
     if (dwellOk && coolOk) {
       this.transitionTo(target, r.confidence, r.source, r.detail)
+      // 触达（震动 / 语音）只在**真正转入「分心」**这一刻发生：
+      //   · 去抖与冷却已在上面的 dwellOk / coolOk 里判过，同一段专注不会反复响；
+      //   · 「趴桌」这类轻度（黄）不震不响，避免变成骚扰；
+      //   · 语音还要求这次判定带着明确的场景线索（看手机 / 画面无人）。
+      if (target === FocusState.DISTRACTED) {
+        FeedbackService.getInstance().vibrateOnce()
+        if (cue.length > 0) {
+          // 提醒语由 FeedbackService 按场景 + 考伴人格生成，这里只报"哪种场景"
+          FeedbackService.getInstance().speak(cue === 'PHONE' ? 'PHONE' : 'AWAY')
+        }
+      }
     } else {
       this.recordEvent(target, r.source, r.confidence, 'debounced')
     }
@@ -668,13 +696,14 @@ export class FocusController {
     this.simInjectPending = false
     this.manualInject = injected
     if (o.activity === '看手机' || o.handheld) {
+      // 这里**只留线索、不直接触达**：触达交给状态机在"真正转入分心"那一刻做。
+      // 原先直接在这里调 vibrateOnce / speak，绕过了去抖、置信度地板、冷却与干预预算，
+      // 结果就是"低头看一眼手机"也会反复响 —— 这正是接上真实音频前必须先改掉的地方。
+      this.pendingVoiceCue = 'PHONE'
       svc.submit(FocusState.DISTRACTED, `云端识别：${o.activity}`, conf, FocusSource.CAMERA)
-      // 只对"确认分心"做触达；趴桌/无法判断都不震，避免变成骚扰
-      FeedbackService.getInstance().vibrateOnce()
-      FeedbackService.getInstance().speak('检测到你在看手机，要回来吗？')
     } else if (o.activity === '离开') {
+      this.pendingVoiceCue = 'AWAY'
       svc.submit(FocusState.DISTRACTED, '云端识别：画面中没有人', conf, FocusSource.CAMERA)
-      FeedbackService.getInstance().vibrateOnce()
     } else if (o.activity === '趴桌') {
       // 趴桌更像疲劳，不等于分心，因此只给轻提示
       svc.submit(FocusState.SLIGHTLY_DISTRACTED, '云端识别：趴桌（可能是疲劳）', conf, FocusSource.CAMERA)

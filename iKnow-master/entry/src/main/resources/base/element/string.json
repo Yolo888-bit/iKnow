@@ -25,6 +25,10 @@
       "value": "当识别到你已经离开座位或在使用手机时，用一次震动把你拉回来"
     },
     {
+      "name": "reason_microphone",
+      "value": "语音输入：按住说话时采集麦克风音频并转成文字，供任务规划与专注答疑使用"
+    },
+    {
       "name": "widget_display_name",
       "value": "iKnow 今日专注"
     },

@@ -73,6 +73,30 @@ export class PermissionService {
     return true
   }
 
+  /**
+   * 确保拿到系统麦克风权限（user_grant），供语音输入（按住说话）使用。
+   * 与 `ensureCamera` 同一模式：已授权时立即返回、不弹窗；只有拿到系统授权才写本地标记。
+   * 注意：拿到权限 ≠ 语音识别可用 —— 系统语音服务是否可用由识别引擎决定（见 VoiceInputService）。
+   */
+  async ensureMicrophone(ctx: common.UIAbilityContext): Promise<boolean> {
+    try {
+      const mgr = abilityAccessCtrl.createAtManager()
+      const perms: Permissions[] = ['ohos.permission.MICROPHONE']
+      const res = await mgr.requestPermissionsFromUser(ctx, perms)
+      if (res.authResults.length === 0 || res.authResults[0] !== 0) {
+        return false
+      }
+    } catch (e) {
+      return false
+    }
+    await this.grant('microphone')
+    return true
+  }
+
+  isMicrophoneOn(): boolean {
+    return this.auth.microphone
+  }
+
   /** 确保拿到蓝牙权限（user_grant）；已授权时立即返回、不弹窗 */
   async ensureBluetooth(ctx: common.UIAbilityContext): Promise<boolean> {
     try {

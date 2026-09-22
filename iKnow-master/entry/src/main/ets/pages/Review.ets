@@ -5,6 +5,7 @@ import { AppStore } from '../store/AppStore'
 import { Metrics, Last30DaysSummary, PracticeSummaryItem, HabitInsight, DaySummary } from '../services/Metrics'
 import { AIService } from '../services/AIService'
 import { FocusProfile } from '../models/FocusProfile'
+import { StudyPlan } from '../models/StudyPlan'
 import { RadarChart } from '../components/RadarChart'
 import { FocusChart } from '../components/FocusChart'
 import { CircularProgress } from '../components/CircularProgress'
@@ -12,7 +13,6 @@ import { FocusSession } from '../models/FocusSession'
 import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
 import { DateChip } from '../components/DateChip'
-import { StorageService } from '../services/StorageService'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 
 /**
@@ -33,6 +33,8 @@ export struct Review {
   @State profile: FocusProfile = new FocusProfile()
   @State dimValues: number[] = []
   @State canShowRadar: boolean = false
+  /** 长期计划（study_plan 表，单记录）；长期视图里的「长期计划与目标」卡片读它 */
+  @State longPlan: StudyPlan | null = null
 
   // ---------- 单日复盘状态 ----------
   /** 0 = 长期学习总结；1 = 某天学习总结 */
@@ -55,6 +57,9 @@ export struct Review {
   }
   @State dayInsight: string = ''
   @State daySuggestions: string[] = []
+  /** 当天的每一次专注（与日历「有记录」同一口径），供「查看当日每次专注记录」弹层列表用 */
+  @State daySessions: FocusSession[] = []
+  @State showDaySessions: boolean = false
 
   // 右上角下拉面板：切换「长期复盘 / 按天复盘」，按天时内嵌月历
   @State showPicker: boolean = false
@@ -143,6 +148,14 @@ export struct Review {
     this.aiAdvice = AIService.getInstance().longTermAnalysis(this.profile, hardest,
       Metrics.trend7v7(sessions, now), Metrics.streaks(sessions, now))
 
+    // 长期计划（单记录）：走 AppStore.loadPlan()，与工作台/设置页**同一个对象**，
+    // 避免"工作台改过了、这里还是旧值"
+    AppStore.getInstance().loadPlan().then((p: StudyPlan | null) => {
+      this.longPlan = p
+    }).catch(() => {
+      this.longPlan = null
+    })
+
     this.buildDayMarks(sessions)
 
     // 按天视图下同步刷新当天数据，否则结束后仍显示旧值
@@ -155,6 +168,23 @@ export struct Review {
     if (this.lineReady) {
       this.onLineChartReady()
     }
+  }
+
+  /** 目标一行：考试 + 倒计时 + 科目（空则如实说明，指路到设置页） */
+  private goalLine(): string {
+    const g = AppStore.getInstance().getGoal()
+    if (g.examType.length === 0 && g.subjects.length === 0) {
+      return '还没设置目标考试与科目，在「长期计划与目标」里填写后，倒计时与规划会更准。'
+    }
+    const parts: string[] = []
+    if (g.examType.length > 0) {
+      const days = g.targetDate > 0 ? `，距考试 ${TimeUtils.daysUntil(g.targetDate, Date.now())} 天` : '（未填考试日期）'
+      parts.push(`目标：${g.examType}${days}`)
+    }
+    if (g.subjects.length > 0) {
+      parts.push(`科目：${g.subjects.join('、')}`)
+    }
+    return parts.join(' · ')
   }
 
   /**
@@ -466,6 +496,52 @@ export struct Review {
     this.dayInsight = AIService.getInstance().dayInsight(this.dayLabel(), this.day, baseline)
     // daySuggestions 内部已经按优先级派生并截到最多 3 条
     this.daySuggestions = AIService.getInstance().daySuggestions(this.day, baseline)
+    this.daySessions = this.sessionsOfDay(sessions, this.dayStart)
+  }
+
+  /**
+   * 取某一天的会话明细（倒序）。
+   * 判定口径**与 `buildDayMarks` 逐字一致**（按天起点归并 + 有效学习时长 > 0）——
+   * 两处若各写一套，日历上的"这天有记录"和列表里的条数就会对不上。
+   */
+  private sessionsOfDay(sessions: FocusSession[], dayStart: number): FocusSession[] {
+    const out: FocusSession[] = []
+    for (const s of sessions) {
+      if (Metrics.totalStudySec(s) <= 0) {
+        continue
+      }
+      if (TimeUtils.dayStart(s.startTime) !== dayStart) {
+        continue
+      }
+      out.push(s)
+    }
+    out.sort((a: FocusSession, b: FocusSession): number => b.startTime - a.startTime)
+    return out
+  }
+
+  /** 打开这一次的完整复盘（与 StudyHistory.openReport 同一条通道） */
+  private openReport(s: FocusSession): void {
+    this.showDaySessions = false
+    AppStorage.setOrCreate<string>(StorageKey.REPORT_SESSION_ID, s.id)
+    router.pushUrl({ url: 'pages/StudyReport' })
+  }
+
+  /** 同一天内的时间只用到时分，所以这里显示「HH:mm–HH:mm」而不是带上月日 */
+  private hhmm(ts: number): string {
+    const d = new Date(ts)
+    const h = d.getHours()
+    const m = d.getMinutes()
+    return `${h < 10 ? '0' : ''}${h}:${m < 10 ? '0' : ''}${m}`
+  }
+
+  private sessionRange(s: FocusSession): string {
+    const end = s.endTime > 0 ? s.endTime : s.startTime + s.totalDuration * 1000
+    return `${this.hhmm(s.startTime)}–${this.hhmm(end)}`
+  }
+
+  private sheetTitle(): string {
+    const d = new Date(this.dayStart)
+    return `${d.getMonth() + 1}月${d.getDate()}日 的专注记录`
   }
 
   private dayStatusText(): string {
@@ -946,6 +1022,26 @@ export struct Review {
     .borderRadius(Radius.LG)
     .alignItems(HorizontalAlign.Start)
 
+    // 汇总之外给出明细入口：当天跑了好几段专注时，用户往往想看看"每一次"分别怎么样
+    if (this.daySessions.length > 0) {
+      Row() {
+        Text(`🕘 查看当日每次专注记录（${this.daySessions.length} 次）`)
+          .fontSize(14)
+          .fontColor(Colors.GREEN)
+        Blank()
+        Text('›')
+          .fontSize(16)
+          .fontColor(Colors.GREEN)
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+      .backgroundColor(Colors.GREEN_SOFT)
+      .borderRadius(Radius.MD)
+      .onClick(() => {
+        this.showDaySessions = true
+      })
+    }
+
     // 四项指标
     Row({ space: Spacing.MD }) {
       this.metricTile('学习时长', `${this.day.studyMinutes}`, '分钟')
@@ -1154,7 +1250,8 @@ export struct Review {
             }
             .width('100%')
             .padding({ top: 6, bottom: 6 })
-          }, (item: PracticeSummaryItem, index: number) => `${item.subject}_${index}`)
+            // key 带上次数：科目与序号都没变、只更新了次数时，ArkUI 会复用旧节点不重绘
+          }, (item: PracticeSummaryItem, index: number) => `${item.subject}_${index}_${item.count}`)
 
           // 原先这里是「全科稳步提升 / 数学进步明显」两个写死的标签，与用户数据无关。
           // 两个标签改成竖排：卡片内容宽约 124vp，并排需要约 200vp，会直接画到相邻卡片上。
@@ -1300,7 +1397,7 @@ export struct Review {
           .lineHeight(20)
           .width('100%')
       } else {
-        Text(`${this.longPlan.title}${this.longPlan.examType.length > 0 ? ' · ' + this.longPlan.examType : ''}${this.longPlan.totalEstimatedMinutes > 0 ? ' · 目标 ' + Math.round(this.longPlan.totalEstimatedMinutes / 60) + ' 小时' : ''}`)
+        Text(`${this.longPlan.title}${this.longPlan.totalEstimatedMinutes > 0 ? ' · 目标 ' + Math.round(this.longPlan.totalEstimatedMinutes / 60) + ' 小时' : ''}`)
           .fontSize(14)
           .fontColor(Colors.TEXT_PRIMARY)
           .width('100%')
@@ -1361,6 +1458,94 @@ export struct Review {
     .padding({ top: 8, bottom: 8 })
   }
 
+  /** 当日专注明细的一行 */
+  @Builder
+  daySessionRow(s: FocusSession) {
+    Row() {
+      Column() {
+        Text(this.sessionRange(s))
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Colors.TEXT_PRIMARY)
+        Text(s.title.length > 0 ? s.title : '自由专注')
+          .fontSize(12)
+          .fontColor(Colors.TEXT_SECONDARY)
+          .margin({ top: 4 })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      Column() {
+        Text(TimeUtils.formatHMin(Metrics.totalStudySec(s)))
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Colors.TEXT_PRIMARY)
+        Text(s.taskIds.length > 0
+          ? `净专注 ${Metrics.focusRatePercent(s)}% · 完成 ${Metrics.completionRate(s)}%`
+          : `净专注 ${Metrics.focusRatePercent(s)}% · 未设定任务`)
+          .fontSize(11)
+          .fontColor(Colors.TEXT_SECONDARY)
+          .margin({ top: 4 })
+      }
+      .alignItems(HorizontalAlign.End)
+
+      Text('›')
+        .fontSize(16)
+        .fontColor(Colors.TEXT_TERTIARY)
+        .margin({ left: 10 })
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(Colors.CARD)
+    .borderRadius(Radius.MD)
+    .onClick(() => {
+      this.openReport(s)
+    })
+  }
+
+  /** 当日专注明细：底部弹层（项目约定用自定义覆盖层，不用 bindSheet，见 AvatarPicker 头注释） */
+  @Builder
+  daySessionsSheet() {
+    Column() {
+      Text(this.sheetTitle())
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Colors.TEXT_PRIMARY)
+        .width('100%')
+
+      Text(`共 ${this.daySessions.length} 次 · 点任意一条查看那次完整复盘`)
+        .fontSize(12)
+        .fontColor(Colors.TEXT_SECONDARY)
+        .width('100%')
+        .margin({ top: 6, bottom: 14 })
+
+      Scroll() {
+        Column({ space: Spacing.SM }) {
+          ForEach(this.daySessions, (s: FocusSession) => {
+            this.daySessionRow(s)
+          }, (s: FocusSession) => s.id)
+        }
+        .width('100%')
+      }
+      .constraintSize({ maxHeight: 420 })
+      .align(Alignment.Top)
+
+      Text('关闭')
+        .fontSize(15)
+        .fontColor(Colors.TEXT_SECONDARY)
+        .width('100%')
+        .textAlign(TextAlign.Center)
+        .margin({ top: 18 })
+        .onClick(() => {
+          this.showDaySessions = false
+        })
+    }
+    .width('100%')
+    .padding({ left: 20, right: 20, top: 18, bottom: 26 })
+    .backgroundColor(Colors.CARD)
+    .borderRadius({ topLeft: 24, topRight: 24 })
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopEnd }) {
       Scroll() {
@@ -1396,6 +1581,23 @@ export struct Review {
           this.pickerPanel()
         }
         .margin({ top: 62, right: 16 })
+      }
+
+      // 当日专注明细：遮罩与面板是兄弟节点（面板上的点击不能冒泡到遮罩，否则一点就关）
+      if (this.showDaySessions) {
+        Stack({ alignContent: Alignment.Bottom }) {
+          Column() {}
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#66000000')
+          .onClick(() => {
+            this.showDaySessions = false
+          })
+
+          this.daySessionsSheet()
+        }
+        .width('100%')
+        .height('100%')
       }
     }
     .width('100%')

@@ -40,6 +40,18 @@
         }
       },
       {
+        // 语音输入（任务规划 / 专注答疑里按住说话）：采集麦克风音频并转成文字。
+        // user_grant：必须运行时动态申请；未授权时输入框照常可用，只是没有语音入口。
+        "name": "ohos.permission.MICROPHONE",
+        "reason": "$string:reason_microphone",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
         // 云端确认分心时的震动提醒。user_grant。
         "name": "ohos.permission.VIBRATE",
         "reason": "$string:reason_vibrate",

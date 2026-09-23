@@ -17,7 +17,6 @@ import { InterventionEvent } from '../models/InterventionEvent'
 import { FeedbackAction, FocusState } from '../models/Enums'
 import { CompanionDecision } from '../services/ai/CompanionService'
 import { FocusTimer } from '../components/FocusTimer'
-import { BreathingLight } from '../components/BreathingLight'
 import { TaskCard } from '../components/TaskCard'
 import { AITag } from '../components/AITag'
 
@@ -347,7 +346,9 @@ export struct Focus {
                   controller: this.camController
                 })
                   .width('100%')
-                  .height(140)
+                  // 比例与 CameraService 挑的分辨率一致（4:3）：Surface 不做等比缩放，
+                  // 原来给 100%×140（约 2.3:1）会把画面压扁
+                  .aspectRatio(CameraService.PREVIEW_ASPECT)
                   .backgroundColor(Colors.CARD)
                   .borderRadius(Radius.MD)
                   .onAppear(() => {
@@ -422,14 +423,6 @@ export struct Focus {
               .justifyContent(FlexAlign.Center)
               .margin({ top: 8 })
             }
-
-            BreathingLight({
-              state: this.focusState,
-              onTap: () => {
-                FocusController.getInstance().demoCycleState()
-              }
-            })
-              .margin({ top: 20 })
 
             Text(FocusStateUi.label(this.focusState))
               .fontSize(20)
@@ -726,6 +719,15 @@ export struct Focus {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(Colors.BG)
+    .backgroundColor(this.pageBg())
+  }
+
+  /**
+   * 页面底色跟着专注状态走（替换原来屏幕中间的呼吸灯）：
+   * 用 *_SOFT 系列（很淡的绿 / 黄 / 红）铺满整页 —— 保留"一眼看出状态"的信息，
+   * 又不会把上面的文字和卡片压得看不清。
+   */
+  private pageBg(): string {
+    return FocusStateUi.softColor(this.focusState)
   }
 }

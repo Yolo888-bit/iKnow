@@ -22,6 +22,7 @@ import { AIService } from './AIService'
 import { FeedbackService } from './FeedbackService'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { power } from '@kit.BasicServicesKit'
+import { common } from '@kit.AbilityKit'
 import { PermissionService } from './PermissionService'
 import { StorageService } from './StorageService'
 import { FocusDetectionService } from './FocusDetectionService'
@@ -72,6 +73,12 @@ export class FocusController {
   /** 最近一次感知结果的说明与置信度（用于 UI 呈现「依据」） */
   private lastDetail: string = ''
   private lastConfidence: number = 0
+  /**
+   * 最近一次"模拟注入抓拍"的诊断结论（给工作台直接显示）。
+   * 为什么要它：抓拍失败的原因只在 hilog 里，用户看不到，导致"点了没反应/还是占位图"
+   * 无法自证。把原因搬到界面上，一次点击就能定位是探测、配置还是取帧的问题。
+   */
+  private lastCaptureDiag: string = ''
   /** 演示注入标记：为真时下一次感知结论跳过去抖/冷却（用完即清） */
   private manualInject: boolean = false
   /** 工作台注入的"待生效"标记：由 onObservation 消费并转成 manualInject */
@@ -650,12 +657,21 @@ export class FocusController {
     }
   }
 
-  /** 触发一次短片段采集并交给云端（异步，不阻塞） */
+  /**
+   * 触发一次短片段采集并交给云端（异步，不阻塞）。
+   *
+   * 改造（演示闭环 · B 方案）：原先这里第一行就 `if (!camera) return`，
+   * 于是**没有摄像头授权 / 纯预览模拟器**里，所有触发（含模拟控制台的"目标状态""一键模拟分心"
+   * 以及实时合成信号触发的事件）都被静默丢弃——控制台点了"系统根本没反应"。
+   *
+   * 现在：真实抓拍（照片）仍**严格需要 摄像头授权 + 真实硬件**；但若处于模拟模式（SIM_MODE）
+   * 且没有可用摄像头（预览 / 模拟器 / 未授权），则**不采帧**、直接把事件送进观察队列，
+   * 由 `SimulatedRecognizer` 给出与当前合成阶段一致的结论，状态机 / 干预 / 复盘照常走。
+   * 这样无真机环境下，"触发 → 采集 → 识别 → 规则组合 → 干预 → 复盘"整条闭环依旧可见，
+   * 只是没有真实照片、识别是模拟的（UI / 日志 / 记录 evidence 已如实标注）。
+   * 非模拟模式（真机且关闭模拟）保持原语义：未授权摄像头则不抓拍、不送识别。
+   */
   private triggerVisualCheck(e: WatchEvent): void {
-    // 未授权摄像头（仅计时模式）不抓拍、不上传：授权是采集与云端识别的前提
-    if (!PermissionService.getInstance().snapshot().camera) {
-      return
-    }
     // 答疑 / 休息 / 暂停期间不抓拍：那段时间本就"不打扰"，也不该留下分心记录
     if (!this.running || this.qaMode || this.resting || this.paused) {
       return
@@ -664,19 +680,45 @@ export class FocusController {
     if (ctx === null) {
       return
     }
-    // 无摄像头时**不要空等采集超时**（BURST_TIMEOUT_MS = 3.5s）：那是纯等待，
-    // 会让"点一下 → 看到红灯"延迟到 5 秒以上。识别器此时是模拟的，不需要帧。
-    if (CameraService.getInstance().probe(ctx) === 0) {
-      ObservationQueue.getInstance().enqueue(this.session.id, e, [])
+    // 模拟模式（SIM_MODE 默认开）：允许在无摄像头时仍跑闭环；非模拟模式保持原严格语义
+    const simModeRaw: number | undefined = AppStorage.get<number>(StorageKey.SIM_MODE)
+    const isSim: boolean = simModeRaw === undefined ? true : simModeRaw === 1
+    const permitted: boolean = PermissionService.getInstance().snapshot().camera
+    const cam = CameraService.getInstance()
+    const hasCam: boolean = cam.probe(ctx) > 0
+    // 真实抓拍 = 模拟模式 + 授权 + 有硬件；否则（预览 / 未授权）走"无帧"演示识别
+    const canCapture: boolean = isSim && permitted && hasCam
+    if (!isSim && !permitted) {
+      // 真机且未授权摄像头：原语义，不抓拍、不送识别
       return
     }
-    CameraService.getInstance().captureBurst(ctx)
-      .then((frames: ArrayBuffer[]) => {
-        ObservationQueue.getInstance().enqueue(this.session.id, e, frames)
-      })
-      .catch(() => {
-        // 采集失败（无摄像头/权限/被占用）不影响专注流程
-      })
+    const sessionId = this.session.id
+    const run = async (): Promise<void> => {
+      let frames: ArrayBuffer[] = []
+      try {
+        if (canCapture) {
+          // 抓拍直接在**正在跑的预览会话**上完成（预览不中断，也不必重建会话）
+          frames = await cam.captureBurst()
+          if (frames.length === 0) {
+            // 不再静默：区分"没触发"与"触发了但采不到"，否则复盘里只看到"没照片"
+            hilog.error(0x0000, 'iKnow.Focus', '抓拍未取到帧（%{public}s），本次记录将没有照片',
+              cam.getLastError())
+          }
+        } else {
+          hilog.info(0x0000, 'iKnow.Focus',
+            '无可用摄像头（模拟 / 预览），本次只记结论、不采集真实画面（演示识别）')
+        }
+      } catch (err) {
+        hilog.error(0x0000, 'iKnow.Focus', '采集流程异常：%{public}s', err.message)
+      } finally {
+        // **无论采集成不成，记录都要入队落库** —— 采集失败不该让"发生过一次触发"这件事消失，
+        // 否则复盘里什么都没有，比"没有照片"更难排查
+        ObservationQueue.getInstance().enqueue(sessionId, e, frames)
+      }
+    }
+    run().catch(() => {
+      // 极端情况下不再向外抛，避免未捕获的 Promise
+    })
   }
 
   /**
@@ -692,12 +734,24 @@ export class FocusController {
       return
     }
     this.observations.push(o)
-    const conf = Math.round(o.confidence * 100)
+    // 防御性兜底：注入路径的 confidence 绝不能为 0，否则会被 CONFIDENCE_FLOOR 直接拦死，
+    // 导致"点了分心但页面不变色"。若因构建缓存/默认值未生效出现 0，则强制拉回默认值。
+    let oc = o.confidence
+    if (this.simInjectPending && (oc === 0 || oc === undefined || oc === null)) {
+      hilog.warn(0x0000, 'iKnow.Focus',
+        '[onObservation] 注入记录的 confidence 为 %{public}s，强制使用默认值，避免被状态机门禁拦下',
+        String(oc))
+      oc = FocusTuning.SIM_INJECT_CONFIDENCE
+      o.confidence = oc
+    }
+    const conf = Math.round(oc * 100)
     const svc = FocusDetectionService.getInstance()
     // 工作台注入：这次结论是用户显式指定的，等价于一次人工确认 → 允许跳过去抖
     const injected = this.simInjectPending
     this.simInjectPending = false
     this.manualInject = injected
+    hilog.info(0x0000, 'iKnow.Focus', '[onObservation] activity=%{public}s, confidence=%{public}d, injected=%{public}s',
+      o.activity, conf, String(injected))
     if (o.activity === '看手机' || o.handheld) {
       // 这里**只留线索、不直接触达**：触达交给状态机在"真正转入分心"那一刻做。
       // 原先直接在这里调 vibrateOnce / speak，绕过了去抖、置信度地板、冷却与干预预算，
@@ -918,19 +972,19 @@ export class FocusController {
   }
 
   /**
-   * 呼吸灯点击：按 做题 → 趴桌 → 看手机 → 做题 循环（演示用）。
-   * 走 `simulateObservation`，因此是**立刻生效**的。
+   * 按 做题 → 趴桌 → 看手机 → 做题 循环（演示用）。
+   * 走 `simulateFlow`：即"信号变化到达触发点 → 真实抓拍 → 云端识别 → 落库（含照片）→ 干预"。
    */
   demoCycleState(): void {
     if (!this.running || this.qaMode || this.resting || this.paused) {
       return
     }
     if (this.state === FocusState.FOCUSED) {
-      this.simulateObservation('趴桌')
+      this.simulateFlow('趴桌')
     } else if (this.state === FocusState.SLIGHTLY_DISTRACTED) {
-      this.simulateObservation('看手机')
+      this.simulateFlow('看手机')
     } else {
-      this.simulateObservation('做题')
+      this.simulateFlow('做题')
     }
   }
 
@@ -944,6 +998,56 @@ export class FocusController {
   resumeByUser(): void {
     this.manualInject = true
     FocusDetectionService.getInstance().resume()
+  }
+
+  /**
+   * 模拟控制台 · **一键走完整流程**（控制台存在的意义就是它）。
+   *
+   * 语义：点一下 = 真机场景下"生理信号发生变化、到达拍照触发点"。
+   * 之后**全部是真实链路**：抓拍 → 上传云端识别 → 落库（含照片）→ 规则组合 → 干预。
+   * 唯一被模拟的是那一条"触发事件"（reason 里标明），其余没有一处是假的。
+   *
+   * 结论由识别器给出：没配网关时按当前阶段给（与所选状态一致），
+   * 配了网关则由大模型**看照片**判断"在做什么"。
+   *
+   * @returns false = 没在专注（答疑/休息/暂停同理），或本次会话触发配额已用完
+   */
+  /** 本会话已用掉的演示配额（控制台显示用）：一个来自事件引擎的触发次数，一个来自观察队列的入队次数 */
+  getTriggerQuotaUsed(): number {
+    return WatchEventEngine.getInstance().getTriggerCount()
+  }
+
+  getQueueQuotaUsed(): number {
+    return ObservationQueue.getInstance().getQuotaUsed(this.session.id)
+  }
+
+  /** 最近一次模拟注入抓拍的诊断结论（工作台上直接显示，便于定位"为什么没有真实画面"） */
+  getLastCaptureDiag(): string {
+    return this.lastCaptureDiag
+  }
+
+  /**
+   * 重置本会话的演示配额（控制台的显式操作）。
+   * 两个配额都是**累计**的、只在会话结束时复位；被用完之后再点就是静默丢弃
+   * （没有记录、没有结论、状态也不变），看起来完全像"点了没反应" —— 所以必须给出口。
+   */
+  resetDemoQuota(): void {
+    WatchEventEngine.getInstance().resetSessionQuota()
+    ObservationQueue.getInstance().resetQuota(this.session.id)
+    hilog.info(0x0000, 'iKnow.Focus', '[模拟控制台] 本会话演示配额已重置')
+  }
+
+  simulateFlow(activity: string): boolean {
+    if (!this.running || this.qaMode || this.resting || this.paused) {
+      return false
+    }
+    // ① 信号侧对齐：等价于"信号变化到该状态对应的阶段"
+    WatchSignalSource.getInstance().setPhase(SimActivity.phaseOf(activity))
+    // ② 等价于"到达拍照触发点" —— 之后走真实抓拍与云端识别
+    const ok = WatchEventEngine.getInstance().injectTrigger(`模拟：信号变化到「${activity}」对应的阶段`)
+    hilog.info(0x0000, 'iKnow.Focus', '[模拟流程] 目标状态=%{public}s 触发=%{public}s',
+      activity, ok ? '已发出' : '被配额拦下')
+    return ok
   }
 
   /**
@@ -963,6 +1067,102 @@ export class FocusController {
     }
     // 自动把合成信号阶段也对齐，避免"工作台显示看手机、信号控制台还写着 STUDY"的自相矛盾
     WatchSignalSource.getInstance().setPhase(SimActivity.phaseOf(activity))
+    // 画面从哪来：**先探测硬件，有就真抓拍**；抓拍失败 / 无硬件 / 无权限时 fallback 到
+    // **明确标注的占位画面**（rawfile 自带，图片与证据文字都写明"演示占位"），绝不伪造真实照片。
+    // 注意：不依赖 PermissionService 的本地授权标记——它可能和系统实际授权状态不同步；
+    // 只要硬件存在就尝试抓拍，catch 所有异常再降级，这样有摄像头却总显示占位图的问题才能定位。
+    const ctx = StorageService.getInstance().appContext()
+    const cam = CameraService.getInstance()
+    const camCount: number = ctx !== null ? cam.probe(ctx) : -1
+    hilog.info(0x0000, 'iKnow.Focus',
+      '[模拟注入] 摄像头探测：ctx=%{public}s，cameras=%{public}d，previewRunning=%{public}s，permCamera=%{public}s',
+      ctx !== null ? 'ok' : 'null', camCount, cam.isRunning() ? 'Y' : 'N',
+      PermissionService.getInstance().snapshot().camera ? 'Y' : 'N')
+    if (ctx !== null && camCount > 0) {
+      hilog.info(0x0000, 'iKnow.Focus',
+        '[模拟注入] 探测到摄像头，尝试真实抓拍：activity=%{public}s', activity)
+      this.captureThenDeliver(activity, confidence, ctx).catch((err: Error) => {
+        hilog.error(0x0000, 'iKnow.Focus',
+          '[模拟注入] 抓拍异常，改用占位画面交付：%{public}s', err.message)
+        this.deliverInjected(activity, confidence, this.placeholderFrames(ctx),
+          `抓拍流程异常（${err.message}），已降级为演示占位图（非真实照片）。`)
+      })
+    } else {
+      const why = ctx === null
+        ? '拿不到应用上下文，无法访问摄像头，使用演示占位图（非真实照片）。'
+        : `未探测到可用摄像头（getSupportedCameras 返回 ${camCount}）${cam.getLastError().length > 0 ? '：' + cam.getLastError() : ''}，使用演示占位图（非真实照片）。`
+      this.lastCaptureDiag = `未进入真实抓拍：${why}`
+      hilog.info(0x0000, 'iKnow.Focus',
+        '[模拟注入] 未进入真实抓拍，使用占位画面：activity=%{public}s reason=%{public}s', activity, why)
+      this.deliverInjected(activity, confidence, this.placeholderFrames(ctx), why)
+    }
+    return true
+  }
+
+  /** 有摄像头且已授权：在预览会话上真实抓拍一束片段，再连同画面一起交付（页面 / 复盘都稳定可见） */
+  private async captureThenDeliver(activity: string, confidence: number, ctx: common.Context): Promise<void> {
+    const cam = CameraService.getInstance()
+    let frames: ArrayBuffer[] = []
+    let why = ''
+    try {
+      // 抓拍就在**正在跑的预览会话**上完成（预览不中断、不需重建会话）
+      frames = await cam.captureBurst()
+      if (frames.length === 0) {
+        const err0 = cam.getLastError()
+        why = `真实抓拍未取到帧（${err0.length > 0 ? err0 : '未知原因'}），已降级为演示占位图（非真实照片）。`
+        hilog.error(0x0000, 'iKnow.Focus', '[模拟注入] %{public}s', why)
+      }
+    } catch (err) {
+      why = `真实抓拍失败（${err.message}），已降级为演示占位图（非真实照片）。`
+      hilog.error(0x0000, 'iKnow.Focus', '[模拟注入] %{public}s', why)
+    }
+    if (frames.length > 0) {
+      hilog.info(0x0000, 'iKnow.Focus', '[模拟注入] 真实抓拍成功，%{public}d 张', frames.length)
+      this.lastCaptureDiag = `真实抓拍成功：${frames.length} 张`
+      this.deliverInjected(activity, confidence, frames, `真实抓拍 ${frames.length} 张。`)
+    } else {
+      this.lastCaptureDiag = `真实抓拍失败：${why}`
+      this.deliverInjected(activity, confidence, this.placeholderFrames(ctx), why)
+    }
+  }
+
+  /**
+   * 无摄像头时的"占位画面"（rawfile/sim_placeholder.png）。
+   * 它**不是**真实抓拍：图片本身就写着"演示占位图 · 未接摄像头"，证据文字同样注明，避免误导。
+   */
+  private placeholderFrames(ctx: common.Context | null): ArrayBuffer[] {
+    if (ctx === null) {
+      hilog.warn(0x0000, 'iKnow.Focus', '[placeholder] appContext 为空，无法读取 rawfile 占位图')
+      return []
+    }
+    try {
+      const bytes: Uint8Array = ctx.resourceManager.getRawFileContentSync('sim_placeholder.png')
+      if (!bytes || bytes.length === 0) {
+        hilog.warn(0x0000, 'iKnow.Focus', '[placeholder] rawfile/sim_placeholder.png 读取为空，' +
+          '通常是 DevEco 增量构建未打包新增 rawfile，请 Build > Clean Project 后重试')
+        return []
+      }
+      const buf: ArrayBuffer = new ArrayBuffer(bytes.length)
+      new Uint8Array(buf).set(bytes)
+      hilog.info(0x0000, 'iKnow.Focus', '[placeholder] 已读取 rawfile 占位图，%{public}d 字节', bytes.length)
+      return [buf]
+    } catch (err) {
+      hilog.error(0x0000, 'iKnow.Focus', '[placeholder] rawfile 占位图读取失败：%{public}s，' +
+        '请在 DevEco 中 Build > Clean Project 后重试', err.message)
+      return []
+    }
+  }
+
+  /**
+   * 交付一次"注入识别结果"：建记录 → 附画面 → 落库 → 走规则组合 / 状态机 / 干预。
+   * 与真实链路（`ObservationQueue`）共用 `saveFrames` 落盘口径。
+   */
+  private deliverInjected(activity: string, confidence: number, frames: ArrayBuffer[], note?: string): void {
+    // 抓拍是异步的：会话可能已结束，这时不该再产生结论
+    if (!this.running || this.qaMode || this.resting || this.paused) {
+      hilog.info(0x0000, 'iKnow.Focus', '[模拟注入] 会话已结束，丢弃这次注入结果')
+      return
+    }
     const o = new ObservationRecord()
     o.id = IdUtils.uuid()
     o.sessionId = this.session.id
@@ -970,12 +1170,40 @@ export class FocusController {
     o.activity = activity
     o.handheld = activity === '看手机'
     o.facingDesk = activity === '做题' || activity === '看书'
-    o.confidence = confidence
-    o.evidence = '模拟注入：由模拟工作台指定的可观察状态（本机无摄像头，非真实识别）'
+    // 兜底：confidence 为 0/undefined/null 时强制回到默认注入置信度，否则会被状态机置信度门禁拦死
+    o.confidence = (confidence === undefined || confidence === null || confidence === 0)
+      ? FocusTuning.SIM_INJECT_CONFIDENCE
+      : confidence
+    o.imagePaths = ObservationQueue.getInstance().saveFrames(this.session.id, frames)
+    o.evidence = this.injectedEvidence(o.imagePaths.length > 0, note)
+    // 一次性"人工确认"标记：让规则组合跳过去抖 / 冷却，页面即刻变色
     this.simInjectPending = true
-    hilog.info(0x0000, 'iKnow.Focus', '[模拟注入] activity=%{public}s', activity)
+    hilog.info(0x0000, 'iKnow.Focus', '[模拟注入] activity=%{public}s，画面 %{public}d 张，note=%{public}s',
+      activity, o.imagePaths.length, note ?? '')
     this.onObservation(o)
-    return true
+    // **必须落库**：学习记录（复盘）是按 sessionId 从库里读的
+    StorageService.getInstance().saveObservation(o).catch(() => {
+      hilog.error(0x0000, 'iKnow.Focus', '模拟注入的观察记录落库失败，复盘里将看不到这一次')
+    })
+  }
+
+  /**
+   * 注入记录的证据文案。
+   * @param hasImage 是否真的落盘了画面（真实抓拍 或 占位图字节都算"有图"）
+   * @param note     为什么是占位图 / 为什么没图（由调用方如实填入，复盘里直接可见，便于定位）
+   */
+  private injectedEvidence(hasImage: boolean, note?: string): string {
+    // 版本标记：复盘里能看到，用于确认"设备上跑的是不是最新代码"。
+    // 之前几轮反复分不清"代码没重新构建"与"构建了但仍失败"，这里让它可自证。
+    const base = '[v9] 模拟注入：可观察状态由模拟工作台指定；结论为演示值，非真实识别。'
+    const why = note !== undefined && note.length > 0 ? note : ''
+    if (hasImage) {
+      if (why.length > 0) {
+        return base + ' 画面说明：' + why
+      }
+      return base + ' 画面为触发时刻的真实抓拍（演示注入路径）。'
+    }
+    return base + ' 未生成任何画面：' + (why.length > 0 ? why : '原因未知')
   }
 
   /**

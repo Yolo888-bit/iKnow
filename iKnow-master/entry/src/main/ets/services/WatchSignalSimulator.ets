@@ -262,7 +262,12 @@ export class WatchSignalSimulator {
       return { amp: 0.02, periodic: 0.03 }
     }
     if (this.phase === 'PHONE') {
-      return { amp: 0.012, periodic: 0.02 }
+      // 拿起手机**本身就是大幅腕部动作**，这里必须让方差越过 `MOTION_HIGH_VAR(0.002)`：
+      // 原来的 0.012 档算出来约 3.1e-4，正好卡在"静止 2e-4"与"大幅移动 2e-3"之间 ——
+      // 于是"看手机"在信号层**永远撞不到触发点**，整条"手表粗筛 → 抓拍 → 云端细判"
+      // 在无真表的演示里根本走不通（第八批 A1 已记录该测量值）。
+      // 注意：触发只说明"有大幅动作"，究竟是看手机还是离开，由云端看照片判定 —— 这正是本架构的分工。
+      return { amp: 0.05, periodic: 0.08 }
     }
     if (this.phase === 'REST') {
       return { amp: 0.003, periodic: 0.0 }

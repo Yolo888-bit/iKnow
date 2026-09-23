@@ -59,6 +59,22 @@ export class ObservationQueue {
   }
 
   /** 入队即返回；真正的识别在后台串行进行 */
+  /** 本会话已入队的次数（**累计**，用于在控制台上显示配额用量） */
+  getQuotaUsed(sessionId: string): number {
+    const used = this.enqueuedBySession.get(sessionId)
+    return used !== undefined ? used : 0
+  }
+
+  /**
+   * 重置本会话的入队配额（**仅演示控制台显式调用**）。
+   *
+   * 配额本身是产品约束（避免连续抓拍与上传打扰用户），不该被自动绕过；
+   * 但演示时若被配额挡住，界面必须能说清原因、也得有出口 —— 否则就是"点了没反应"。
+   */
+  resetQuota(sessionId: string): void {
+    this.enqueuedBySession.set(sessionId, 0)
+  }
+
   enqueue(sessionId: string, event: WatchEvent, frames: ArrayBuffer[]): void {
     const used = this.enqueuedBySession.get(sessionId)
     const count = used !== undefined ? used : 0
@@ -110,7 +126,8 @@ export class ObservationQueue {
     try {
       await StorageService.getInstance().saveObservation(o)
     } catch (e) {
-      hilog.error(DOMAIN, TAG, '观察记录落库失败')
+      // 带上原因：落库失败是"复盘里什么都没有"最可能的原因，不能只留一句"失败"
+      hilog.error(DOMAIN, TAG, '观察记录落库失败：%{public}s', e.message)
     }
     if (this.onObservation !== null) {
       this.onObservation(o)
@@ -145,18 +162,25 @@ export class ObservationQueue {
   /**
    * 帧落盘到会话目录。写失败不影响流程（只是复盘看不到图）。
    * 返回成功写入的文件路径。
+   *
+   * **本地只留 `KEEP_FRAMES_PER_OBS` 张**：上传给云端的是全部帧（多帧识别更准），
+   * 但本地存全 6 张会让一次分心产生 6 个文件、连续几次就堆满沙箱。
+   *
+   * 对外可见：`FocusController` 的"模拟注入"路径（不经过本队列）需要复用同一套落盘逻辑，
+   * 保证两条路产生的 `imagePaths` 口径一致。
    */
-  private saveFrames(sessionId: string, frames: ArrayBuffer[]): string[] {
+  saveFrames(sessionId: string, frames: ArrayBuffer[]): string[] {
     const paths: string[] = []
     if (frames.length === 0) {
       return paths
     }
     const dir = `${StorageService.getInstance().filesDir()}/obs/${sessionId}`
+    const keep = Math.min(frames.length, FocusTuning.KEEP_FRAMES_PER_OBS)
     try {
       if (!fileIo.accessSync(dir)) {
         fileIo.mkdirSync(dir, true)
       }
-      for (let i = 0; i < frames.length; i++) {
+      for (let i = 0; i < keep; i++) {
         const p = `${dir}/${Date.now()}_${i}.jpg`
         const file = fileIo.openSync(p, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE)
         fileIo.writeSync(file.fd, frames[i])

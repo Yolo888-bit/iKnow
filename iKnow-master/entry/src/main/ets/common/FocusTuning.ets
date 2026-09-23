@@ -119,11 +119,19 @@ export class FocusTuning {
   /** 触发式画面采集：帧数与总超时（保证端到端时延可预测） */
   static readonly BURST_FRAME_COUNT = 6
   static readonly BURST_TIMEOUT_MS = 3_500
-  /** 固定采集参数（锁画质：分辨率 / JPEG 质量 / 单帧体积上限） */
+  /**
+   * 一次采集**本地只保留**几张：全部帧都上传云端识别（多帧更准），
+   * 但本地留 1~2 张代表帧就够复盘用 —— 否则一次分心就有 6 个文件，
+   * 连续几次就把沙箱堆满了。
+   */
+  static readonly KEEP_FRAMES_PER_OBS = 2
+  /**
+   * 采集分辨率的目标宽度：拍照时取设备**最接近这一档**的 profile。
+   * 原先还锁了高度 / JPEG 质量 / 单帧体积上限 —— 那是走 `ImageReceiver` 取帧时的参数；
+   * 改用 `PhotoOutput` 之后分辨率由设备 profile 决定、体积由该 profile 与设备默认质量决定，
+   * 这三项不再适用（继续留着会让人以为还在生效），故删除。
+   */
   static readonly BURST_WIDTH = 640
-  static readonly BURST_HEIGHT = 480
-  static readonly BURST_JPEG_QUALITY = 70
-  static readonly BURST_MAX_FRAME_BYTES = 80 * 1024
   /** 上传单次超时 */
   static readonly UPLOAD_TIMEOUT_MS = 8_000
   /** 画面保留期（默认 7 天，到期清理） */

@@ -54,8 +54,10 @@ export class WatchEventEngine implements WatchSignalSink {
 
   // ---- 触发节流 ----
   private triggerCount: number = 0
-  private lastTriggerMs: number = 0
-  private lastKindMs: Map<string, number> = new Map<string, number>()
+  /** 最近一次真实触发时间（**真实墙钟**：节流是给人看的规则，不能用样本时基算） */
+  private lastTriggerRealMs: number = 0
+  /** 同一原因最近一次真实触发时间（同上） */
+  private lastKindRealMs: Map<string, number> = new Map<string, number>()
   /** 最近一次事件（设备页反馈用） */
   private recentEvent: WatchEvent | null = null
 
@@ -115,8 +117,8 @@ export class WatchEventEngine implements WatchSignalSink {
     this.learningConfirmed = false
     this.stillSinceMs = now
     this.triggerCount = 0
-    this.lastTriggerMs = 0
-    this.lastKindMs = new Map<string, number>()
+    this.lastTriggerRealMs = 0
+    this.lastKindRealMs = new Map<string, number>()
     hilog.info(DOMAIN, TAG, '[合成信号] 事件引擎启动，开始建立个人基线')
   }
 
@@ -183,8 +185,18 @@ export class WatchEventEngine implements WatchSignalSink {
    * **保留单会话配额**（配额是产品约束，不该被演示绕过）。
    */
   clearTriggerThrottle(): void {
-    this.lastTriggerMs = 0
-    this.lastKindMs = new Map<string, number>()
+    this.lastTriggerRealMs = 0
+    this.lastKindRealMs = new Map<string, number>()
+  }
+
+  /**
+   * 重置本会话的触发配额（**仅演示控制台显式调用**）。
+   * 与 `clearTriggerThrottle()` 有意分开：那个只清闸门、保留配额（配额是产品约束）；
+   * 这个是被用户显式要求"重置演示用量"时才调的，并在界面上写明。
+   */
+  resetSessionQuota(): void {
+    this.triggerCount = 0
+    this.clearTriggerThrottle()
   }
 
   /**
@@ -393,20 +405,45 @@ export class WatchEventEngine implements WatchSignalSink {
   }
 
   /** 节流后抛事件：被拦下的仍然记录，只是 triggered=false */
+  /**
+   * 模拟工作台 · **触发注入**：等价于"信号大幅变化、达到触发点"，
+   * 之后走的是**完整真实链路** —— 真实抓拍 → 上传云端识别 → 落库（学习记录里能看到照片）。
+   *
+   * 与 `WatchSignalSource` 那类"改信号、等真实阈值判定"的区别：那个不保证有结论（依赖信号强度与基线），
+   * 这个**保证触发一次采集**，因此适合演示。事件的 `reason` 里标明"模拟触发"，
+   * 记录里不会把它伪装成真实测量（`rmssd/hr/accelVar` 一律留 0）。
+   *
+   * @returns false = 没有进行中的会话，或本次会话的触发配额已用完
+   */
+  injectTrigger(reason: string): boolean {
+    if (!this.running || this.triggerCount >= FocusTuning.MAX_TRIGGER_PER_SESSION) {
+      return false
+    }
+    // 先清节流（最小间隔 / 同因冷却），保留单会话配额 —— 与 simSettleTimer 那条路一致
+    this.clearTriggerThrottle()
+    this.emit(WatchEventKind.MOTION_HIGH, Date.now(), 0, 0, 0, `模拟触发：${reason}`, true)
+    return true
+  }
+
   private emit(kind: WatchEventKind, nowMs: number, rmssd: number, hr: number,
                accelVar: number, reason: string, wantTrigger: boolean): void {
     let triggered = false
     if (wantTrigger) {
-      const gapOk = nowMs - this.lastTriggerMs >= FocusTuning.MIN_TRIGGER_GAP_MS
+      // 与人相关的节流（最小间隔 / 同因冷却）**必须用真实时间**衡量：
+      // 样本时基是"生理窗口"的时钟（模拟手表 ×30），拿它算节流会把 60 秒压成 2 秒 ——
+      // 持续的高运动阶段于是每 2 秒抓拍一次，连抓几分钟、还连续上传。
+      // 真机上两个时钟本来就一致，此改动不影响其行为。
+      const realNow = Date.now()
+      const gapOk = realNow - this.lastTriggerRealMs >= FocusTuning.MIN_TRIGGER_GAP_MS
       const quotaOk = this.triggerCount < FocusTuning.MAX_TRIGGER_PER_SESSION
       const kindKey = kind.toString()
-      const last = this.lastKindMs.get(kindKey)
-      const coolOk = last === undefined || nowMs - last >= FocusTuning.TRIGGER_COOLDOWN_MS
+      const lastReal = this.lastKindRealMs.get(kindKey)
+      const coolOk = lastReal === undefined || realNow - lastReal >= FocusTuning.TRIGGER_COOLDOWN_MS
       triggered = gapOk && quotaOk && coolOk
       if (triggered) {
         this.triggerCount += 1
-        this.lastTriggerMs = nowMs
-        this.lastKindMs.set(kindKey, nowMs)
+        this.lastTriggerRealMs = realNow
+        this.lastKindRealMs.set(kindKey, realNow)
       } else {
         hilog.info(DOMAIN, TAG, '事件被节流拦下：%{public}s（gap/quota/cooldown 未满足）', reason)
       }

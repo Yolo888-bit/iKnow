@@ -93,7 +93,7 @@ export struct TaskPlanning {
     this.pushAI(AIService.getInstance().planningIntro())
     if (this.freshRoundNotice) {
       // 开场白之后再说"为什么这次列表是空的"：旧计划还在库里，未完成的也会作为背景给到模型
-      this.pushAI('上一轮计划已经执行过了，我们从新的一份开始排；还没做完的我会一并考虑进去。')
+      this.pushAI('上一轮计划已经执行过了，小伴从新的一份开始排；还没做完的会一并考虑进去。')
     }
     // 长期计划：在「复盘 → 长期计划」里设置，这里读出来当背景参考
     // 走 AppStore.loadPlan()：与工作台/设置页同一个对象（避免读到旧值）
@@ -112,7 +112,7 @@ export struct TaskPlanning {
       }
       const subsText = parts.length > 0 ? ` · 各科目标 ${parts.join('、')}` : ''
       this.longPlanText = `${p.title}${hours}${subsText}`
-      this.pushAI(`你的长期计划是「${this.longPlanText}」，我会按这个来安排。`)
+      this.pushAI(`你的长期计划是「${this.longPlanText}」，小伴会按这个来安排。`)
     }).catch(() => {
       // 没有长期计划就正常聊，不硬提
     })
@@ -745,7 +745,7 @@ export struct TaskPlanning {
       // 还没有任务时把 AI 摆在前头：这一页的主路径本来就是"聊两句就排好"，
       // 手动新建是给"我心里已经很清楚要做什么"的人留的次要出路。
       if (this.tasks.length === 0) {
-        Text('跟我说一句"今晚想复习高数"，我来帮你拆成能直接动手的任务')
+        Text('跟小伴说一句"今晚想复习高数"，就能拆成能直接动手的任务')
           .fontSize(12)
           .fontColor(Colors.TEXT_TERTIARY)
           .width('100%')

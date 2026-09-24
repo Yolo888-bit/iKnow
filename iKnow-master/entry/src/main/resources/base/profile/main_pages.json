@@ -12,11 +12,9 @@
     "pages/PracticeDetail",
     "pages/FocusProfile",
     "pages/Device",
-    "pages/Settings",
     "pages/Privacy",
     "pages/AIChat",
     "pages/Review",
-    "pages/About",
-    "pages/Placeholder"
+    "pages/About"
   ]
 }

@@ -168,18 +168,12 @@ export struct Device {
           .width('100%')
 
           this.checkRow('摄像头数量', this.camCount > 0 ? `${this.camCount} 个` : '0 个（无可用摄像头）')
-          this.checkRow('相机权限', this.camGranted ? '已授予' : '未授予（首次进入专注页会申请）')
+          this.checkRow('相机权限', this.camGranted ? '已授予' : '未授予')
           this.checkRow('蓝牙开关', this.btOn ? '已开启' : '未开启（请到系统设置打开）')
           if (this.camError.length > 0) {
             this.checkRow('摄像头错误', this.camError)
           }
           this.checkRow('BLE 状态', this.bleStatus)
-          Text('提示：模拟器通常没有可用摄像头（数量为 0），前置预览需要真机；手表需支持标准心率服务 0x180D。')
-            .fontSize(11)
-            .fontColor(Colors.TEXT_TERTIARY)
-            .lineHeight(16)
-            .width('100%')
-            .margin({ top: 10 })
         }
         .deviceCard()
 
@@ -191,7 +185,7 @@ export struct Device {
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
 
-          Text('只支持广播标准心率服务（0x180D / 0x2A37）的设备。多数手环用厂商私有协议，扫描不到属正常，此时可继续用下面的模拟佩戴。')
+          Text('多数手环使用厂商私有协议，可能扫描不到，属正常现象；此时可以用下面的模拟佩戴。')
             .fontSize(12)
             .fontColor(Colors.TEXT_SECONDARY)
             .lineHeight(18)
@@ -269,7 +263,7 @@ export struct Device {
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
 
-          Text('当前为 MVP 演示，手表为模拟设备（默认未佩戴）。未佩戴时红级干预走手机声音与屏幕，不会假装震动。')
+          Text('手表为模拟设备（默认未佩戴）。未佩戴时红级提醒走手机声音与屏幕，不会假装震动。')
             .fontSize(13)
             .fontColor(Colors.TEXT_SECONDARY)
             .lineHeight(20)

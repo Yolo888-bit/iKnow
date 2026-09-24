@@ -175,7 +175,7 @@ export struct Focus {
     if (d.length === 0) {
       return this.perceptionMode === 'PERCEPTION_TIMER_ONLY' ? '未开启感知（仅计时）' : '等待感知数据…'
     }
-    return `${d} · 置信度 ${c.getLastConfidence()}%`
+    return d
   }
 
   onBackPress(): boolean {
@@ -321,11 +321,11 @@ export struct Focus {
           FocusTimer({ seconds: this.studySec, big: true })
             .margin({ top: 12 })
 
-          Text('本次学习（不含休息/暂停，与复盘一致）')
+          Text('本次学习')
             .fontSize(11)
             .fontColor(Colors.TEXT_TERTIARY)
             .margin({ top: 6 })
-          Text(`本次已进行 ${TimeUtils.formatClock(this.elapsed)}（含休息/暂停）· 净专注 ${TimeUtils.formatHMin(this.net)}`)
+          Text(`本次已进行 ${TimeUtils.formatClock(this.elapsed)} · 净专注 ${TimeUtils.formatHMin(this.net)}`)
             .fontSize(12)
             .fontColor(Colors.TEXT_SECONDARY)
             .margin({ top: 4 })
@@ -355,7 +355,7 @@ export struct Focus {
                     this.tryStartCamera()
                   })
                 Row() {
-                  Text(`前置预览 · 信号触发时抓拍短片段 · 检测到 ${this.camCount} 个摄像头`)
+                  Text('前置预览 · 仅在触发时抓拍短片段')
                     .fontSize(11)
                     .fontColor(Colors.TEXT_TERTIARY)
                     .layoutWeight(1)
@@ -386,14 +386,10 @@ export struct Focus {
                     .fontSize(13)
                     .fontColor(Colors.TEXT_SECONDARY)
                     .margin({ top: 4 })
-                  Text(this.cameraError.length > 0 ? this.cameraError : '已探测摄像头：0 个')
+                  Text(this.cameraError.length > 0 ? this.cameraError : '专注仍可正常计时，只是不做画面感知')
                     .fontSize(11)
                     .fontColor(Colors.TEXT_TERTIARY)
                     .margin({ top: 4 })
-                  Text('专注状态由规则引擎判定，画面不做识别')
-                    .fontSize(11)
-                    .fontColor(Colors.TEXT_TERTIARY)
-                    .margin({ top: 2 })
                 }
                 .width('100%')
                 .padding(12)
@@ -401,10 +397,8 @@ export struct Focus {
                 .borderRadius(Radius.MD)
               }
             } else {
-              // 仅计时模式：区分"有硬件但没开感知"与"根本没硬件"
-              Text(this.camCount > 0
-                ? `检测到 ${this.camCount} 个摄像头，本次未开启感知（仅计时）`
-                : '本次未开启感知（仅计时）')
+              // 仅计时模式：不暴露硬件探测细节，只说明"这次没开感知"
+              Text('本次未开启感知（仅计时）')
                 .fontSize(11)
                 .fontColor(Colors.TEXT_TERTIARY)
                 .width('100%')
@@ -414,7 +408,7 @@ export struct Focus {
             if (SensorService.getInstance().isWristPresent()) {
               Row() {
                 Text('❤️').fontSize(12)
-                Text(`心率 ${SensorService.getInstance().getHeartRate()} bpm · ${SensorService.getInstance().isSimulatedWrist() ? '模拟手表' : '真实设备'}`)
+                Text(`心率 ${SensorService.getInstance().getHeartRate()} bpm`)
                   .fontSize(12)
                   .fontColor(Colors.TEXT_SECONDARY)
                   .margin({ left: 6 })
@@ -666,7 +660,7 @@ export struct Focus {
               .fontSize(17)
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)
-            Text('专注结束，需要我帮你总结一下这次学习吗？')
+            Text('专注结束，需要小伴帮你总结一下这次学习吗？')
               .fontSize(14)
               .fontColor(Colors.TEXT_SECONDARY)
               .margin({ top: 8 })

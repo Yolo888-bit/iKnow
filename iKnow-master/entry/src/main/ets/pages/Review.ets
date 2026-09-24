@@ -213,7 +213,7 @@ export struct Review {
       }
     }
     const e = new Date(earliest)
-    return `范围：近 30 天 · 库里共 ${list.length} 次专注 · 覆盖 ${days.length} 天 · 最早一次 ${e.getMonth() + 1}月${e.getDate()}日（${Math.round(earliestDuration / 60)} 分钟）`
+    return `范围：近 30 天 · 共 ${list.length} 次专注 · 覆盖 ${days.length} 天 · 最早一次 ${e.getMonth() + 1}月${e.getDate()}日（${Math.round(earliestDuration / 60)} 分钟）`
   }
 
   /**
@@ -929,12 +929,12 @@ export struct Review {
     }
     const pct = avgA > 0 ? Math.round((avgB - avgA) / avgA * 100) : 0
     if (pct >= 10) {
-      return `后半段日均专注度比前半段高约 ${pct}%`
+      return `最近 15 天比前 15 天更专注（日均 +${pct}%）`
     }
     if (pct <= -10) {
-      return `后半段日均专注度比前半段低约 ${Math.abs(pct)}%`
+      return `最近 15 天比前 15 天专注度下降（日均 ${Math.abs(pct)}%）`
     }
-    return `日均专注度基本持平（前后半段相差 ${Math.abs(pct)}% 以内）`
+    return `最近 15 天与前 15 天基本持平`
   }
 
   /** 曲线口径：明确纵轴是三档等级、横轴是当天累计分钟，多次专注用虚线分隔 */
@@ -943,7 +943,7 @@ export struct Review {
     // 这样色带里绿/黄/红各段的宽度与上方「专注率 / 分心」的时长数字严格成比例
     const span = Math.round(this.day.endSec / 60)
     // 图已改为状态时间轴（色带）：横轴是时间，颜色只有三档含义，不再有"纵轴等级"
-    const base = `横轴：当天累计已判定学习 0–${span} 分钟（不含答疑/休息/暂停）；色带按状态分段涂色（绿=专注 / 黄=轻度分心 / 红=分心）`
+    const base = `横轴：当天累计学习 0–${span} 分钟；绿=专注 / 黄=轻度分心 / 红=分心`
     if (this.day.sessionCount > 1) {
       return `${base}；当天共 ${this.day.sessionCount} 次专注，白线为两次之间的分界`
     }
@@ -1064,7 +1064,7 @@ export struct Review {
     // 本次洞察
     Column({ space: Spacing.SM }) {
       this.sectionHeader('⭐', '本次洞察')
-      Text(this.dayInsight.length > 0 ? this.dayInsight : '完成更多专注后，我会根据真实数据给出洞察。')
+      Text(this.dayInsight.length > 0 ? this.dayInsight : '再完成几次专注，小伴就能给你这次的学习洞察。')
         .fontSize(14)
         .fontColor(Colors.TEXT_PRIMARY)
         .lineHeight(22)
@@ -1142,7 +1142,7 @@ export struct Review {
         .fontColor(Colors.TEXT_PRIMARY)
         .width('100%')
       // 口径自解释：纵轴是「每日专注度」而不是时长，否则低矮的折线会被理解成"没学习"
-      Text('纵轴：每日专注度（100 分制）。当天多次专注取这几次专注度的平均值，没学习的那天是 0')
+      Text('纵轴：每天的专注度（满分 100）；没学习的记 0')
         .fontSize(11)
         .fontColor(Colors.TEXT_TERTIARY)
         .lineHeight(16)
@@ -1383,7 +1383,7 @@ export struct Review {
     // 长期建议
     Column({ space: Spacing.SM }) {
       this.sectionHeader('💡', '长期建议')
-      Text(this.aiAdvice.length > 0 ? this.aiAdvice : '完成更多专注后，我会根据你的真实数据给出学习建议。')
+      Text(this.aiAdvice.length > 0 ? this.aiAdvice : '再积累几次专注，小伴就能给出长期学习建议。')
         .fontSize(14)
         .fontColor(Colors.TEXT_PRIMARY)
         .lineHeight(22)

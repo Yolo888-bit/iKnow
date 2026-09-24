@@ -94,13 +94,13 @@ export struct Dashboard {
   /** 空态/异常态的一句说明（不默认显示 100%，也不显示 0% 冒充"有数据"） */
   private progressHint(): string {
     if (this.progress.state === 'NO_PLAN') {
-      return '还没有长期计划。设置各科目标时长后，这里会按"实际投入 / 目标"显示进度。'
+      return '还没有长期计划，设置各科目标后就显示进度。'
     }
     if (this.progress.state === 'NO_TARGET') {
       if (this.progress.unassignedTargetMinutes > 0) {
-        return `已设总目标 ${Math.round(this.progress.unassignedTargetMinutes / 60)} 小时，但还没分到科目 —— 去「长期计划与目标」分一下，进度才能算。`
+        return `已设总目标 ${Math.round(this.progress.unassignedTargetMinutes / 60)} 小时，还没分到科目 —— 去「长期计划与目标」分一下即可。`
       }
-      return '长期计划里还没填各科目标时长，进度没有分母，暂时无法计算。'
+      return '还没填各科目标时长，去「长期计划与目标」设置后就能看到进度。'
     }
     if (this.progress.state === 'NO_TASK') {
       return `各科目标合计 ${Math.round(this.progress.targetMinutes / 60)} 小时，本期还没有任务 —— 去「AI 规划」拆一份，进度从 0 开始。`
@@ -169,10 +169,10 @@ export struct Dashboard {
   /** 目标总览脚下那行提示：没填日期时给不同的话，填了就给倒计时 */
   private examHint(): string {
     if (this.examType.length === 0) {
-      return '在「我的 → 长期计划与目标」里填写目标与日期，倒计时才会准确'
+      return '去「我的」设置考试目标与日期'
     }
     if (this.targetDateText.length === 0) {
-      return '还没填目标日期，补上之后倒计时才准'
+      return '还没填目标日期'
     }
     return `距离 ${this.examType} 还有 ${this.examDays} 天，按节奏稳步推进`
   }
@@ -333,11 +333,6 @@ export struct Dashboard {
               .fontColor(Colors.TEXT_SECONDARY)
               .margin({ top: 8 })
               .width('100%')
-            Text('在「我的 → 长期计划与目标」里填写目标与日期，倒计时才会准确')
-              .fontSize(12)
-              .fontColor(Colors.TEXT_TERTIARY)
-              .margin({ top: 10 })
-              .width('100%')
           } else {
             Row() {
               Column() {
@@ -440,7 +435,7 @@ export struct Dashboard {
               .margin({ top: 10 })
 
             if (this.progress.overdueMinutes > 0) {
-              Text(`已超出目标 ${this.progress.overdueMinutes} 分钟：进度条停在 100%，但真实投入照实显示`)
+              Text(`已超额 ${this.progress.overdueMinutes} 分钟`)
                 .fontSize(12)
                 .fontColor(Colors.TEXT_SECONDARY)
                 .lineHeight(18)
@@ -455,7 +450,7 @@ export struct Dashboard {
                 .width('100%')
                 .margin({ top: 6 })
             }
-            Text('口径：主数值为实际投入（由专注计时自动累计，不需要手动打钩），分母为各科目标时长之和。')
+            Text(`已投入 ${this.progress.actualMinutes} 分钟 / 目标 ${this.progress.targetMinutes} 分钟（专注计时自动累计，不需要手动打钩）`)
               .fontSize(11)
               .fontColor(Colors.TEXT_TERTIARY)
               .lineHeight(16)
@@ -577,10 +572,10 @@ export struct Dashboard {
         }
         .dashCard()
 
-        // 长期趋势
+        // 近 7 天趋势
         Column() {
-          this.sectionTitle('长期趋势')
-          Text('近 7 天净专注时长（分钟）')
+          this.sectionTitle('近 7 天专注趋势')
+          Text('每天净专注时长（分钟）')
             .fontSize(12)
             .fontColor(Colors.TEXT_TERTIARY)
             .width('100%')

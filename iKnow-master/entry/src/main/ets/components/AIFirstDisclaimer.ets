@@ -21,7 +21,7 @@ export struct AIFirstDisclaimer {
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
             .fontColor(Colors.TEXT_PRIMARY)
-          Text('我是 AI 智能体，不是真人。我会陪你专注、答疑、复盘，' +
+          Text('小伴是 AI 智能体，不是真人。陪你专注、答疑、复盘都可以，' +
             '但不能替代老师、医生或心理咨询师。所有内容仅供参考。')
             .fontSize(14)
             .fontColor(Colors.TEXT_SECONDARY)

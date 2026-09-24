@@ -78,7 +78,6 @@ export struct FocusProfile {
 
           this.profileRow('黄金专注时段', this.profile.bestFocusTime)
           this.profileRow('最容易分心的任务', this.hardest.length > 0 ? this.hardest : '暂无科目数据')
-          this.profileRow('当前专注阈值', `${this.profile.focusThreshold} min`)
         }
         .profileCard()
 
@@ -138,7 +137,7 @@ export struct FocusProfile {
               .fontSize(18)
               .fontWeight(FontWeight.Bold)
               .fontColor(Colors.TEXT_PRIMARY)
-            Text('完成 3 次专注后，我会根据真实数据为你生成五维画像与成长趋势。')
+            Text('再完成几次专注，小伴就能生成你的专注画像与成长趋势。')
               .fontSize(14)
               .fontColor(Colors.TEXT_SECONDARY)
               .lineHeight(22)

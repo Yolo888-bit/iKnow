@@ -48,7 +48,7 @@ export struct AIChat {
   private scroller: Scroller = new Scroller()
 
   aboutToAppear(): void {
-    this.pushAI('我在答疑模式，想问什么都可以。计时还在继续，安心问。')
+    this.pushAI('小伴在，随时问。计时不会中断。')
     this.loadPriorQuestions()
   }
 

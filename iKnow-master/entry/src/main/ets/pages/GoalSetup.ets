@@ -65,7 +65,7 @@ struct GoalSetup {
     }
   ]
   private steps: StepMeta[] = [
-    { title: '你的目标是什么？', desc: '选一个，我会按它的节奏帮你安排' },
+    { title: '你的目标是什么？', desc: '选一个，小伴会按它的节奏帮你安排' },
     { title: '目标日期是哪天？', desc: '用来算倒计时，也会影响每天的安排密度' },
     { title: '这次要攻下哪些科目？', desc: '一块一行，没列出的可以自己添加' }
   ]
@@ -390,7 +390,7 @@ struct GoalSetup {
           .fontWeight(FontWeight.Bold)
           .fontColor(Colors.TEXT_PRIMARY)
           .margin({ top: 10 })
-        Text('我会按这个目标陪你走完这段备考')
+        Text('小伴会按这个目标陪你走完这段备考')
           .fontSize(13)
           .fontColor(Colors.TEXT_SECONDARY)
           .margin({ top: 6 })

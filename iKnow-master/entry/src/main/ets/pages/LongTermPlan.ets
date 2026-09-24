@@ -251,7 +251,7 @@ export struct LongTermPlan {
       promptAction.showToast({ message: '已保存，倒计时与目标进度会按这个来' })
     } catch (e) {
       hilog.error(0x0000, 'iKnow.Plan', '保存后刷新聚合失败：%{public}s', e.message)
-      promptAction.showToast({ message: '已保存，但界面刷新失败，请退出重进' })
+      promptAction.showToast({ message: '已保存，界面稍后会自动更新' })
     }
     router.back()
   }
@@ -303,7 +303,7 @@ export struct LongTermPlan {
           .fontWeight(FontWeight.Bold)
           .fontColor(Colors.TEXT_PRIMARY)
           .width('100%')
-        Text('目标决定倒计时与规划背景；各科目标决定工作台「目标进度」的分母。两者都只在这里设置。')
+        Text('在这里设置考试目标和各科计划投入时长。')
           .fontSize(12)
           .fontColor(Colors.TEXT_SECONDARY)
           .lineHeight(18)
@@ -343,7 +343,7 @@ export struct LongTermPlan {
 
         // 长期计划
         Column() {
-          this.sectionTitle('长期计划', '计划名 + 各科计划投入时长；合计由各科相加得到，不单独填')
+          this.sectionTitle('长期计划', '计划名 + 各科计划投入时长')
           this.field('计划名称', '例如：暑假强化 / 冲刺两个月', this.title, (v: string) => {
             this.title = v
           })
@@ -401,7 +401,7 @@ export struct LongTermPlan {
           // 旧数据迁移：只设过总目标、还没分到科目
           if (this.unassignedHours > 0) {
             Column() {
-              Text(`旧版设置的总目标 ${this.unassignedHours} 小时还没分到科目，目标进度暂时无法计算。`)
+              Text(`还有 ${this.unassignedHours} 小时总目标没分到科目，分摊后才能看到各科进度。`)
                 .fontSize(12)
                 .fontColor(Colors.TEXT_SECONDARY)
                 .lineHeight(18)

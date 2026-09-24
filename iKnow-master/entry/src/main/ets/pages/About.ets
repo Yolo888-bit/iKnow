@@ -46,10 +46,8 @@ export struct About {
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
-          Text('✓ 计时在本机完成：学习时长 = 墙钟 − 休息 − 暂停，与复盘页同一个口径\n' +
-            '✓ 感知信号触发时才抓拍 2~3 秒短片段，不会持续录像\n' +
-            '✓ 片段上传云端只做「在做什么」的可观察状态识别（做题 / 看书 / 看手机…），不做注意力推断\n' +
-            '✓ 要不要干预由本机规则组合决定，判定依据与置信度都会显示出来\n' +
+          Text('✓ 计时在本机完成，只统计净专注时长\n' +
+            '✓ 感知信号触发时才抓拍几张画面，不会持续录像\n' +
             '✓ 学习记录、画像与画面片段都保存在本机，可随时清除')
             .fontSize(13)
             .fontColor(Colors.TEXT_SECONDARY)
@@ -65,13 +63,13 @@ export struct About {
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
-          Text('我是 AI 智能体，不是真人。我会陪你专注、答疑、复盘，但不能替代老师、医生或心理咨询师。所有内容仅供参考。')
+          Text('小伴是 AI 智能体，不是真人。陪你专注、答疑、复盘都可以，但不能替代老师、医生或心理咨询师。所有内容仅供参考。')
             .fontSize(13)
             .fontColor(Colors.TEXT_SECONDARY)
             .lineHeight(22)
             .margin({ top: 10 })
             .width('100%')
-          Text('回答会如实标注来源：走大模型时标「大模型回答」，未配置或回退本地时标「本地模板回答」。')
+          Text('回答会标注来源：大模型回答 / 本地模板回答。')
             .fontSize(12)
             .fontColor(Colors.TEXT_TERTIARY)
             .lineHeight(20)
@@ -86,7 +84,7 @@ export struct About {
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
-          Text('画面片段与生理记录的上传范围、保存位置与清除方式，都在隐私页如实说明。')
+          Text('画面与数据的上传范围、保存位置与清除方式，见隐私页。')
             .fontSize(13)
             .fontColor(Colors.TEXT_SECONDARY)
             .lineHeight(22)

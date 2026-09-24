@@ -31,7 +31,6 @@ export struct StudyReport {
   @State hasData: boolean = false
   @State totalStr: string = ''
   @State netStr: string = ''
-  @State wallStr: string = ''
   @State distractStr: string = ''
   @State qaStr: string = ''
   @State breakStr: string = ''
@@ -109,7 +108,6 @@ export struct StudyReport {
     this.sessionStartMs = session.startTime
     // 全部口径走 Metrics（与同页净专注率同分母），不再直接用墙钟当"总学习时长"
     this.totalStr = TimeUtils.formatDuration(Metrics.totalStudySec(session))
-    this.wallStr = TimeUtils.formatDuration(Metrics.wallClock(session))
     this.netStr = TimeUtils.formatDuration(Metrics.netFocusSec(session))
     this.distractStr = TimeUtils.formatDuration(Metrics.distractionSec(session))
     // 本次专注得分：走神占比越低分越高；无数据时按满分处理（避免显示 0 分误导）
@@ -273,11 +271,6 @@ export struct StudyReport {
             }
             .width('100%')
             .margin({ top: 10 })
-            Text(`总学习 = 墙钟 ${this.wallStr} − 休息 ${this.breakStr} − 暂停 ${this.pauseStr}`)
-              .fontSize(12)
-              .fontColor(Colors.TEXT_TERTIARY)
-              .width('100%')
-              .margin({ top: 10 })
           }
           .reportCard()
 
@@ -385,14 +378,6 @@ export struct StudyReport {
           if (this.obsLoaded) {
             Column() {
               this.sectionTitle('本次干扰事件')
-              Text('由手表状态变化触发抓拍，云端只给出"在做什么"的可观察结论，不做注意力推断。' +
-                '只有会触发干预的状态（看手机 / 趴桌 / 离开）计入这里；'
-                + '云端确认为"做题 / 看书"属于学习证据，不列为干扰。')
-                .fontSize(12)
-                .fontColor(Colors.TEXT_TERTIARY)
-                .lineHeight(16)
-                .width('100%')
-                .margin({ top: 6 })
 
               // 分类计数：让"为什么这里只列出了几条"一目了然
               Row({ space: 10 }) {
@@ -458,7 +443,7 @@ export struct StudyReport {
                         .fontSize(13)
                         .fontColor(Colors.TEXT_SECONDARY)
                       Blank()
-                      Text(`${o.activity} · 置信度 ${Math.round(o.confidence * 100)}%`)
+                      Text(o.activity)
                         .fontSize(13)
                         .fontWeight(FontWeight.Medium)
                         .fontColor(Colors.TEXT_PRIMARY)
@@ -530,7 +515,7 @@ export struct StudyReport {
           if (this.obsLoaded && this.shots.length > 0) {
             Column({ space: Spacing.SM }) {
               this.sectionTitle(`本次画面片段（${this.shots.length} 张）`)
-              Text('这些是触发时抓拍的画面片段；**无摄像头 / 纯预览时**为「演示占位图」（图片自身已标注，非真实照片）。' +
+              Text('这些是触发时抓拍的画面；未接摄像头时为「演示占位图」（图片已标注，非真实照片）。' +
                 '每次只保留前几张，可在「我的 → 隐私与数据」里一键清除。')
                 .fontSize(11)
                 .fontColor(Colors.TEXT_TERTIARY)

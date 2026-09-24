@@ -49,7 +49,7 @@ export struct Mine {
     AppStorage.setOrCreate<number>(StorageKey.SIM_MODE, on ? 1 : 0)
     StorageService.getInstance().saveKv(StorageKey.SIM_MODE, on ? '1' : '0').catch(() => {})
     promptAction.showToast({
-      message: on ? '已开启模拟模式：专注页出现信号控制台' : '已关闭：不再产生合成信号（连接真表后直接用真表）'
+      message: on ? '模拟模式已开启' : '模拟模式已关闭，连接手表后使用真实数据'
     })
   }
 
@@ -256,8 +256,8 @@ export struct Mine {
                 .fontWeight(FontWeight.Medium)
                 .fontColor(Colors.TEXT_PRIMARY)
               Text(this.simMode
-                ? '已开启：专注页出现信号控制台，可手动调心率/HRV/血氧/动作'
-                : '已关闭：不产生合成信号（连接真机手表后直接使用真实数据）')
+                ? '无硬件时用于演示专注感知'
+                : '已关闭，连接手表后使用真实数据')
                 .fontSize(12)
                 .fontColor(Colors.TEXT_SECONDARY)
                 .margin({ top: 4 })
@@ -282,9 +282,9 @@ export struct Mine {
         Column({ space: Spacing.SM }) {
           this.menuItem('🎯', '长期计划与目标', '考试倒计时 · 科目 · 长期计划', 'pages/LongTermPlan', '')
           this.menuItem('🗂️', '学习记录', '历史专注复盘', 'pages/StudyHistory', '')
-          this.menuItem('⌚', '设备', '摄像头 · 智能手表 · 模拟状态', 'pages/Device', '')
+          this.menuItem('⌚', '设备', '摄像头 · 蓝牙心率设备', 'pages/Device', '')
           this.menuItem('🔒', '隐私', '授权与数据权限', 'pages/Privacy', '')
-          this.menuItem('🗂️', '数据管理', '导出 · 清除学习数据', 'pages/Privacy', '')
+          this.menuItem('🗂️', '数据管理', '清除学习数据与画面片段', 'pages/Privacy', '')
           this.menuItem('ℹ️', '关于', '版本 · 能力说明 · 隐私入口', 'pages/About', '')
         }
         .width('100%')

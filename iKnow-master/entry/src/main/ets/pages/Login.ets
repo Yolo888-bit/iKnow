@@ -202,7 +202,7 @@ struct Login {
             })
 
           Text(this.mode === 1
-            ? '注册后账号只保存在本机，学习数据不会上传'
+            ? '账号仅保存在本机'
             : '还没有账号？切换到「注册」创建一个')
             .fontSize(12)
             .fontColor(Colors.TEXT_TERTIARY)

@@ -160,7 +160,7 @@ export struct Home {
     }
     AlertDialog.show({
       title: '今天还没有计划',
-      message: '要我按你的目标帮你拆一份今日任务，还是直接开始自由专注（不设定任务）？',
+      message: '要小伴按你的目标帮你拆一份今日任务，还是直接开始自由专注？',
       primaryButton: {
         value: '帮我规划',
         action: () => {
@@ -185,7 +185,7 @@ export struct Home {
     const ctx = getContext(this) as common.UIAbilityContext
     AlertDialog.show({
       title: '开启摄像头感知？',
-      message: '开启后，我会用前置摄像头感知你的专注状态（仅在触发时抓拍短片段）。你也可以选择仅计时模式。',
+      message: '开启后，小伴会用前置摄像头感知你的专注状态（仅在触发时抓拍短片段）。你也可以选择仅计时模式。',
       primaryButton: {
         value: '开启感知',
         action: () => {
@@ -318,7 +318,7 @@ export struct Home {
               .fontColor(Colors.TEXT_SECONDARY)
               .margin({ top: 8 })
               .width('100%')
-            Text('在「我的 → 长期计划与目标」里填写目标与日期，倒计时才会准确')
+            Text('去「我的」设置考试目标与日期')
               .fontSize(12)
               .fontColor(Colors.TEXT_TERTIARY)
               .margin({ top: 10 })

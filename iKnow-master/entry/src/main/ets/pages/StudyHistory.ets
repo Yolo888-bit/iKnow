@@ -5,6 +5,7 @@ import { AppStore } from '../store/AppStore'
 import { Metrics } from '../services/Metrics'
 import { FocusSession } from '../models/FocusSession'
 import { TimeUtils } from '../utils/TimeUtils'
+import { PageHeader } from '../components/PageHeader'
 
 /**
  * 学习记录 —— 历史每次专注的复盘入口。
@@ -60,7 +61,7 @@ export struct StudyHistory {
           .fontColor(Colors.TEXT_PRIMARY)
         Text(s.taskIds.length > 0
           ? `净专注 ${Metrics.focusRatePercent(s)}% · 完成 ${Metrics.completionRate(s)}%`
-          : `净专注 ${Metrics.focusRatePercent(s)}% · 未设定任务`)
+          : `净专注 ${Metrics.focusRatePercent(s)}% · 自由专注`)
           .fontSize(11)
           .fontColor(Colors.TEXT_SECONDARY)
           .margin({ top: 4 })
@@ -79,11 +80,8 @@ export struct StudyHistory {
   build() {
     Scroll() {
       Column({ space: Spacing.SM }) {
-        Text('学习记录')
-          .fontSize(24)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.TEXT_PRIMARY)
-          .width('100%')
+        // 顶栏：返回箭头 + 居中页面名称（从「我的」点进来，之前没有返回入口）
+        PageHeader({ title: '学习记录' })
         Text(`共 ${this.sessions.length} 次专注 · 点任意一条查看那次完整复盘`)
           .fontSize(13)
           .fontColor(Colors.TEXT_SECONDARY)
@@ -105,9 +103,14 @@ export struct StudyHistory {
 
         Blank().height(20)
       }
-      .padding(20)
+      // 显式左对齐：Column 默认是居中的，列表只有一两条时整块会飘到屏幕中间
+      .alignItems(HorizontalAlign.Start)
+      // top 收窄：顶栏的返回箭头要贴着页面顶部
+      .padding({ left: 20, right: 20, top: 6, bottom: 20 })
       .width('100%')
     }
+    // 内容不足一屏时也必须从顶部开始排 —— 之前没写 align，短列表会整体垂直居中
+    .align(Alignment.Top)
     .backgroundColor(Colors.BG)
     .width('100%')
     .height('100%')

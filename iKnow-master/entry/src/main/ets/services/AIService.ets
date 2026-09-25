@@ -119,6 +119,11 @@ export class AIService {
     return this.mock.planningIntro()
   }
 
+  /** 答疑页开场白（AI 文案，硬规则 §1：动态文案不写死在页面里） */
+  qaIntro(): string {
+    return this.mock.qaIntro()
+  }
+
   /** 规划对话没有拿到有效回复时的承接语（AI 文案，硬规则 §1） */
   planningHold(): string {
     return this.mock.planningHold()
@@ -130,10 +135,18 @@ export class AIService {
    * 目标变更（GoalSetup 保存）时置空重新生成。
    */
   localSlogan(goalType: string): string {
-    return this.mock.slogan(goalType)
+    return this.mock.slogan(goalType, '')
   }
 
-  async slogan(goalType: string, daysLeft: number): Promise<string> {
+  /**
+   * 首页语录。
+   *
+   * 缓存放在 AppStorage（**进程内**）：所以每次启动 App 都会重新生成一句，
+   * 这正是用户要的"每次登录后都展示新的语录"；同一次启动内只生成一次，不会反复打网关。
+   *
+   * @param avoid 上次启动真实展示过的那句，尽量别重复（由调用方从 KV 读出）
+   */
+  async slogan(goalType: string, daysLeft: number, avoid: string): Promise<string> {
     if (goalType.length === 0) {
       return ''
     }
@@ -143,10 +156,10 @@ export class AIService {
     }
     let text = ''
     if (this.useGateway) {
-      text = await this.gateway.slogan(goalType, daysLeft)
+      text = await this.gateway.slogan(goalType, daysLeft, avoid)
     }
-    if (text.length === 0) {
-      text = this.mock.slogan(goalType)
+    if (text.length === 0 || text === avoid) {
+      text = this.mock.slogan(goalType, avoid)
     }
     AppStorage.setOrCreate<string>(StorageKey.GOAL_SLOGAN, text)
     return text

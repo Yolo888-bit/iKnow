@@ -231,6 +231,26 @@ export class FocusController {
     return this.tasks.filter((t: Task): boolean => t.done).length
   }
 
+  /**
+   * 重排任务顺序：**未完成在上，已完成沉底**。
+   *
+   * 用途（用户原话「让未完成任务在上面」）：专注时勾掉一项 = 该任务完成并「降级」到列表底部，
+   * 余下的未完成任务自然留在上面。`start()` / `restore()` 后也排一次，保证进入专注时
+   * 跨天残留的已完成项同样沉底，与勾选降级保持同一套顺序。各组内部保持原有相对次序。
+   */
+  private sortTasks(): void {
+    const pending: Task[] = []
+    const done: Task[] = []
+    for (const t of this.tasks) {
+      if (t.done) {
+        done.push(t)
+      } else {
+        pending.push(t)
+      }
+    }
+    this.tasks = pending.concat(done)
+  }
+
   /** 勾选当前任务完成，下一个未完成任务自动成为当前任务 */
   completeCurrentTask(): boolean {
     const t = this.getCurrentTask()
@@ -267,6 +287,8 @@ export class FocusController {
         if (done && this.currentTaskId === id) {
           this.currentTaskId = ''
         }
+        // 勾选完成 → 该任务「降级」沉底，未完成任务留在上面
+        this.sortTasks()
         this.recordTaskTimeline()
         return true
       }
@@ -347,6 +369,7 @@ export class FocusController {
   /** 开始一个专注会话 */
   start(tasks: Task[]): void {
     this.tasks = tasks
+    this.sortTasks()
     this.session = new FocusSession()
     this.session.id = IdUtils.uuid()
     this.session.title = tasks.length > 0 ? tasks[0].subject : '专注学习'
@@ -354,8 +377,17 @@ export class FocusController {
     this.session.taskIds = tasks.map((t: Task): string => t.id)
     this.session.plannedDuration = tasks.reduce((sum: number, t: Task): number => sum + t.estimatedDuration, 0)
     this.session.status = SessionStatus.RUNNING
-    this.session.perceptionMode = PermissionService.getInstance().snapshot().camera ? 'PERCEPTION_FULL' : 'PERCEPTION_TIMER_ONLY'
+    // 感知模式按「本机是否有摄像头硬件」判定，而不是按「当前是否已授权摄像头」。
+    // 授权是进入专注后才申请的（见 Focus.tryStartCamera），start() 这一刻用 snapshot().camera
+    // 判定会误杀：非首页入口进入时还没要过权限 → 被判成 PERCEPTION_TIMER_ONLY → 相机预览不挂载、
+    // 摄像头永远开不起来（首页预先要过权限才侥幸没暴露这个 bug）。
+    const ctx0 = StorageService.getInstance().appContext()
+    const hwCam = ctx0 !== null && CameraService.getInstance().probe(ctx0) > 0
+    this.session.perceptionMode = hwCam ? 'PERCEPTION_FULL' : 'PERCEPTION_TIMER_ONLY'
     this.perceptionMode = this.session.perceptionMode
+    // 同步写回 StorageProp：确保 Focus 页进入瞬间读到的就是本次正确模式，
+    // 否则会读到上一段会话落库的旧值（有硬件却显示「未开启感知」）
+    AppStorage.setOrCreate<string>(StorageKey.PERCEPTION_MODE, this.perceptionMode)
     this.currentTaskId = tasks.length > 0 ? tasks[0].id : ''
     this.resetCounters()
     this.running = true
@@ -827,6 +859,14 @@ export class FocusController {
 
   private sampleTimeline(): void {
     const p = new FocusTimelinePoint()
+    /**
+     * 绝对时间戳（毫秒）。
+     *
+     * 单次复盘的图要按**真实钟点**排版（"14:05–14:12 专注"），所以每个采样点都要带上时刻；
+     * `sec` 只是"已判定学习秒数"，休息 / 暂停期间不前进，用它排不出真实时间轴。
+     * 旧记录没有这个字段（回填为 0），图会退回按 sec 推算并在图注里如实说明。
+     */
+    p.atMs = Date.now()
     p.minute = Math.floor(this.totalSec / 60)
     // 横轴按「已判定的学习秒数」走：答疑 / 休息 / 暂停这段横轴不前进，
     // 这样色带里专注与分心的宽度才能和复盘里的时长数字严格成比例
@@ -879,6 +919,9 @@ export class FocusController {
     this.qaMode = true
     this.state = FocusState.QA_MODE
     this.stateEnteredAt = Date.now()
+    // 中断类状态也必须落进**状态时间线**：回复盘要按真实时间画状态段，
+    // 少了这几个采样点，「休息 / 暂停 / 答疑」在图上会被画成专注（不诚实）。
+    this.sampleTimeline()
     // 只停摄像头轮询；结论回调保留（否则从答疑回来后感知链就断了）
     FocusDetectionService.getInstance().stop()
     this.pushLive()
@@ -892,6 +935,7 @@ export class FocusController {
     this.qaMode = false
     this.restoreAfterQA()
     this.stateEnteredAt = Date.now()
+    this.sampleTimeline()
     this.subscribeDetection()
     this.pushLive()
   }
@@ -918,6 +962,7 @@ export class FocusController {
     this.settleSegment(Date.now())
     this.paused = true
     this.state = FocusState.PAUSED
+    this.sampleTimeline()
     FocusDetectionService.getInstance().stop()
     this.pushLive()
   }
@@ -930,6 +975,7 @@ export class FocusController {
     this.paused = false
     this.state = FocusState.FOCUSED
     this.stateEnteredAt = Date.now()
+    this.sampleTimeline()
     this.subscribeDetection()
     this.pushLive()
   }
@@ -945,6 +991,7 @@ export class FocusController {
     this.breakStartedAt = Date.now()
     this.state = FocusState.RESTING
     this.stateEnteredAt = Date.now()
+    this.sampleTimeline()
     FocusDetectionService.getInstance().stop()
     this.pushLive()
   }
@@ -958,6 +1005,7 @@ export class FocusController {
     this.breakStartedAt = 0
     this.state = FocusState.FOCUSED
     this.stateEnteredAt = Date.now()
+    this.sampleTimeline()
     this.subscribeDetection()
     this.pushLive()
   }
@@ -1195,7 +1243,7 @@ export class FocusController {
   private injectedEvidence(hasImage: boolean, note?: string): string {
     // 版本标记：复盘里能看到，用于确认"设备上跑的是不是最新代码"。
     // 之前几轮反复分不清"代码没重新构建"与"构建了但仍失败"，这里让它可自证。
-    const base = '[v9] 模拟注入：可观察状态由模拟工作台指定；结论为演示值，非真实识别。'
+    const base = '[v9] 模拟注入：可观察状态由「模拟状态」面板指定；结论为演示值，非真实识别。'
     const why = note !== undefined && note.length > 0 ? note : ''
     if (hasImage) {
       if (why.length > 0) {
@@ -1248,6 +1296,7 @@ export class FocusController {
   restore(snap: SessionSnapshot, tasks?: Task[]): void {
     if (tasks !== undefined) {
       this.tasks = tasks
+      this.sortTasks()
     }
     this.session = new FocusSession()
     this.session.id = snap.sessionId
@@ -1258,10 +1307,11 @@ export class FocusController {
     this.session.startTime = snap.startTime > 0
       ? snap.startTime
       : Date.now() - Math.floor(snap.totalSec) * 1000
-    // 快照里的感知模式可能已经过期（恢复期间撤销了授权）：以当前授权为准，
-    // 否则界面会显示「感知中」而实际不抓拍
-    this.perceptionMode = PermissionService.getInstance().snapshot().camera
-      ? snap.perceptionMode : 'PERCEPTION_TIMER_ONLY'
+    // 感知模式以快照里保存的为准（它本就是按「是否有摄像头硬件」判定的，不是按授权）。
+    // 不再用 snapshot().camera 降级：授权是进入后才申请的，恢复瞬间它多半还是 false，
+    // 据此判成 PERCEPTION_TIMER_ONLY 会把相机预览关掉；权限变化由 subscribePermission 实时处理。
+    this.perceptionMode = snap.perceptionMode
+    AppStorage.setOrCreate<string>(StorageKey.PERCEPTION_MODE, this.perceptionMode)
     this.totalSec = snap.totalSec
     this.focusSec = snap.focusSec
     this.distractionSec = snap.distractionSec
@@ -1346,6 +1396,31 @@ export class FocusController {
   }
 
   /**
+   * 「直接结束」——丢弃本次专注：**一条记录都不留**。
+   *
+   * 与 finalize() / endSession() 的区别：
+   *  - 不落库会话、不生成复盘、不计入任何统计（走 `abort()` 复位运行时）；
+   *  - 额外清掉会话过程中**已经实时写进去**的两样东西：快照与答疑记录。
+   *
+   * 为什么必须清这两样：快照每 10s 落一条、答疑是产生时立即落库，
+   * 它们都不是"结束那一刻"才写的。不清掉的话，虽然本次专注不计入统计，
+   * 但库里仍留着它的痕迹（快照还可能在 30 分钟恢复窗口内被根页判定为"被中断的会话"）。
+   */
+  async discard(): Promise<void> {
+    const id = this.session.id
+    try {
+      if (id.length > 0) {
+        await StorageService.getInstance().deleteSnapshots(id)
+        await StorageService.getInstance().deleteQuestions(id)
+      }
+    } catch (e) {
+      // 清理失败也必须继续复位：宁可留一点残迹，也不能让会话"卡在半死状态"
+      hilog.error(0x0000, 'iKnow.Focus', '清理本次专注残迹失败：%{public}s', e.message)
+    }
+    this.abort()
+  }
+
+  /**
    * 丢弃当前会话并复位运行时（E15：清数据时调用）。
    * 与 finalize() 的区别：不落盘、不计入统计，直接把计时与状态清空。
    */
@@ -1390,6 +1465,9 @@ export class FocusController {
     AppStorage.setOrCreate<string>(StorageKey.FOCUS_STATE, FocusState.FOCUSED)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_QA_ELAPSED, 0)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_BREAK_REMAIN, 0)
+    // 首页会读它算「专注占比」（虽然前提是 FOCUS_RUNNING=1，这里也一并归零，
+    // 否则下一次专注刚开始的瞬间会拿上一次的旧值算比例）
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_STUDY, 0)
   }
 
   // ===================== 手机侧信号：专注中切后台 =====================

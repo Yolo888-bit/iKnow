@@ -1,5 +1,6 @@
 import { router } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
+import { PageHeader } from '../components/PageHeader'
 
 /**
  * 关于（版本 / 能力说明 / AI 身份 / 隐私入口）
@@ -14,11 +15,8 @@ export struct About {
   build() {
     Scroll() {
       Column({ space: Spacing.LG }) {
-        Text('关于')
-          .fontSize(24)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.TEXT_PRIMARY)
-          .width('100%')
+        // 顶栏：返回箭头 + 居中页面名称（从「我的」点进来，之前没有返回入口）
+        PageHeader({ title: '关于' })
 
         Column() {
           Text('iKnow · 专注感知智能考伴')
@@ -106,9 +104,12 @@ export struct About {
 
         Blank().height(20)
       }
-      .padding(20)
+      // top 收窄：顶栏的返回箭头要贴着页面顶部
+      .padding({ left: 20, right: 20, top: 6, bottom: 20 })
       .width('100%')
     }
+    // 内容不足一屏时也必须从顶部开始排，不能垂直居中
+    .align(Alignment.Top)
     .width('100%')
     .height('100%')
     .backgroundColor(Colors.BG)

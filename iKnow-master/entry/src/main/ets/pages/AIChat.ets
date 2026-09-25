@@ -37,7 +37,10 @@ export struct AIChat {
   @State fabX: number = 320
   @State fabY: number = 420
   /** 展开态：按住/拖动时放大并完全不透明；停靠时收起为小圆点 */
-  @State fabExpanded: boolean = false
+  /** 停靠（缩在边缘只露半角）= true；触碰/拖拽时完整滑出 */
+  @State fabDocked: boolean = true
+  /** 停在哪一边：0 = 左，1 = 右 */
+  @State fabSide: number = 1
   /** 正在拖拽（拖拽结束由 PanGesture 负责收起，避免和 onTouch 抢先后） */
   private panning: boolean = false
   @State stageW: number = 360
@@ -48,7 +51,9 @@ export struct AIChat {
   private scroller: Scroller = new Scroller()
 
   aboutToAppear(): void {
-    this.pushAI('小伴在，随时问。计时不会中断。')
+    // 开场白走 AI 层（硬规则 §1：动态文案不写死在页面里），只留一句短话：
+    // 有问题就问小伴。刻意**不带当前任务名**，也不要"可以怎么问"的清单（用户要求简短）。
+    this.pushAI(AIService.getInstance().qaIntro())
     this.loadPriorQuestions()
   }
 
@@ -188,69 +193,95 @@ export struct AIChat {
     router.back()
   }
 
-  // ---------- 悬浮球：拖拽 + 自动吸边 ----------
-
-  private fabSize(): number {
-    return this.fabExpanded ? 66 : 48
-  }
+  // ---------- 悬浮球「返回专注」：拖拽 + 贴边半隐 ----------
 
   /**
-   * 吸附到最近的左/右边缘，并把纵向夹在可视区内。
-   * 按**收起尺寸**对齐，这样球停在边缘时是贴边的（展开只是原地变大）。
+   * 胶囊尺寸。**始终渲染「← 返回专注」文字**，不再退化成只有一个箭头 ——
+   * 用户要求不管停靠还是展开，都要能看出这是干什么的。
    */
-  private snapFab(): void {
-    const rest = 48
-    const edge = 10
-    const mid = this.fabX + this.fabSize() / 2
-    const targetX = mid < this.stageW / 2 ? edge : this.stageW - rest - edge
-    let targetY = this.fabY
-    if (targetY < 8) {
-      targetY = 8
+  private fabW(): number {
+    return 106
+  }
+
+  private fabH(): number {
+    return 44
+  }
+
+  /** 完整露出时的 x（贴边、整颗可见） */
+  private fabShownX(): number {
+    return this.fabSide === 0 ? 8 : this.stageW - this.fabW() - 8
+  }
+
+  /** 停靠时的 x：正好藏掉一半，缩在屏幕边缘只露半角 */
+  private fabDockX(): number {
+    return this.fabSide === 0 ? -this.fabW() / 2 : this.stageW - this.fabW() / 2
+  }
+
+  /** 触碰 / 开始拖拽 → 完整滑出 */
+  private revealFab(): void {
+    if (!this.fabDocked) {
+      return
     }
-    const maxY = this.stageH - rest - 8
-    if (targetY > maxY) {
-      targetY = maxY > 8 ? maxY : 8
-    }
-    animateTo({ duration: 220, curve: Curve.EaseOut }, () => {
-      this.fabX = targetX
-      this.fabY = targetY
+    this.fabDocked = false
+    animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+      this.fabX = this.fabShownX()
     })
+  }
+
+  /** 松手 → 收回边缘半隐 */
+  private dockFab(): void {
+    this.fabDocked = true
+    animateTo({ duration: 220, curve: Curve.EaseOut }, () => {
+      this.fabX = this.fabDockX()
+    })
+  }
+
+  /** 横向吸附到最近的左/右边缘，并把纵向夹在可视区内 */
+  private snapFab(): void {
+    const mid = this.fabX + this.fabW() / 2
+    this.fabSide = mid < this.stageW / 2 ? 0 : 1
+    let y = this.fabY
+    if (y < 8) {
+      y = 8
+    }
+    const maxY = this.stageH - this.fabH() - 8
+    if (y > maxY) {
+      y = maxY > 8 ? maxY : 8
+    }
+    this.fabY = y
+    this.dockFab()
   }
 
   @Builder
   backFab() {
-    Column() {
+    Row() {
       Text('←')
-        .fontSize(this.fabExpanded ? 22 : 19)
+        .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(Color.White)
-      if (this.fabExpanded) {
-        Text('返回专注')
-          .fontSize(11)
-          .fontColor(Color.White)
-          .margin({ top: 2 })
-      }
+      Text('返回专注')
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Color.White)
+        .margin({ left: 4 })
     }
-    .width(this.fabSize())
-    .height(this.fabSize())
-    .borderRadius(this.fabSize() / 2)
+    .width(this.fabW())
+    .height(this.fabH())
+    .borderRadius(this.fabH() / 2)
     .backgroundColor(Colors.PRIMARY_STRONG)
     .justifyContent(FlexAlign.Center)
     .shadow({ radius: 16, color: Colors.SHADOW, offsetX: 0, offsetY: 6 })
-    // 停靠时半透明"隐身"，触碰/拖拽时完全显形
-    .opacity(this.fabExpanded ? 1.0 : 0.72)
     .position({ x: this.fabX, y: this.fabY })
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
-        this.fabExpanded = true
+        this.revealFab()
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
-        // 只点不拖时，PanGesture 不会触发，这里兜底把球收回停靠态
-        // （拖拽结束时吸附动画约 220ms，稍等再收起，视觉更顺）
+        // 只点不拖时 PanGesture 不触发，这里兜底收回
         setTimeout(() => {
           if (!this.panning) {
-            this.fabExpanded = false
+            this.dockFab()
           }
-        }, 260)
+        }, 240)
       }
     })
     .onClick(() => {
@@ -260,7 +291,7 @@ export struct AIChat {
       PanGesture({ fingers: 1, distance: 4 })
         .onActionStart(() => {
           this.panning = true
-          this.fabExpanded = true
+          this.fabDocked = false
           this.panBaseX = this.fabX
           this.panBaseY = this.fabY
         })
@@ -271,12 +302,10 @@ export struct AIChat {
         .onActionEnd(() => {
           this.panning = false
           this.snapFab()
-          this.fabExpanded = false
         })
         .onActionCancel(() => {
           this.panning = false
           this.snapFab()
-          this.fabExpanded = false
         })
     )
   }
@@ -437,7 +466,9 @@ export struct AIChat {
       this.stageH = newArea.height as number
       if (!this.fabInit && this.stageW > 0) {
         this.fabInit = true
-        this.fabX = this.stageW - 66 - 10
+        // 首次进来就是停靠态（右边缘露半角）
+        this.fabSide = 1
+        this.fabX = this.fabDockX()
         this.fabY = this.stageH * 0.62
       }
     })

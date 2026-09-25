@@ -7,7 +7,7 @@ import { FocusSession } from '../models/FocusSession'
 import { StudyReport } from '../models/StudyReport'
 import { StudyPlan } from '../models/StudyPlan'
 import { FocusProfile } from '../models/FocusProfile'
-import { Dashboard, SubjectProgress } from '../models/Dashboard'
+import { Dashboard, SubjectProgress, TodayStats } from '../models/Dashboard'
 import { AIPersonality, TaskStatus, SessionStatus } from '../models/Enums'
 import { StorageService } from '../services/StorageService'
 import { AIService } from '../services/AIService'
@@ -57,6 +57,8 @@ export class AppStore {
   private plan: StudyPlan | null = null
   /** 「目标进度」的权威结果（页面拉取式读取，不用 @StorageProp 镜像 —— 见 C3 的教训） */
   private planProgress: PlanProgress = Metrics.planProgress([], null)
+  /** 上次执行「跨天滚动」的那一天（时间戳 = 当天 0 点）：保证一天只跑一次 */
+  private lastRolloverDay: number = 0
   private initialized: boolean = false
   private initPromise: Promise<void> | null = null
 
@@ -308,6 +310,91 @@ export class AppStore {
     return out
   }
 
+  /**
+   * 还没完成的任务（新→旧，最多 `limit` 条），返回**副本**。
+   *
+   * @param beforeTodayOnly 只取"今天以前"建的。
+   *   规划页要传 true：**刚跑完一轮的那份计划不该再留在页面上**
+   *   （用户结束专注后回到规划页，应该是一个干净的新一轮），
+   *   只有更早（跨天）遗留的未完成任务才值得作为候选重新拿出来。
+   *   复盘页的「未完成清单」传 false —— 那里就是要看全量还差什么。
+   */
+  unfinishedTasks(limit: number, beforeTodayOnly: boolean): Task[] {
+    const all: Task[] = this.mergedTasks()
+    const todayStart = TimeUtils.dayStart(Date.now())
+    const out: Task[] = []
+    const picked: Task[] = []
+    for (const t of all) {
+      if (t.done || t.status === TaskStatus.DONE) {
+        continue
+      }
+      if (beforeTodayOnly && t.createdAt >= todayStart) {
+        continue
+      }
+      picked.push(t)
+    }
+    picked.sort((a: Task, b: Task) => b.createdAt - a.createdAt)
+    for (const t of picked) {
+      if (out.length >= limit) {
+        break
+      }
+      out.push(t.copy())
+    }
+    return out
+  }
+
+  /**
+   * 上次真实展示过的首页语录（KV 持久化）。
+   * AppStorage 只是进程内缓存，重启就没了 —— 想做到"每次打开都换一句"，
+   * 必须把"上次那句"存下来，下次生成时避让。
+   */
+  async lastSlogan(): Promise<string> {
+    try {
+      return await StorageService.getInstance().loadKv(StorageKey.LAST_SLOGAN)
+    } catch (e) {
+      return ''
+    }
+  }
+
+  /** 记下这次展示的语录，供下次启动避让 */
+  async rememberSlogan(text: string): Promise<void> {
+    try {
+      await StorageService.getInstance().saveKv(StorageKey.LAST_SLOGAN, text)
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Store', '保存首页语录失败：%{public}s', e.message)
+    }
+  }
+
+  /**
+   * 今日任务：**只要属于今天的都列出来**，而不是只看"最新一轮"。
+   *
+   * 为什么需要：`currentPlan` 在确认新一轮时会被整体替换，
+   * 于是今天上午排的那一轮任务会从首页消失 —— 用户的原话是
+   * "不是重新一轮专注就重新计算的，只要属于今日的就应该都列在"。
+   *
+   * 口径 = `currentPlan`（今天确认的计划，含从跨天候选里勾进来的旧任务）
+   *        ∪ 今天创建的任务（今天可能排了好几轮）
+   * 按 id 去重。
+   */
+  todayTasks(): Task[] {
+    const todayStart = TimeUtils.dayStart(Date.now())
+    const out: Task[] = []
+    const seen: string[] = []
+    for (const t of this.currentPlan) {
+      if (seen.indexOf(t.id) < 0) {
+        seen.push(t.id)
+        out.push(t)
+      }
+    }
+    for (const t of this.tasks) {
+      if (t.createdAt >= todayStart && seen.indexOf(t.id) < 0) {
+        seen.push(t.id)
+        out.push(t)
+      }
+    }
+    return out
+  }
+
   /** 任务进度：[已完成累计, 规划任务总数]，口径同 `mergedTasks()` */
   taskProgressCounts(): number[] {
     const all: Task[] = this.mergedTasks()
@@ -449,8 +536,16 @@ export class AppStore {
         t.status = target.status
       }
     }
-    await StorageService.getInstance().saveTask(target)
-    await this.savePlan()
+    // 落库失败（磁盘/句柄异常等）**不能**把后面的重算一起吞掉：
+    // refreshAggregates() 末尾会自增 DATA_VERSION，而复盘页 / 规划页 / 首页
+    // 全靠这个版本号触发重取 —— 一旦这里抛异常，就会出现
+    // "勾了任务，别的页面纹丝不动"的假死现象。
+    try {
+      await StorageService.getInstance().saveTask(target)
+      await this.savePlan()
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Store', '保存任务失败，仍继续重算统计：%{public}s', e.message)
+    }
     await this.refreshAggregates()
   }
 
@@ -570,18 +665,24 @@ export class AppStore {
     this.savePlan()
   }
 
-  togglePlanTask(id: string): void {
-    for (const t of this.currentPlan) {
-      if (t.id === id) {
-        t.done = !t.done
-        t.status = t.done ? TaskStatus.DONE : TaskStatus.TODO
-      }
-    }
-  }
+  // 原先这里有个 `togglePlanTask(id: string): void` —— 只翻转内存里的 done/status，
+  // **不落库、不重算统计、不自增 DATA_VERSION**。首页今日任务的勾选框曾经误用它，
+  // 于是"勾了任务，AI 规划页 / 复盘页纹丝不动"。已删除，勾选一律走 `toggleTaskDone()`。
 
   /** 计划内任务被就地修改（如专注页勾选完成）后广播一次响应式刷新 */
+  /**
+   * 计划在内存里被改动后（专注页勾选任务等）：**重算聚合**再广播。
+   *
+   * ⚠️ 这里以前只调 `pushAggregates()` —— 那只是把**当前快照**重新广播一遍，
+   * 数字根本没重算。更糟的是 `pushAggregates()` 末尾会自增 `DATA_VERSION`，
+   * 等于通知所有监听者"数据变了"，大家去重取却拿到旧值 ——
+   * 表现就是首页「今日数据」永远不更新（而「今日任务」卡片读内存、看着是对的）。
+   * 只广播不重算等于对监听者撒谎，必须走完整的 `refreshAggregates()`。
+   */
   syncPlan(): void {
-    this.pushAggregates()
+    this.refreshAggregates().catch((e: Error) => {
+      hilog.error(0x0000, 'iKnow.Store', '计划变更后重算聚合失败：%{public}s', e.message)
+    })
   }
 
   // ---------- 结束会话 → 复盘 → 画像 → 工作台联动 ----------
@@ -664,63 +765,120 @@ export class AppStore {
   }
 
   // ---------- 聚合 & 响应式刷新 ----------
+
+  /**
+   * 跨天滚动：**今天的计划只算今天排的**。
+   *
+   * 为什么需要：`currentPlan` 以前会把"昨天没做完的任务"一直带下去，
+   * 首页「今日任务」于是连着几天都长一个样，用户抱怨"每天应该是一个从零开始的新规划"。
+   * 这里在每天第一次刷新聚合时，把**不是今天创建的**计划项从「今日计划」里摘掉。
+   *
+   * 注意：**只摘出今日计划，不删数据** ——
+   *  - 旧任务仍在 `tasks` 库里，复盘页的「未完成任务」看得到；
+   *  - 规划页会把它们作为**未勾选的候选**重新拿出来，由用户决定要不要接着做。
+   */
+  private async rolloverDailyPlan(): Promise<void> {
+    const todayStart = TimeUtils.dayStart(Date.now())
+    if (this.lastRolloverDay === todayStart) {
+      return
+    }
+    this.lastRolloverDay = todayStart
+    if (this.currentPlan.length === 0) {
+      return
+    }
+    const keep: Task[] = []
+    let dropped = false
+    for (const t of this.currentPlan) {
+      if (t.createdAt >= todayStart) {
+        keep.push(t)
+      } else {
+        dropped = true
+      }
+    }
+    if (!dropped) {
+      return
+    }
+    this.currentPlan = keep
+    try {
+      await this.savePlan()
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Store', '跨天滚动保存计划失败：%{public}s', e.message)
+    }
+  }
+
   async refreshAggregates(): Promise<void> {
+    await this.rolloverDailyPlan()
     const now = Date.now()
-    let todayFocus = 0
-    let todayNet = 0
-    let todayStudy = 0
     let weekFocus = 0
     // 「本周」= 自然周（周一 0 点起）。原来用的是"今天往前 6 天"的滚动窗口，
     // 却挂着「本周累计」的标签 —— 名实不符。近 7 天的图表另有 computeWeekTrend。
     const weekStart = TimeUtils.weekStart(now)
 
     for (const s of this.sessions) {
-      if (TimeUtils.isSameDay(s.startTime, now)) {
-        todayFocus += Metrics.wallClock(s)
-        todayNet += Metrics.netFocusSec(s)
-        todayStudy += Metrics.totalStudySec(s)
-      }
       if (s.startTime >= weekStart) {
         weekFocus += Metrics.netFocusSec(s)
       }
     }
 
-    // 今日任务口径：优先按「今日计划」（跨天延续的任务也算今天要做的事），
-    // 之前只按 createdAt 是今天的任务统计，导致昨天建的计划今天显示 0/0
-    let done = 0
-    let total = 0
-    if (this.currentPlan.length > 0) {
-      for (const t of this.currentPlan) {
-        total += 1
-        if (t.done) {
-          done += 1
-        }
-      }
-    } else {
-      for (const t of this.tasks) {
-        if (TimeUtils.isSameDay(t.createdAt, now)) {
-          total += 1
-          if (t.done) {
-            done += 1
-          }
-        }
-      }
-    }
+    // 今日数据：**现算**（口径见 todayStats()），不在这里各写一遍累加 ——
+    // 首页「今日数据」调的是同一个方法，两边永远是同一个数。
+    const today = this.todayStats()
 
     const d = new Dashboard()
-    d.todayFocusSeconds = todayFocus
-    d.todayNetFocusSeconds = todayNet
-    // 口径与复盘页一致：净专注率 = 净专注 / 总学习（总学习 = 墙钟 − 休息 − 暂停）
-    d.focusRate = todayStudy > 0 ? Math.round(todayNet / todayStudy * 100) : 0
+    d.todayFocusSeconds = today.focusSeconds
+    d.todayNetFocusSeconds = today.netFocusSeconds
+    d.focusRate = today.focusRate
     d.weekFocusSeconds = weekFocus
     d.weekTrend = this.computeWeekTrend(now)
-    d.todayCompletedTasks = done
-    d.todayTotalTasks = total
+    d.todayCompletedTasks = today.doneTasks
+    d.todayTotalTasks = today.totalTasks
     d.subjectProgress = this.computeSubjectProgress()
     this.dashboard = d
     // 目标进度：入参在这里组装，计算仍由 Metrics 负责（纯函数，不读存储）
     this.planProgress = Metrics.planProgress(this.tasks, this.plan)
     this.pushAggregates()
+  }
+
+  /**
+   * 今日实时统计：**每次都现算**，不读 `this.dashboard` 快照。
+   *
+   * 首页「今日数据」的时长 / 专注率 / 任务完成率都走这里，于是它天然与
+   * 「今日任务」卡片（同样基于 `todayTasks()`）一致 ——
+   * 不会再出现"任务卡写着 3/5、今日数据里完成率却是 —"这种自相矛盾的画面。
+   *
+   * 口径：
+   *  - 时长 = 今天所有会话的 `wallClock` 之和（墙钟 − 休息 − 暂停，含答疑）；
+   *  - 专注率 = 净专注 /（净专注 + 分心），**不含答疑**（与单次会话、专注曲线同一口径）；
+   *  - 任务 = `todayTasks()`（今天排过的全部任务）的完成数 / 总数。
+   */
+  todayStats(): TodayStats {
+    const now = Date.now()
+    const out = new TodayStats()
+    let net = 0
+    let dist = 0
+    for (const s of this.sessions) {
+      if (!TimeUtils.isSameDay(s.startTime, now)) {
+        continue
+      }
+      out.focusSeconds += Metrics.wallClock(s)
+      net += Metrics.netFocusSec(s)
+      dist += Metrics.distractionSec(s)
+    }
+    out.netFocusSeconds = net
+    out.distractionSeconds = dist
+    const judged = net + dist
+    out.focusRate = judged > 0 ? Math.round(net / judged * 100) : 0
+
+    const todays: Task[] = this.todayTasks()
+    out.totalTasks = todays.length
+    let done = 0
+    for (const t of todays) {
+      if (t.done) {
+        done += 1
+      }
+    }
+    out.doneTasks = done
+    return out
   }
 
   private computeWeekTrend(now: number): number[] {

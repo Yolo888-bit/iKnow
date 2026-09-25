@@ -39,16 +39,16 @@ export struct BarChart {
     if (this.values.length === 0) {
       return
     }
-    // 量程：**不能**取自身最大值 —— 那样"某天只学了 1 分钟"也会把柱子画满整格，
-    // 5 分钟和 500 分钟长得一模一样，看起来就像"有数据但没依据"。
-    // 先按 30 分钟起步，再向上取整到 30 的整数倍，让最高的柱子留出余量。
+    // 量程：按「学习时长（分钟）」自适应 —— 纵轴上限紧贴这一周里最长的那天，
+    // 向上取整到 5 分钟的整数倍，起步下限 10 分钟（避免"只学 1 分钟也把柱子画满"）。
+    // 轻度使用（十几分钟）时顶端也会跟着变（12→15、28→30、33→35），不会出现"卡在 30"。
     let peak = 0
     for (const v of this.values) {
       if (v > peak) {
         peak = v
       }
     }
-    const scale = Math.max(30, Math.ceil(peak / 30) * 30)
+    const scale = Math.max(10, Math.ceil(peak / 5) * 5)
 
     const padLeft = 34
     const padRight = 12

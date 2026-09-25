@@ -387,13 +387,13 @@ export class GatewayAIService implements AIService {
    * 贴合目标的励志标语（首页顶部）。
    * 非场景化调用：纯文本输出，失败返回空串，由门面回退本地文案表。
    */
-  async slogan(goalType: string, daysLeft: number): Promise<string> {
+  async slogan(goalType: string, daysLeft: number, avoid: string): Promise<string> {
     if (!this.isReady() || goalType.length === 0) {
       return ''
     }
     const messages: ChatMessage[] = [
-      { role: 'system', content: '你是中文文案助手。只输出一句标语本身，不要引号、不要解释。' },
-      { role: 'user', content: Prompts.slogan(goalType, daysLeft) }
+      { role: 'system', content: '你是中文文案助手。只输出一句语录本身，不要引号、不要解释。' },
+      { role: 'user', content: Prompts.slogan(goalType, daysLeft, avoid) }
     ]
     const text: string = await this.chatText(messages, BridgeConfig.MODEL_FAST, 1.0, 40, 8000)
     const line: string = text.split('\n')[0].trim().split('"').join('').split('「').join('').split('」').join('')

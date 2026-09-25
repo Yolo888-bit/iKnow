@@ -1,4 +1,4 @@
-import { FocusState, FocusSource } from '../models/Enums'
+import { FocusState, FocusSource, TaskStatus } from '../models/Enums'
 import { FocusSession } from '../models/FocusSession'
 import { Task } from '../models/Task'
 import { StudyPlan } from '../models/StudyPlan'
@@ -18,7 +18,7 @@ export interface Last30DaysSummary {
 
 export interface PracticeSummaryItem {
   subject: string
-  content: string
+  /** 该科目下**已完成**的任务数（用户要的口径："数学 2 次"） */
   count: number
 }
 
@@ -43,25 +43,19 @@ export interface HabitInsight {
 /** 单日学习总结（复盘页日历切换到「某天」时使用） */
 export interface DaySummary {
   hasData: boolean
-  studyMinutes: number
+  /**
+   * 当天累计学习时长（**秒**）。
+   * 用秒而不是分钟：分钟精度下"某天只学了 39 秒"会显示成 `0 分钟`，看着像没数据。
+   * 展示一律用 `TimeUtils.formatSec()`。
+   */
+  studySeconds: number
   focusRate: number
   completedTasks: number
   totalTasks: number
-  qaSessions: number
+  /** 当天累计答疑时长（秒） */
+  qaSeconds: number
   sessionCount: number
   bestPeriod: string
-  levels: number[]
-  states: string[]
-  /** 与 levels 一一对应的横轴位置（当天累计分钟，取整），保留给精简展示/兼容 */
-  minutes: number[]
-  /** 与 levels 一一对应的横轴位置（当天累计**已判定学习秒数**），曲线按它严格成比例 */
-  seconds: number[]
-  /** 一天内多次专注时，相邻会话之间的分钟分界（保留兼容） */
-  separators: number[]
-  /** 同上，单位改成秒 —— 与 seconds 同一坐标系 */
-  separatorsSec: number[]
-  /** 当天参与状态判定的总秒数（色带终点；少算这一段会让最后一种状态没有宽度） */
-  endSec: number
   /**
    * 当天"主会话"（总学习最长的那一次）的结构指标。
    * 用最长的那一次而不是把当天几段拼起来：跨会话算"被打断后多久回来"没有意义。
@@ -252,9 +246,16 @@ export class Metrics {
     return s.qaDuration
   }
 
-  /** §5 净专注率 = 净专注 / 总学习（0-1） */
+  /**
+   * 专注率 = **净专注 / 已判定学习时长**（0-1）。
+   *
+   * 分母刻意用 `judgedSec`（净专注 + 分心），**不含答疑**（也不含休息/暂停）——
+   * 答疑期间状态不参与"专注还是分心"的判定，算进分母会把率值压低
+   * （用户实测反馈："专注率的计算不太对，应该是专注时间/总时间（抛开答疑时间）"）。
+   * 这也是专注曲线色带的比例口径，两者必须一致，否则数字和图形又对不上。
+   */
   static netFocusRate(s: FocusSession): number {
-    const t = Metrics.totalStudySec(s)
+    const t = Metrics.judgedSec(s)
     return t > 0 ? s.focusDuration / t : 0
   }
 
@@ -263,9 +264,9 @@ export class Metrics {
     return Math.round(Metrics.netFocusRate(s) * 100)
   }
 
-  /** §5 分心率 = 分心 / 总学习（0-1） */
+  /** 分心率 = 分心 / 已判定学习时长（0-1）。分母与 `netFocusRate` 一致，两者相加为 1 */
   static distractionRate(s: FocusSession): number {
-    const t = Metrics.totalStudySec(s)
+    const t = Metrics.judgedSec(s)
     return t > 0 ? s.distractionDuration / t : 0
   }
 
@@ -405,6 +406,7 @@ export class Metrics {
     const cutoff = now - 30 * dayMs
     let totalNetSec = 0
     let totalStudySec = 0
+    let totalDistSec = 0
     const completedIds: string[] = []
     const trend: number[] = []
 
@@ -428,6 +430,7 @@ export class Metrics {
       if (s.startTime >= cutoff) {
         totalNetSec += s.focusDuration
         totalStudySec += Metrics.totalStudySec(s)
+        totalDistSec += s.distractionDuration
         for (const id of s.completedTaskIds) {
           if (completedIds.indexOf(id) < 0) {
             completedIds.push(id)
@@ -436,7 +439,9 @@ export class Metrics {
       }
     }
 
-    const focusRate = totalStudySec > 0 ? Math.round(totalNetSec / totalStudySec * 100) : 0
+    // 专注率的分母 = 净专注 + 分心（不含答疑），与单次会话 `focusRatePercent` 同一口径
+    const judged = totalNetSec + totalDistSec
+    const focusRate = judged > 0 ? Math.round(totalNetSec / judged * 100) : 0
     return { totalHours: Math.round(totalNetSec / 3600), completedTasks: completedIds.length, focusRate: focusRate, trend: trend }
   }
 
@@ -577,10 +582,25 @@ export class Metrics {
 
   /**
    * 单日学习总结：汇总某一天（dayStart 起 24h 内）全部专注会话。
-   * 学习时长 / 专注率 / 任务完成 / 答疑会话数 / 最佳时段 / 当日专注曲线，
+   * 学习时长 / 专注率 / 任务完成 / 答疑 / 最佳时段 / 当日专注曲线，
    * 全部走统一口径，页面不得自行计算（硬规则 §3）。
+   *
+   * **所有数字都是"当天累计"**（用户明确要求）：
+   *  - 学习时长 = 当天各次会话 `totalStudySec` 之和（墙钟 − 休息 − 暂停，含答疑）；
+   *  - 专注率 = **按"已判定学习时长"加权的平均**：Σ净专注 / Σ(净专注 + 分心)。
+   *    分母刻意不含答疑（与单次会话、与专注曲线色带同一口径）。
+   *    不能对每次会话的专注率直接取算术平均 —— 那样 3 分钟那次和 60 分钟那次一样重，
+   *    数字会飘；
+   *  - 任务完成 = **按任务 id 去重**后计数：同一条任务跨多次会话出现只算一次，
+   *    否则"今天 3 个任务"会被算成 3×次数的假分母；
+   *  - 答疑 = 当天累计时长（分钟）+ 有过答疑的会话数。
+   *
+   * @param todayTasks 当所选日期**就是今天**时，调用方传当天计划（`AppStore.todayTasks()`）：
+   *   首页勾选完成的任务不属于任何会话，只统计会话会漏掉它们；
+   *   传进来后「任务完成」与首页「今日数据」完全一致。
+   *   历史日期没有这份信息，传空数组即可，退回按当天会话去重统计。
    */
-  static daySummary(sessions: FocusSession[], dayStart: number): DaySummary {
+  static daySummary(sessions: FocusSession[], dayStart: number, todayTasks: Task[]): DaySummary {
     const dayEnd = dayStart + 24 * 3600 * 1000
     const daySessions: FocusSession[] = []
     for (const s of sessions) {
@@ -590,67 +610,67 @@ export class Metrics {
     }
 
     let netSec = 0
+    let distractSec = 0
     let studySec = 0
-    let done = 0
-    let total = 0
-    let qaSessions = 0
-    const levels: number[] = []
-    const states: string[] = []
-    const minutes: number[] = []
-    const seconds: number[] = []
-    const separators: number[] = []
-    const separatorsSec: number[] = []
-    let dayOffset = 0
-    let dayOffsetSec = 0
+    let qaSec = 0
+    // 任务去重：当天多次会话里出现的同一条任务只算一次
+    const seenTaskIds: string[] = []
+    const seenDoneIds: string[] = []
 
     for (const s of daySessions) {
       netSec += s.focusDuration
+      distractSec += s.distractionDuration
       studySec += Metrics.totalStudySec(s)
-      done += s.completedTaskIds.length
-      total += s.taskIds.length
-      if (Metrics.qaSec(s) > 0) {
-        qaSessions++
+      qaSec += Metrics.qaSec(s)
+      for (const id of s.taskIds) {
+        if (seenTaskIds.indexOf(id) < 0) {
+          seenTaskIds.push(id)
+        }
       }
-      for (const p of s.timeline) {
-        levels.push(p.level)
-        states.push(p.state)
-        minutes.push(dayOffset + p.minute)
-        // 横轴用「当天累计已判定学习秒数」：会话之间按各自 judgedSec 衔接，
-        // 这样一天里几段专注之间的时间比例也是真实的
-        seconds.push(dayOffsetSec + (p.sec > 0 ? p.sec : p.minute * 60))
+      for (const id of s.completedTaskIds) {
+        if (seenDoneIds.indexOf(id) < 0) {
+          seenDoneIds.push(id)
+        }
+        // 完成过但没出现在 taskIds 里的（历史数据/自由专注里勾选的）也要计入分母，
+        // 否则会出现「完成 3 / 共 1」这种自相矛盾的数
+        if (seenTaskIds.indexOf(id) < 0) {
+          seenTaskIds.push(id)
+        }
       }
-      dayOffset += Math.round(Metrics.totalStudySec(s) / 60)
-      dayOffsetSec += Metrics.judgedSec(s)
-      separators.push(dayOffset)
-      separatorsSec.push(dayOffsetSec)
-    }
-    // 末尾那根就是曲线终点，不需要画分隔线
-    if (separators.length > 0) {
-      separators.pop()
-      separatorsSec.pop()
     }
 
-    const focusRate = studySec > 0 ? Math.round(netSec / studySec * 100) : 0
+    // 平均专注率 = Σ净专注 / Σ(净专注 + 分心)，即"按除答疑时长加权"的平均值。
+    // 变量名避开 `judgedSec`（那是本类的静态方法名），免得读代码时混淆
+    const dayJudged = netSec + distractSec
+    const focusRate = dayJudged > 0 ? Math.round(netSec / dayJudged * 100) : 0
+
+    // 任务完成：今天用当天计划（与首页「今日数据」一致），历史日期退回会话去重统计
+    let done = 0
+    let total = 0
+    if (todayTasks.length > 0) {
+      total = todayTasks.length
+      for (const t of todayTasks) {
+        if (t.done || t.status === TaskStatus.DONE) {
+          done += 1
+        }
+      }
+    } else {
+      total = seenTaskIds.length
+      done = seenDoneIds.length
+    }
     // 只看这一天自己的 timeline —— 不再复用 goldenWindow（它按 2 小时桶统计、还硬过滤最近 14 天，
     // 看 14 天以前任意一天时恒为空，页面只能回退成一句没有时间的空话）
     const best = Metrics.bestPeriodOfDay(daySessions, dayStart)
     return {
       hasData: daySessions.length > 0,
-      studyMinutes: Math.round(studySec / 60),
+      studySeconds: studySec,
       focusRate: focusRate,
       completedTasks: done,
       totalTasks: total,
-      qaSessions: qaSessions,
+      qaSeconds: qaSec,
       sessionCount: daySessions.length,
       bestPeriod: best,
       structure: Metrics.primarySessionStructure(daySessions),
-      levels: levels,
-      states: states,
-      minutes: minutes,
-      seconds: seconds,
-      separators: separators,
-      separatorsSec: separatorsSec,
-      endSec: dayOffsetSec
     }
   }
 
@@ -965,38 +985,66 @@ export class Metrics {
     return list
   }
 
-  /** 练习内容总结：按学科统计已完成任务次数，返回前 5 项 */
+  /** 归一化：去掉空白与常见标点，只用于"判断是不是同一项练习"，不改展示文案 */
+/** 练习内容总结的一项：某科目**一共完成了几个任务** */
+  /**
+   * 练习内容总结：**按科目统计"一共完成了几个任务"**。
+   *
+   * 用户明确的口径：「数学 2 次」这种，**不需要把每条任务逐条罗列**
+   * （逐条既长、又看不出每个科目实际投入了多少）。
+   * 次数 = 该科目下**已完成**的任务数，按次数降序。
+   *
+   * 数据源必须与「任务进度」是同一份（调用方传 `AppStore.mergedTasks()`）——
+   * 否则会出现"任务进度 7/7，这里只统计到 5 个"这种对不上的情况（实测反馈过）。
+   */
   static practiceSummary(sessions: FocusSession[], tasks: Task[]): PracticeSummaryItem[] {
     const taskMap = new Map<string, Task>()
     for (const t of tasks) {
       taskMap.set(t.id, t)
     }
-    const groups = new Map<string, PracticeSummaryItem>()
-    // 同一个任务可能跨多个会话都被标记完成，这里按任务 id 去重，避免"次数"被重复放大
+    // 同一个任务可能跨多个会话被标记完成，按任务 id 去重，避免次数被重复放大
     const counted = new Set<string>()
+    const doneSubjects: string[] = []
+
+    // ① 会话里完成过的
     for (const s of sessions) {
       for (const id of s.completedTaskIds) {
-        if (counted.has(id)) {
-          continue
-        }
-        counted.add(id)
         const t = taskMap.get(id)
-        if (t !== undefined) {
-          let g = groups.get(t.subject)
-          if (g === undefined) {
-            g = { subject: t.subject, content: t.title, count: 0 }
-            groups.set(t.subject, g)
-          }
-          g.count++
+        if (t !== undefined && !counted.has(t.id)) {
+          counted.add(t.id)
+          doneSubjects.push(t.subject)
         }
       }
     }
-    const result: PracticeSummaryItem[] = []
-    groups.forEach((value: PracticeSummaryItem, key: string) => {
-      result.push(value)
-    })
-    result.sort((a: PracticeSummaryItem, b: PracticeSummaryItem): number => b.count - a.count)
-    return result.slice(0, 5)
+    // ② 任务表里已经打勾的也算"练过"。
+    // 为什么必须补这一步：复盘页「未完成清单」和首页今日任务都能直接勾选完成，
+    // 那种勾选**不会**进任何会话的 completedTaskIds —— 只统计会话的话，
+    // 用户勾完任务，这里的「练习内容总结」纹丝不动，看着就像没生效。
+    for (const t of tasks) {
+      if ((t.done || t.status === TaskStatus.DONE) && !counted.has(t.id)) {
+        counted.add(t.id)
+        doneSubjects.push(t.subject)
+      }
+    }
+
+    // 按科目聚合计数（科目为空时归到「未标注科目」，不让它悄悄消失）
+    const out: PracticeSummaryItem[] = []
+    for (const raw of doneSubjects) {
+      const name = raw.trim().length > 0 ? raw : '未标注科目'
+      let hit = false
+      for (const it of out) {
+        if (it.subject === name) {
+          it.count += 1
+          hit = true
+          break
+        }
+      }
+      if (!hit) {
+        out.push({ subject: name, count: 1 })
+      }
+    }
+    out.sort((a: PracticeSummaryItem, b: PracticeSummaryItem): number => b.count - a.count)
+    return out.slice(0, 8)
   }
 
   /**

@@ -68,6 +68,96 @@ interface WordingMap {
  *  - 人格（GENTLE/STRICT/QUIET/ADAPTIVE）通过 wording pack 影响文案，绝不假装真人。
  *  - 不持有任何 API Key；Gateway 接入时仅替换本类，UI 不变。
  */
+/**
+ * 通用语录池：**鼓励型 + 优美**的一句话。
+ *
+ * 用户明确要的是"继续努力、真棒、一路生花上岸"这种**给人打气**的语录，
+ * 而不是"要用户怎么怎么做"的方法论 —— 所以这里不再写"先坐下来，再谈状态"这类指导语，
+ * 改成温暖、有画面感、读完被托一把的话。
+ * 长度都控制在 14 个汉字以内，首页 15vp 字号一行放得下。
+ */
+const GENERAL_SLOGANS: string[] = [
+  '一路生花，上岸见',
+  '你走的每一步都算数',
+  '今天的你比昨天更近',
+  '认真的人最好看',
+  '你已经在发光了',
+  '再坚持一下，就到了',
+  '你的努力有回响',
+  '保持热爱，奔赴山海',
+  '明天会感谢今天的你',
+  '稳住，你会赢的',
+  '你在成为更好的自己',
+  '所有努力都不会白费',
+  '心之所向，素履以往',
+  '慢慢走，别停下',
+  '你的坚持终将美好',
+  '越努力，越幸运',
+  '你值得所有好结果',
+  '披星戴月，终见星光',
+  '事虽难，做则必成',
+  '一切都在往好的方向走',
+  '今天也很了不起',
+  '你做得比自己想的好',
+  '你比昨天更强了',
+  '热爱可抵岁月漫长',
+  '心有所期，全力以赴',
+  '未来的你会庆幸现在',
+  '你正在靠近想要的生活',
+  '所有的辛苦都有意义',
+  '你已经在正确的路上',
+  '你比想象中更有力量',
+  '慢慢积累，终会绽放',
+  '你的付出看得见',
+  '不必着急，你来得及',
+  '光会照到你身上的',
+  '你的努力在悄悄生长',
+  '今天也向目标近了一步',
+  '保持下去，你很好',
+  '一点一点，就成了',
+  '你已经很棒了',
+  '辛苦了，你做得好',
+  '这条路你走得很好',
+  '你的未来正在展开',
+  '愿你所愿皆成真',
+  '山高路远，终将抵达',
+  '一切都会好起来的',
+  '踏踏实实，稳稳当当',
+  '你所热爱的会给你答案',
+  '你的坚持正在开花',
+  '走下去，光就在前面',
+  '每个清晨都值得期待',
+  '慢慢来，你很好',
+  '认真生活的样子真好看'
+]
+
+/** 目标专属语录池：命中不到就返回空数组，只用通用池 */
+function goalSlogans(goalType: string): string[] {
+  const g = goalType
+  if (g.indexOf('公务员') >= 0 || g.indexOf('公考') >= 0 || g.indexOf('考公') >= 0 || g.indexOf('事业编') >= 0) {
+    return ['一举成公', '上岸见', '你离上岸更近了', '稳稳上岸']
+  }
+  if (g.indexOf('研究生') >= 0 || g.indexOf('考研') >= 0) {
+    return ['一战成硕', '一路生花', '你会上岸的', '从容赴考']
+  }
+  if (g.indexOf('高考') >= 0) {
+    return ['星光不负赶路人', '金榜题名时', '六月会给你答案', '少年自有山海']
+  }
+  if (g.indexOf('期末') >= 0 || g.indexOf('期中') >= 0) {
+    return ['门门过关', '稳稳拿分', '你会全过的']
+  }
+  if (g.indexOf('雅思') >= 0 || g.indexOf('托福') >= 0 || g.indexOf('四六级') >= 0) {
+    return ['每天都算数', '你在悄悄变强', '分数会追上你']
+  }
+  if (g.indexOf('法考') >= 0 || g.indexOf('司考') >= 0) {
+    return ['把法条读成底气', '你离通过不远了']
+  }
+  if (g.indexOf('教资') >= 0 || g.indexOf('教师') >= 0) {
+    return ['你会站上讲台的', '温柔且有力量']
+  }
+  return []
+}
+
 export class MockAIService implements AIService, QAService, CompanionService, ReviewService, PlanningService, MemoryService {
   private static inst: MockAIService | null = null
   private personality: string = 'GENTLE'
@@ -303,19 +393,75 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     }
     // 本地兜底也必须基于用户说过的话来生成任务，绝不返回「优先任务块 A」这类占位符
     const text = this.composeUserText(input)
-    const tasks = this.buildTasks(text, TimeUtils.parseDurationMinutes(text))
-    if (tasks.length === 0) {
+    const raw = this.buildTasks(text, TimeUtils.parseDurationMinutes(text))
+    if (raw.length === 0) {
       return { reply: '我先记下了。再多说一句你想学什么（科目或章节），我就能帮你拆成任务。', done: false }
+    }
+    // **增量**：只保留清单里还没有的。
+    // buildTasks 每轮都按"累积对话"重算整份，不过滤的话用户每加一句都会把旧任务再列一遍
+    //（用户明确要求："只在已有基础上新增新的任务，不要再把已有任务加一遍"）。
+    const existing: string[] = input.existingTasks !== undefined ? input.existingTasks : []
+    const tasks: PlanTask[] = []
+    let skipped = 0
+    for (const t of raw) {
+      if (this.alreadyPlanned(t.subject, t.title, existing)) {
+        skipped += 1
+        continue
+      }
+      tasks.push(t)
+    }
+    if (tasks.length === 0) {
+      return {
+        reply: skipped > 0
+          ? `这几条你清单里已经有了，我就不重复加了。还想加什么？换个科目、或者加一段练习都行。`
+          : '我先记下了。再多说一句你想学什么（科目或章节），我就能帮你拆成任务。',
+        done: false
+      }
     }
     let total = 0
     for (const t of tasks) {
       total += t.estimatedDuration
     }
+    const head = skipped > 0 ? `清单里已有的 ${skipped} 条不重复加，` : ''
     return {
-      reply: `按你说的，我拆成 ${tasks.length} 个任务，预计约 ${total} 分钟；建议每 30~45 分钟休息 5~10 分钟。`,
+      reply: `${head}这次新增 ${tasks.length} 条，预计约 ${total} 分钟；建议每 30~45 分钟休息 5~10 分钟。`,
       done: true,
       tasks: tasks
     }
+  }
+
+  /** 归一化：去空白与常见标点，只用于"这条是不是已经在清单里了"的比对 */
+  private normTitle(s: string): string {
+    const skip = ' 　，。、；：,.;()（）【】[]·'
+    let out = ''
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charAt(i)
+      if (skip.indexOf(c) < 0) {
+        out += c
+      }
+    }
+    return out
+  }
+
+  /** 这条任务是否已在当前清单里（格式 `科目·标题`；一侧包含另一侧也算） */
+  private alreadyPlanned(subject: string, title: string, existing: string[]): boolean {
+    const key = this.normTitle(`${subject}${title}`)
+    if (key.length === 0) {
+      return false
+    }
+    for (const e of existing) {
+      const k = this.normTitle(e)
+      if (k.length === 0) {
+        continue
+      }
+      if (k === key) {
+        return true
+      }
+      if (k.indexOf(key) >= 0 || key.indexOf(k) >= 0) {
+        return true
+      }
+    }
+    return false
   }
 
   /** 把历史里用户说过的话（奇数下标为 AI）拼成一段目标描述 */
@@ -342,25 +488,40 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     const add = (title: string, subject: string, min: number): void => {
       tasks.push(PlanTask.create(title, subject, min, tasks.length))
     }
-    if (g.indexOf('高数') >= 0 || g.indexOf('数学') >= 0 || g.indexOf('极限') >= 0 || g.indexOf('导数') >= 0) {
+    // 各科目**独立判断**（原来是 else-if 链：聊到"再加上英语"时永远只出第一科，
+    // 追加的科目根本不会出现在候选里）。总量仍控制在 6 条以内，避免越聊越长。
+    const hasMath = g.indexOf('高数') >= 0 || g.indexOf('数学') >= 0 || g.indexOf('极限') >= 0 || g.indexOf('导数') >= 0
+    const hasEnglish = g.indexOf('英语') >= 0 || g.indexOf('单词') >= 0
+    const hasPolitics = g.indexOf('政治') >= 0
+    if (hasMath) {
       add('复习极限章节（定理 + 典型例题）', '高等数学', 30)
       add('完成极限练习题 10 道', '高等数学', 30)
       add('复习导数章节（求导法则）', '高等数学', 30)
       add('完成导数练习题 10 道', '高等数学', 30)
-    } else if (g.indexOf('英语') >= 0 || g.indexOf('单词') >= 0) {
+    }
+    if (hasEnglish) {
       add('背诵 50 个核心单词', '英语', 25)
       add('精读 1 篇阅读理解', '英语', 35)
       add('整理今日生词与长难句', '英语', 20)
-    } else if (g.indexOf('政治') >= 0) {
+    }
+    if (hasPolitics) {
       add('梳理马原第一章框架', '政治', 40)
       add('完成 20 道选择题', '政治', 30)
       add('错题复盘', '政治', 20)
-    } else {
+    }
+    if (!hasMath && !hasEnglish && !hasPolitics) {
       add(`梳理「${g}」的核心概念与框架`, '综合', 40)
       add(`完成「${g}」的专项练习`, '综合', 40)
       add('整理错题与笔记', '综合', 20)
     }
-    return this.scaleToAvailable(tasks, availableMinutes)
+    const capped: PlanTask[] = []
+    for (const t of tasks) {
+      if (capped.length >= 6) {
+        break
+      }
+      capped.push(t)
+    }
+    return this.scaleToAvailable(capped, availableMinutes)
   }
 
   private scaleToAvailable(tasks: PlanTask[], availableMinutes: number): PlanTask[] {
@@ -750,6 +911,15 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
   }
 
   /**
+   * 答疑页开场白。
+   * 用户要求：**短**，大意就是"有问题就问小伴，小伴会一直陪着你"，
+   * 不要出现当前专注任务之类的信息，也不要列"可以怎么问"的清单。
+   */
+  qaIntro(): string {
+    return '有问题就问小伴，小伴会一直陪着你。'
+  }
+
+  /**
    * 生成规划后的时间安排分析（AI 输出，硬规则 §1：动态文案不得写死在页面）。
    * 依据任务科目与预计时长给出分科安排、休息建议与建议总时长。
    */
@@ -790,7 +960,7 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     const main = day.sessionCount > 1 ? `当天最长的一次（当天共 ${day.sessionCount} 次）` : '这一次'
 
     // ① 进入状态要多久
-    let first = `${dayLabel}学习 ${day.studyMinutes} 分钟，净专注率 ${day.focusRate}%`
+    let first = `${dayLabel}累计学习 ${TimeUtils.formatSec(day.studySeconds)}，平均专注率 ${day.focusRate}%`
     if (st.timeToFocus >= 0) {
       first += `，${main}进入状态用了 ${st.timeToFocus} 分钟`
       if (baseline.ready && baseline.timeToFocus >= 0) {
@@ -853,7 +1023,7 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
    */
   daySuggestions(day: DaySummary, baseline: Baseline): string[] {
     const out: string[] = []
-    if (!day.hasData || day.studyMinutes <= 0) {
+    if (!day.hasData || day.studySeconds <= 0) {
       return ['这一天没有有效学习时长，先设一个 25 分钟的小目标开始']
     }
     const st = day.structure
@@ -881,7 +1051,7 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     if (out.length === 0) {
       out.push(ready
         ? `这一天的节奏与你的常态持平或更好（最长连续 ${st.longestRun} 分钟、被打断 ${st.bouts} 次），明天沿用同样的单段时长即可`
-        : `这一天完成了 ${day.studyMinutes} 分钟、最长连续专注 ${st.longestRun} 分钟，先把这个节奏保持住`)
+        : `这一天完成了 ${TimeUtils.formatSec(day.studySeconds)}、最长连续专注 ${st.longestRun} 分钟，先把这个节奏保持住`)
     }
     return out.slice(0, 3)
   }
@@ -892,33 +1062,38 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
   }
 
   /**
-   * 贴合目标的励志标语（离线兜底文案表）。
-   * 网关可用时由 GatewayAIService.slogan() 动态生成；这里只保证断网/未配置时不为空。
+   * 首页语录（离线兜底池）。
+   *
+   * 用户要求：每次打开 App 都换一句、语录库别太小、语气是**鼓励**而不是说教。
+   * 所以这里不是"一种目标一句话"，而是一个**池子**：通用池 + 目标专属池，
+   * 用时间做种子轮转取句，并避开上次展示过的那句。
+   * 网关可用时由 `GatewayAIService.slogan()` 生成更新的，这里保证"断网也不空、也不重"。
+   *
+   * @param avoid 上一次展示过的句子（空串表示不避让）
    */
-  slogan(goalType: string): string {
-    const g = goalType
-    if (g.indexOf('公务员') >= 0 || g.indexOf('公考') >= 0 || g.indexOf('考公') >= 0 || g.indexOf('事业编') >= 0) {
-      return '下一站，上岸'
+  slogan(goalType: string, avoid: string): string {
+    const pool: string[] = []
+    for (const s of GENERAL_SLOGANS) {
+      pool.push(s)
     }
-    if (g.indexOf('研究生') >= 0 || g.indexOf('考研') >= 0) {
-      return '一路生花'
+    for (const s of goalSlogans(goalType)) {
+      pool.push(s)
     }
-    if (g.indexOf('高考') >= 0) {
-      return '星光不负赶路人'
+    if (pool.length === 0) {
+      return '定个目标，稳步推进'
     }
-    if (g.indexOf('期末') >= 0 || g.indexOf('期中') >= 0) {
-      return '稳扎稳打，门门过关'
+    // 用秒级时间做种子轮转：同一次会话内稳定，跨次启动基本必换
+    const idx = Math.floor(Date.now() / 1000) % pool.length
+    let pick = pool[idx]
+    if (pick === avoid) {
+      for (const c of pool) {
+        if (c !== avoid) {
+          pick = c
+          break
+        }
+      }
     }
-    if (g.indexOf('雅思') >= 0 || g.indexOf('托福') >= 0 || g.indexOf('四六级') >= 0) {
-      return '每天都算数'
-    }
-    if (g.indexOf('法考') >= 0 || g.indexOf('司考') >= 0) {
-      return '把法条读成底气'
-    }
-    if (g.indexOf('教资') >= 0 || g.indexOf('教师') >= 0) {
-      return '先站稳讲台下的每一天'
-    }
-    return '定个目标，稳步推进'
+    return pick
   }
 
   nextPlanningQuestion(step: number): string {

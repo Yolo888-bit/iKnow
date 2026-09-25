@@ -13,6 +13,7 @@
     "pages/FocusProfile",
     "pages/Device",
     "pages/Privacy",
+    "pages/PrivacyPolicy",
     "pages/AIChat",
     "pages/Review",
     "pages/About"

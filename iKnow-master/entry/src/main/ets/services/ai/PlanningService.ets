@@ -25,6 +25,14 @@ export interface PlanningDialogInput {
   history?: string[]
   /** 同 PlanningInput.planningContext */
   planningContext?: string
+  /**
+   * 当前清单里**已经存在**的任务（格式 `科目·标题`）。
+   *
+   * 为什么单独传一份结构化的：`planningContext` 里那行"当前今日清单（已存在，请勿重复输出）"
+   * 是给人/模型读的自然语言；本地兜底（Mock）需要**能直接比对**的数据，
+   * 否则它每轮都按累积对话重算整份清单，会把旧任务又列一遍。
+   */
+  existingTasks?: string[]
 }
 
 export interface PlanningDialogResult {

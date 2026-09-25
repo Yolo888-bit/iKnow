@@ -6,6 +6,7 @@ import { DeviceInfo } from '../services/ServiceTypes'
 import { BleWatchService } from '../services/BleWatchService'
 import { CameraService } from '../services/CameraService'
 import { PermissionService } from '../services/PermissionService'
+import { PageHeader } from '../components/PageHeader'
 
 /** 设备连接（含真实 BLE 心率设备 + 设备自检）。模拟状态已移到「专注页 → 模拟状态」。 */
 @Entry
@@ -104,11 +105,8 @@ export struct Device {
   build() {
     Scroll() {
       Column({ space: Spacing.LG }) {
-        Text('设备连接')
-          .fontSize(24)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.TEXT_PRIMARY)
-          .width('100%')
+        // 顶栏：返回箭头 + 居中页面名称（从「我的」点进来，之前没有返回入口）
+        PageHeader({ title: '设备连接' })
 
         Column({ space: Spacing.SM }) {
           ForEach(this.devices, (d: DeviceInfo) => {
@@ -305,9 +303,12 @@ export struct Device {
 
         Blank().height(20)
       }
-      .padding(20)
+      // top 收窄：顶栏的返回箭头要贴着页面顶部
+      .padding({ left: 20, right: 20, top: 6, bottom: 20 })
       .width('100%')
     }
+    // 内容不足一屏时也必须从顶部开始排，不能垂直居中
+    .align(Alignment.Top)
     .backgroundColor(Colors.BG)
     .width('100%')
     .height('100%')

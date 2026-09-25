@@ -9,7 +9,7 @@ import { PlanningInput, PlanningDialogInput } from '../services/ai/PlanningServi
 import { PlanTask } from '../models/StudyPlan'
 import { AIMessage } from '../models/AIMessage'
 import { Task } from '../models/Task'
-import { MessageRole } from '../models/Enums'
+import { MessageRole, TaskStatus } from '../models/Enums'
 import { IdUtils } from '../utils/IdUtils'
 import { Metrics } from '../services/Metrics'
 import { StudyPlan } from '../models/StudyPlan'
@@ -47,6 +47,17 @@ export struct TaskPlanning {
   @State tasks: Task[] = []
   /** 已点击确认（圆圈变实心）的任务 id */
   @State confirmedIds: string[] = []
+  /**
+   * 是否进入「显式勾选」模式。
+   * false：confirmedIds 为空 = 全都选上（AI 刚排完的默认态）；
+   * true ：以 confirmedIds 为准，空数组就是"一条都没选" ——
+   *        跨天带进来的旧任务要靠它表达"候选但未选"。
+   */
+  @State selectInitialized: boolean = false
+  /** 待确认列表里是否有"跨天带进来的旧任务"（有就提示用户勾选） */
+  @State hasLeftover: boolean = false
+  /** 上次模型返回后"新增几条 / 跳过几条"的如实说明 */
+  @State addedNotice: string = ''
   @State thinking: boolean = false
   /** 流式输出中：AI 回复逐段写入 streamingText，流结束后再落到消息列表 */
   @State streaming: boolean = false
@@ -60,6 +71,13 @@ export struct TaskPlanning {
   @State draftSubject: string = ''
   @State draftMinutes: number = 30
   @StorageProp(StorageKey.USER_AVATAR) avatar: string = '🧑‍🎓'
+  /**
+   * 数据版本：别的页面（首页 / 复盘）勾完任务后会自增。
+   *
+   * 规划页是 Tabs 常驻子页，`aboutToAppear` 只跑一次 —— 没有这个 @Watch 的话，
+   * 别处勾掉的任务会一直挂在「待确认任务」里显示成未完成，用户就会觉得"没有同步"。
+   */
+  @StorageProp(StorageKey.DATA_VERSION) @Watch('onDataChanged') dataVersion: number = 0
   private scroller: Scroller = new Scroller()
   /** 传给 AI 的历史对话，按 [user, ai, user, ai, ...] 交替存放 */
   private history: string[] = []
@@ -67,8 +85,13 @@ export struct TaskPlanning {
   private userTexts: string[] = []
   /** 长期计划摘要（来自 study_plan；作为规划的背景参考，随上下文注入提示词） */
   private longPlanText: string = ''
-  /** 本次进入是"新一轮规划"（上一轮已执行过），开场白后补一句说明 */
-  private freshRoundNotice: boolean = false
+  /**
+   * 上次"刷新成新一轮"时的会话条数。
+   * 用来识别"这期间又跑完了一次专注" —— 会话只在 endSession 时新增，
+   * 所以条数变大就说明这一轮计划已经执行完，页面该刷新了。
+   * -1 = 还没建立基线（首次），只记录不刷新。
+   */
+  private sessionCountAtInit: number = -1
 
   aboutToAppear(): void {
     // 徽标要如实反映"这次到底是走大模型还是本地模板"，不能无条件亮绿灯
@@ -78,6 +101,22 @@ export struct TaskPlanning {
     //  · 刚排完、还没开始做 → 增量（"先排高数、再加英语"时，高数那几条不会被冲掉）；
     //  · 已经跑过至少一次专注 → 那一轮已经执行完，这次是**新一轮规划**，
     //    不再把旧清单当作"请勿重复输出"的基准，否则模型会一直以为在上一轮基础上改。
+    this.seedRound()
+    // 记下当前的会话条数当基线：之后条数变大就说明"又跑完了一次专注"，页面该刷新
+    this.sessionCountAtInit = AppStore.getInstance().getSessions().length
+    // 开场只保留这一条问候（原来后面还会追一句"上一轮已经执行过…"，
+    // 用户要求删掉；那些信息改成界面上的提示条，不再占用对话）
+    this.pushAI(AIService.getInstance().planningIntro())
+    this.loadLongPlan()
+  }
+
+  /**
+   * 起一轮规划：按"这一轮是否已经跑过专注"决定「待确认任务」怎么来。
+   *  - 未跑过 → 原样沿用现有计划（"先排高数、再加英语"时，高数那几条不会被冲掉）；
+   *  - 跑过   → 之前**还没做完的**作为候选列出来，且一条都不预勾选
+   *            （`selectInitialized = true` 表达"候选但未选"），勾选了才会加入今天的专注。
+   */
+  private seedRound(): void {
     const store = AppStore.getInstance()
     const used = store.isPlanRoundUsed()
     const existing = store.getCurrentPlan()
@@ -87,16 +126,49 @@ export struct TaskPlanning {
         loaded.push(t.copy())
       }
       this.tasks = loaded
-    } else if (used && existing.length > 0) {
-      this.freshRoundNotice = true
+    } else if (used) {
+      const leftover = store.unfinishedTasks(6, false)
+      if (leftover.length > 0) {
+        this.tasks = leftover
+        this.selectInitialized = true
+        this.confirmedIds = []
+        this.hasLeftover = true
+      }
     }
+  }
+
+  /**
+   * **开一轮全新的规划**（一轮专注结束后调用）。
+   *
+   * 用户要求："每次 AI 规划后专注后，聊天记录不再保留，应该直接刷新成一个新页面"。
+   * 规划页是 Tabs 常驻子页，不清的话上次的对话与清单会一直挂在那儿。
+   * 清成"刚进页面"的样子：只有一句问候 + 重新算出来的候选任务。
+   */
+  private startNewRound(): void {
+    this.messages = []
+    this.turns = 0
+    this.history = []
+    this.userTexts = []
+    this.confirmedIds = []
+    this.selectInitialized = false
+    this.hasLeftover = false
+    this.addedNotice = ''
+    this.tasks = []
+    this.thinking = false
+    this.streaming = false
+    this.streamingText = ''
+    this.showComposer = false
+    this.editId = ''
+    this.inputValue = ''
+    this.seedRound()
+    // 刷新基线：下一轮再比较时要拿"这一刻"的条数
+    this.sessionCountAtInit = AppStore.getInstance().getSessions().length
     this.pushAI(AIService.getInstance().planningIntro())
-    if (this.freshRoundNotice) {
-      // 开场白之后再说"为什么这次列表是空的"：旧计划还在库里，未完成的也会作为背景给到模型
-      this.pushAI('上一轮计划已经执行过了，小伴从新的一份开始排；还没做完的会一并考虑进去。')
-    }
-    // 长期计划：在「复盘 → 长期计划」里设置，这里读出来当背景参考
-    // 走 AppStore.loadPlan()：与工作台/设置页同一个对象（避免读到旧值）
+  }
+
+  /** 长期计划：在「复盘 → 长期计划」里设置，这里读出来当背景参考（不单独占一条对话） */
+  private loadLongPlan(): void {
+    // 走 AppStore.loadPlan()：与设置页同一个对象（避免读到旧值）
     AppStore.getInstance().loadPlan().then((p: StudyPlan | null) => {
       if (p === null || p.title.length === 0) {
         return
@@ -111,11 +183,74 @@ export struct TaskPlanning {
         }
       }
       const subsText = parts.length > 0 ? ` · 各科目标 ${parts.join('、')}` : ''
+      // 只作为规划背景注入提示词，不再单独发一条对话（开场对话只留问候那一条）
       this.longPlanText = `${p.title}${hours}${subsText}`
-      this.pushAI(`你的长期计划是「${this.longPlanText}」，小伴会按这个来安排。`)
     }).catch(() => {
       // 没有长期计划就正常聊，不硬提
     })
+  }
+
+  /**
+   * 数据版本变化：把已经在别处勾选完成的任务从「待确认任务」里摘掉。
+   *
+   * 只做"移除已完成"，**不动**其余任务 —— 用户可能正在编辑时长、已经勾了几条，
+   * 整份重取会把这些操作冲掉。
+   */
+  private onDataChanged(): void {
+    const store = AppStore.getInstance()
+    // ① 会话条数变多 = 这期间又跑完了一次专注 → 上一轮已经执行完，
+    //    聊天记录与待确认清单都不再保留，直接刷新成新一轮（用户明确要求）。
+    const sessionCount = store.getSessions().length
+    if (this.sessionCountAtInit < 0) {
+      this.sessionCountAtInit = sessionCount
+      return
+    }
+    if (sessionCount > this.sessionCountAtInit) {
+      this.sessionCountAtInit = sessionCount
+      this.startNewRound()
+      return
+    }
+
+    // ② 其余数据变化（别处勾选任务等）：只把已完成的从「待确认任务」里摘掉
+    if (this.tasks.length === 0) {
+      return
+    }
+    const doneIds: string[] = []
+    for (const t of store.getTasks()) {
+      if (t.done || t.status === TaskStatus.DONE) {
+        doneIds.push(t.id)
+      }
+    }
+    if (doneIds.length === 0) {
+      return
+    }
+    const next: Task[] = []
+    let removed = false
+    for (const t of this.tasks) {
+      if (doneIds.indexOf(t.id) >= 0) {
+        removed = true
+      } else {
+        next.push(t)
+      }
+    }
+    if (!removed) {
+      return
+    }
+    this.tasks = next
+    // 勾选集合同步收窄，避免"确认并开始"里残留已经不在列表里的 id
+    const kept: string[] = []
+    for (const id of this.confirmedIds) {
+      for (const t of next) {
+        if (t.id === id) {
+          kept.push(id)
+          break
+        }
+      }
+    }
+    this.confirmedIds = kept
+    if (next.length === 0) {
+      this.hasLeftover = false
+    }
   }
 
   // ---------- 消息 ----------
@@ -165,15 +300,23 @@ export struct TaskPlanning {
     this.pushUser(text)
     this.userTexts.push(text)
     this.turns += 1
+    // 上一轮的"新增 N 条"提示已经过期，先清掉
+    this.addedNotice = ''
 
     this.thinking = true
     this.streaming = true
     this.streamingText = ''
+    const existing: string[] = []
+    for (const t of this.tasks) {
+      existing.push(t.subject.length > 0 ? `${t.subject}·${t.title}` : t.title)
+    }
     const input: PlanningDialogInput = {
       step: this.turns - 1,
       userInput: text,
       history: this.history,
-      planningContext: this.buildPlanningContext()
+      planningContext: this.buildPlanningContext(),
+      // 结构化地把"已有清单"给到 AI 层：本地兜底据此只补新增项，不再把旧任务列一遍
+      existingTasks: existing
     }
     // 流式：reply 逐段上屏；结构化结果（done / tasks）等流结束后一起拿到
     const r = await AIService.getInstance().dialogStream(input, (delta: string) => {
@@ -219,13 +362,68 @@ export struct TaskPlanning {
     return out
   }
 
+  /** 标题里出现的数字串（"做10道题" -> "10"）；量不同就是不同的任务，不能算重复 */
+  private numbersIn(t: string): string {
+    let out = ''
+    let cur = ''
+    for (let i = 0; i < t.length; i++) {
+      const c = t.charAt(i)
+      if (c >= '0' && c <= '9') {
+        cur += c
+      } else if (cur.length > 0) {
+        out += cur + ','
+        cur = ''
+      }
+    }
+    if (cur.length > 0) {
+      out += cur
+    }
+    return out
+  }
+
   /**
-   * 去重键 = **科目 + 归一化标题**。
-   * 只比标题是不够的：不同科目下会出现同名任务（"第一章习题"），
-   * 只比标题会把英语的这条误判成"已经有了"而静默丢掉。
+   * 两条任务是不是"同一件事"。
+   *
+   * 只用 (科目|标题) 精确相等，是拦不住模型**换个说法重排**的
+   * （"做 10 道级数题" -> "做 10 道级数习题"）：这时旧任务会被再加一遍，
+   * 用户在「待确认任务」里就看到重复项。所以补一层**保守**的模糊判定：
+   *   1. 科目 + 标题归一化后都相等 -> 同一条；
+   *   2. 标题归一化后相等，且科目相同或有一边为空 -> 同一条；
+   *   3. **数字不同就直接判为不同**（"背 50 个单词" != "背 30 个单词"）——
+   *      这是最容易误伤的一类，先挡掉；
+   *   4. 长度接近（>=0.7）且字符重合度 >=0.8 -> 同一条。
+   * 阈值刻意取高：宁可漏判重复，也不要把"级数题"和"微分题"这种真的不同的任务吞掉。
    */
-  private taskKey(subject: string, title: string): string {
-    return `${this.titleKey(subject)}|${this.titleKey(title)}`
+  private isSameTask(subjectA: string, titleA: string, subjectB: string, titleB: string): boolean {
+    const sa = this.titleKey(subjectA)
+    const sb = this.titleKey(subjectB)
+    const ta = this.titleKey(titleA)
+    const tb = this.titleKey(titleB)
+    if (sa === sb && ta === tb) {
+      return true
+    }
+    if (ta.length === 0 || tb.length === 0) {
+      return false
+    }
+    if (ta === tb && (sa === sb || sa.length === 0 || sb.length === 0)) {
+      return true
+    }
+    // 量不同 = 不同任务，避免把"50 个单词"和"30 个单词"合并成一条
+    if (this.numbersIn(ta) !== this.numbersIn(tb)) {
+      return false
+    }
+    const maxLen = Math.max(ta.length, tb.length)
+    const minLen = Math.min(ta.length, tb.length)
+    if (maxLen === 0 || minLen / maxLen < 0.7) {
+      return false
+    }
+    let hit = 0
+    for (let i = 0; i < ta.length; i++) {
+      if (tb.indexOf(ta.charAt(i)) >= 0) {
+        hit += 1
+      }
+    }
+    return hit / maxLen >= 0.8
   }
 
   /**
@@ -237,34 +435,44 @@ export struct TaskPlanning {
    */
   private applyPlan(list: PlanTask[]): void {
     const next: Task[] = this.tasks.slice()
-    const keys: string[] = []
-    for (const t of next) {
-      keys.push(this.taskKey(t.subject, t.title))
-    }
     const addedIds: string[] = []
+    let dupCount = 0
     for (const p of list) {
-      const k = this.taskKey(p.subject, p.title)
-      if (keys.indexOf(k) >= 0) {
+      let dup = false
+      for (const t of next) {
+        if (this.isSameTask(t.subject, t.title, p.subject, p.title)) {
+          dup = true
+          break
+        }
+      }
+      if (dup) {
+        dupCount += 1
         continue
       }
       const t = this.toTask(p)
       t.sortOrder = next.length
-      keys.push(k)
       next.push(t)
       addedIds.push(t.id)
     }
     if (addedIds.length === 0) {
+      // 模型把整份清单又输出了一遍：如实说明"没有新增"，而不是静默无反应
+      if (dupCount > 0) {
+        this.addedNotice = `这 ${dupCount} 条清单里已经有了，没有重复加进「待确认任务」。`
+      }
       return
     }
     this.tasks = next
-    // 已经点过圆圈 = 进入了"显式选择"模式，新增项默认也选中
-    if (this.confirmedIds.length > 0) {
-      const merged: string[] = this.confirmedIds.slice()
-      for (const id of addedIds) {
-        merged.push(id)
-      }
-      this.confirmedIds = merged
+    // 新增项一律并入勾选集合；同时进入「显式勾选」模式，
+    // 这样跨天带进来的旧候选（未勾选）不会被"空数组 = 全选"的旧语义误选中
+    this.selectInitialized = true
+    const merged: string[] = this.confirmedIds.slice()
+    for (const id of addedIds) {
+      merged.push(id)
     }
+    this.confirmedIds = merged
+    this.addedNotice = dupCount > 0
+      ? `新增 ${addedIds.length} 条；另外 ${dupCount} 条清单里已经有了，已跳过。`
+      : `新增 ${addedIds.length} 条任务。`
   }
 
   private composeGoal(): string {
@@ -433,12 +641,11 @@ export struct TaskPlanning {
       const next: Task[] = this.tasks.slice()
       next.push(t)
       this.tasks = next
-      // 已经点过圆圈 = 进入了显式选择模式，新增项默认也选中（否则「确认并开始」会把它静默丢掉）
-      if (this.confirmedIds.length > 0) {
-        const merged: string[] = this.confirmedIds.slice()
-        merged.push(t.id)
-        this.confirmedIds = merged
-      }
+      // 新增项默认选中（否则「确认并开始」会把它静默丢掉）
+      this.selectInitialized = true
+      const merged: string[] = this.confirmedIds.slice()
+      merged.push(t.id)
+      this.confirmedIds = merged
       this.editId = ''
       return
     }
@@ -492,7 +699,9 @@ export struct TaskPlanning {
 
   // ---------- 底部：预计时长 / 开始专注 ----------
   private selectedTasks(): Task[] {
-    if (this.confirmedIds.length === 0) {
+    // 只有"还没进入显式勾选模式"时，空集合才代表全选；
+    // 跨天带进来的候选是"显式勾选模式 + 空集合" = 一条都没选，必须等用户自己勾。
+    if (!this.selectInitialized) {
       return this.tasks
     }
     const out: Task[] = []
@@ -514,8 +723,12 @@ export struct TaskPlanning {
 
   private async confirmStart(): Promise<void> {
     const selected = this.selectedTasks()
+    // 一条都没选（清单里全都取消勾选）= 用户想直接开始，**不该被拦住**。
+    // 原来的实现会弹「至少保留一个任务」，于是"我今天的任务都做完了，想随便学一会儿"
+    // 这种再正常不过的场景直接走不下去。改为走「自由专注」通道：
+    //   本次会话不挂任何任务，且**不动已保存的今日计划**（否则会把清单清空）。
     if (selected.length === 0) {
-      promptAction.showToast({ message: '至少保留一个任务' })
+      await this.startFreeFocus()
       return
     }
     // 上一段会话仍在跑：先落库再载入新计划，避免幽灵会话静默吞掉新计划（E4）
@@ -539,15 +752,45 @@ export struct TaskPlanning {
     router.pushUrl({ url: 'pages/Focus' })
   }
 
-  /** 跳过规划：不聊天、不生成任务，直接带着已有计划（没有则自由专注）开始 */
+  /**
+   * 以「自由专注」开始：本次会话**不挂任何任务**。
+   *
+   * 与「跳过规划」同一条通道（`FOCUS_FREE_REQUEST`），区别只是入口不同：
+   * 一个是没有清单时直接开始，一个是清单里一条都没勾（比如今天都做完了）。
+   * ⚠️ 刻意**不调用 `setCurrentPlan([])` / `persistPlan([])`** ——
+   * 用户只是"这次不想挂任务"，不该把已保存的计划清空。
+   */
+  private async startFreeFocus(): Promise<void> {
+    if (FocusController.getInstance().isRunning()) {
+      try {
+        await AppStore.getInstance().endSession()
+      } catch (e) {
+        hilog.error(0x0000, 'iKnow.Planning', '结束上一段会话出错，仍继续自由专注：%{public}s', e.message)
+      }
+    }
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_FREE_REQUEST, 1)
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
+    router.pushUrl({ url: 'pages/Focus' })
+  }
+
+  /**
+   * 跳过规划：不聊天、不生成任务，**这次以自由专注开始**（不挂任何任务）。
+   *
+   * 之前这里是"带着已有计划开始"，于是今日计划里那些（可能已全部完成的）任务
+   * 会跟着进会话，专注页照样出现「今日任务」一块 —— 用户的原话是
+   * "跳过规划直接专注的时候，专注页不应该有今日任务模块"。
+   * 注意：**只影响这一次会话**，今日计划本身不动，首页照旧显示。
+   */
   private skipPlanning(): void {
     if (this.thinking) {
       return
     }
     if (FocusController.getInstance().isRunning()) {
+      // 已有会话在跑：直接进去继续，不改变它的任务
       router.pushUrl({ url: 'pages/Focus' })
       return
     }
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_FREE_REQUEST, 1)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
     router.pushUrl({ url: 'pages/Focus' })
   }
@@ -556,15 +799,10 @@ export struct TaskPlanning {
   @Builder
   header() {
     Row() {
-      // 左：品牌（固定占位，保证中间标题真正居中）
+      // 左：等宽占位（不显示文字，仅用来让中间标题真正居中，与右侧头像同宽）
       Row() {
-        Text('iKnow')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.PRIMARY_DARK)
-          .fontStyle(FontStyle.Italic)
       }
-      .width(58)
+      .width(74)
       .justifyContent(FlexAlign.Start)
 
       // 中：标题 + 在线徽标
@@ -591,11 +829,11 @@ export struct TaskPlanning {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Center)
 
-      // 右：用户头像
+      // 右：用户头像（与左侧同宽，标题才是真居中）
       Row() {
         UserAvatar({ avatar: this.avatar, diameter: 38, radius: 10, bg: Colors.PRIMARY_SOFT })
       }
-      .width(58)
+      .width(74)
       .justifyContent(FlexAlign.End)
     }
     .width('100%')
@@ -606,17 +844,22 @@ export struct TaskPlanning {
   @Builder
   aiBubble(content: string) {
     Row({ space: 10 }) {
-      // AI 头像：深色圆 + "AI"
+      // 考伴头像：深色圆角块 + 品牌字「iKnow」
+      // 用户要求：不要写「AI」，直接用 iKnow —— 小伴本来就叫 iKnow，标 AI 反而像外挂。
+      // 做成圆角方块（不是圆）：圆的可用宽度只有直径的 ~0.7 倍，5 个字母会被挤到换行。
       Stack() {
-        Circle()
-          .width(34)
-          .height(34)
-          .fill(Colors.AI_AVATAR_BG)
-        Text('AI')
-          .fontSize(13)
+        Text('iKnow')
+          .fontSize(10)
           .fontWeight(FontWeight.Bold)
+          .fontStyle(FontStyle.Italic)
           .fontColor(Color.White)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Clip })
       }
+      .width(38)
+      .height(38)
+      .backgroundColor(Colors.AI_AVATAR_BG)
+      .borderRadius(11)
       Text(content)
         .fontSize(15)
         .fontColor(Colors.TEXT_PRIMARY)
@@ -741,6 +984,32 @@ export struct TaskPlanning {
         .width('100%')
         .textAlign(TextAlign.Center)
         .margin({ top: 6, bottom: this.tasks.length === 0 ? 6 : 16 })
+
+      // 说明条：这些内容原本是对话里的第二、三条消息，用户要求开场只留一句问候，
+      // 所以挪到这里当提示，既不占对话、又不会让用户对空清单摸不着头脑。
+      // 只在**确实列出了未完成任务**时才显示 —— 没有旧任务就什么都不说
+      // （用户明确要求：没有未完成任务时不要出现这行绿字）。
+      if (this.hasLeftover) {
+        Text('下面是你还没做完的任务，请选择是否加入当前专注')
+          .fontSize(11)
+          .fontColor(Colors.PRIMARY_DARK)
+          .lineHeight(16)
+          .width('100%')
+          .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+          .backgroundColor(Colors.PRIMARY_SOFT)
+          .borderRadius(Radius.SM)
+          .margin({ bottom: 12 })
+      }
+
+      if (this.addedNotice.length > 0) {
+        Text(this.addedNotice)
+          .fontSize(11)
+          .fontColor(Colors.TEXT_TERTIARY)
+          .lineHeight(16)
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .margin({ bottom: 10 })
+      }
 
       // 还没有任务时把 AI 摆在前头：这一页的主路径本来就是"聊两句就排好"，
       // 手动新建是给"我心里已经很清楚要做什么"的人留的次要出路。
@@ -966,7 +1235,9 @@ export struct TaskPlanning {
             .fontColor(Color.White)
             .fontWeight(FontWeight.Bold)
         }
-        Text(`进入 ${this.plannedMinutes()} 分钟专注学习`)
+        Text(this.selectedTasks().length === 0
+          ? '直接进入自由专注'
+          : `进入 ${this.plannedMinutes()} 分钟专注学习`)
           .fontSize(14)
           .fontColor(Colors.TEXT_PRIMARY)
       }
@@ -984,7 +1255,9 @@ export struct TaskPlanning {
           this.confirmStart()
         })
 
-      Text('学习过程中会提醒你节奏与复盘节点')
+      Text(this.selectedTasks().length === 0
+        ? '本次不挂任务，清单会留在「今日任务」里，之后随时可以接着做'
+        : '学习过程中会提醒你节奏与复盘节点')
         .fontSize(12)
         .fontColor(Colors.TEXT_TERTIARY)
         .margin({ top: 10 })

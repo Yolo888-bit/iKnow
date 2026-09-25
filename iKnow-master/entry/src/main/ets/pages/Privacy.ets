@@ -1,9 +1,11 @@
-import { promptAction } from '@kit.ArkUI'
+import { promptAction, router } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
-import { StorageKey } from '../common/Constants'
+import { StorageKey, PrivacyDoc } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { StorageService } from '../services/StorageService'
+import { AuthService } from '../services/AuthService'
 import { PermissionService } from '../services/PermissionService'
+import { PageHeader } from '../components/PageHeader'
 
 /**
  * 隐私与数据（合规：如实说明数据流向 + 数据管理）
@@ -20,6 +22,7 @@ import { PermissionService } from '../services/PermissionService'
 @Component
 export struct Privacy {
   @State showClearConfirm: boolean = false
+  @State showWithdrawConfirm: boolean = false
   @State vibrateOn: boolean = true
   @State voiceOn: boolean = true
   /** 麦克风（语音输入）的系统授权状态：只读展示，不再做成"假开关" */
@@ -53,15 +56,77 @@ export struct Privacy {
     })
   }
 
+  /** 打开《用户服务协议》/《隐私政策》原文（0 = 协议，1 = 政策） */
+  private openDoc(tab: number): void {
+    AppStorage.setOrCreate<number>(PrivacyDoc.TAB_REQUEST, tab)
+    router.pushUrl({ url: 'pages/PrivacyPolicy' })
+  }
+
+  /**
+   * 撤回隐私授权。
+   *
+   * 只清"同意留痕"，**不删数据、也不强制退出登录** —— 数据删不删由用户自己在上面单独决定；
+   * 撤回的效果是：下次登录时必须重新阅读并勾选同意（符合"撤回同意"的合规要求）。
+   */
+  private doWithdrawConsent(): void {
+    this.showWithdrawConfirm = false
+    AuthService.getInstance().withdrawConsent().then(() => {
+      promptAction.showToast({ message: '已撤回授权，下次登录需重新勾选同意' })
+    }).catch(() => {
+      promptAction.showToast({ message: '撤回失败，请重试' })
+    })
+  }
+
   build() {
     Stack() {
       Scroll() {
         Column({ space: Spacing.LG }) {
-          Text('隐私与数据')
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Colors.TEXT_PRIMARY)
+          // 顶栏：返回箭头 + 居中页面名称（从「我的 → 隐私 / 数据管理」点进来）
+          PageHeader({ title: '隐私与数据' })
+
+          // 隐私保护说明（《用户服务协议》+《隐私政策》原文）
+          // 与登录页的勾选项指向**同一份文档**，避免两处说法不一致
+          Column() {
+            Text('隐私保护说明')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .width('100%')
+
+            Text(`《${PrivacyDoc.AGREEMENT}》与《${PrivacyDoc.POLICY}》原文，登录时勾选的就是这一份。\n`
+              + `当前版本 v${PrivacyDoc.VERSION}，生效日期 ${PrivacyDoc.EFFECTIVE}。`)
+              .fontSize(12)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(20)
+              .width('100%')
+              .margin({ top: 10 })
+
+            Row({ space: 10 }) {
+              Button(`《${PrivacyDoc.POLICY}》`)
+                .layoutWeight(1)
+                .height(44)
+                .fontSize(14)
+                .fontColor(Colors.PRIMARY_DARK)
+                .backgroundColor(Colors.PRIMARY_SOFT)
+                .borderRadius(Radius.MD)
+                .onClick(() => {
+                  this.openDoc(1)
+                })
+              Button(`《${PrivacyDoc.AGREEMENT}》`)
+                .layoutWeight(1)
+                .height(44)
+                .fontSize(14)
+                .fontColor(Colors.TEXT_PRIMARY)
+                .backgroundColor(Colors.BG)
+                .borderRadius(Radius.MD)
+                .onClick(() => {
+                  this.openDoc(0)
+                })
+            }
             .width('100%')
+            .margin({ top: 14 })
+          }
+          .privacyCard()
 
           // 摄像头数据
           Column() {
@@ -197,11 +262,44 @@ export struct Privacy {
           }
           .privacyCard()
 
+          // 隐私授权撤回
+          Column() {
+            Text('隐私授权')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .width('100%')
+
+            Text('撤回后，下次登录需要重新阅读并勾选《用户服务协议》与《隐私政策》。\n'
+              + '本机已保存的数据不会被删除，如需清除请用上方对应按钮。')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(20)
+              .width('100%')
+              .margin({ top: 10 })
+
+            Button('撤回隐私授权')
+              .width('100%')
+              .height(46)
+              .fontSize(15)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .backgroundColor(Colors.CARD)
+              .borderRadius(Radius.MD)
+              .margin({ top: 12 })
+              .onClick(() => {
+                this.showWithdrawConfirm = true
+              })
+          }
+          .privacyCard()
+
           Blank().height(20)
         }
-        .padding(20)
+        // top 收窄：顶栏的返回箭头要贴着页面顶部
+        .padding({ left: 20, right: 20, top: 6, bottom: 20 })
         .width('100%')
       }
+      // 内容不足一屏时也必须从顶部开始排，不能垂直居中
+      .align(Alignment.Top)
       .width('100%')
       .height('100%')
 
@@ -238,6 +336,56 @@ export struct Privacy {
                 .borderRadius(Radius.MD)
                 .onClick(() => {
                   this.doClearAll()
+                })
+            }
+            .margin({ top: 20 })
+          }
+          .width('82%')
+          .padding(24)
+          .backgroundColor(Colors.CARD)
+          .borderRadius(Radius.LG)
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#66000000')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      }
+
+      // 撤回授权确认（与清除数据的弹窗同一套写法，遮罩在下、面板在上）
+      if (this.showWithdrawConfirm) {
+        Column() {
+          Column() {
+            Text('撤回隐私授权？')
+              .fontSize(17)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Text('撤回后，下次登录需要重新阅读并勾选同意。已保存的数据不会被删除。')
+              .fontSize(14)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(21)
+              .margin({ top: 8 })
+
+            Row({ space: 12 }) {
+              Button('取消')
+                .layoutWeight(1)
+                .height(44)
+                .fontSize(15)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .backgroundColor(Colors.BG)
+                .borderRadius(Radius.MD)
+                .onClick(() => {
+                  this.showWithdrawConfirm = false
+                })
+              Button('确认撤回')
+                .layoutWeight(1)
+                .height(44)
+                .fontSize(15)
+                .fontColor(Colors.PRIMARY_DARK)
+                .backgroundColor(Colors.PRIMARY_SOFT)
+                .borderRadius(Radius.MD)
+                .onClick(() => {
+                  this.doWithdrawConsent()
                 })
             }
             .margin({ top: 20 })

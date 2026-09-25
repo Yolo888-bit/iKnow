@@ -209,6 +209,10 @@ export class StorageService {
         if (typeof p.sec !== 'number' || p.sec < 0) {
           p.sec = p.minute * 60
         }
+        // 旧记录也没有 atMs（绝对时刻）：回填 0，让复盘图知道"这条记录排不出真实时间轴"
+        if (typeof p.atMs !== 'number' || p.atMs < 0) {
+          p.atMs = 0
+        }
       }
       return a
     } catch (e) {
@@ -496,6 +500,22 @@ export class StorageService {
       'created_at': q.createdAt
     }
     await this.store.insert('question', v, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE)
+  }
+
+  /**
+   * 删掉某次会话的全部答疑记录。
+   *
+   * 为什么要单独有这个：答疑是**问答产生时立即落库**的（离开答疑页也不丢），
+   * 所以「直接结束（丢弃本次专注）」必须把它们一并清掉 ——
+   * 否则库里会留下一次"已经不算数"的专注的问答，与"不记录任何数据"矛盾。
+   */
+  async deleteQuestions(sessionId: string): Promise<void> {
+    if (sessionId.length === 0) {
+      return
+    }
+    const p = new relationalStore.RdbPredicates('question')
+    p.equalTo('session_id', sessionId)
+    await this.store.delete(p)
   }
 
   // ---------- 手表事件 & 观察记录 ----------

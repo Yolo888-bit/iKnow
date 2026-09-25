@@ -13,6 +13,27 @@ export class TimeUtils {
     return `${m}min`
   }
 
+  /**
+   * 秒 → "1h 2min 36s" / "2min 36s" / "36s"（**统计用，精确到秒**）。
+   *
+   * 为什么不用 `formatHMin`：它只到分钟，于是"本次专注 39 秒"会显示成 `0min` ——
+   * 测试和短时专注里看起来就像没数据。凡是**展示一段时长**的地方都用这个，
+   * 只用小时量级的长期累计（"近 30 天累计 12h 30min"）才用 `formatHMin`。
+   */
+  static formatSec(seconds: number): string {
+    const s = Math.max(0, Math.round(seconds))
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    const sec = s % 60
+    if (h > 0) {
+      return `${h}h ${m}min ${sec}s`
+    }
+    if (m > 0) {
+      return `${m}min ${sec}s`
+    }
+    return `${sec}s`
+  }
+
   /** 秒 → "42:36" 或 "1:17:36"（用于大号倒计时） */
   static formatClock(seconds: number): string {
     const s = Math.max(0, Math.floor(seconds))

@@ -2,6 +2,7 @@ import { router } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { AppStore } from '../store/AppStore'
 import { Metrics, PracticeDetailItem } from '../services/Metrics'
+import { PageHeader } from '../components/PageHeader'
 
 /**
  * 练习内容明细 —— 长期视图里「练习内容总结」点开后看完整列表。
@@ -87,11 +88,8 @@ export struct PracticeDetail {
   build() {
     Scroll() {
       Column({ space: Spacing.MD }) {
-        Text('练习内容明细')
-          .fontSize(24)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.TEXT_PRIMARY)
-          .width('100%')
+        // 顶栏：返回箭头 + 居中页面名称（从复盘页「练习内容总结」点进来，之前没有返回入口）
+        PageHeader({ title: '练习内容明细' })
         Text(`共 ${this.items.length} 项已完成任务，按学科列出，右侧是最近完成时间`)
           .fontSize(12)
           .fontColor(Colors.TEXT_SECONDARY)
@@ -111,9 +109,12 @@ export struct PracticeDetail {
 
         Blank().height(20)
       }
-      .padding(20)
+      // top 收窄：顶栏的返回箭头要贴着页面顶部
+      .padding({ left: 20, right: 20, top: 6, bottom: 20 })
       .width('100%')
     }
+    // 内容不足一屏时也必须从顶部开始排，不能垂直居中
+    .align(Alignment.Top)
     .backgroundColor(Colors.BG)
     .width('100%')
     .height('100%')

@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
+import { AIService } from '../services/AIService'
 import { PermissionService } from '../services/PermissionService'
 import { FocusController } from '../services/FocusController'
 import { Task } from '../models/Task'
@@ -53,6 +54,8 @@ export struct Home {
   @State greeting: string = ''
   /** 今日任务是否展开（可折叠） */
   @State tasksExpanded: boolean = true
+  /** 首页顶部的动态语录（贴任务、每次启动换一句） */
+  @State slogan: string = ''
   /** 目标日期文案（目标总览里展示） */
   @State targetDateText: string = ''
 
@@ -61,9 +64,11 @@ export struct Home {
   }
 
   refreshPlan(): void {
-    // 今日任务：**已完成置顶、未完成自动沉底**；同组内保持原有顺序（稳定分桶，
-    // 不改变用户/AI 排好的先后）。必须新建数组：赋同一个引用不会触发 @State 重绘。
-    const source = AppStore.getInstance().getCurrentPlan()
+    // 今日任务：**未完成置顶、已完成沉底**（未完成的优先级更高，先摆在眼前）；
+    // 同组内保持原有顺序（稳定分桶，不改变用户/AI 排好的先后）。
+    // 必须新建数组：赋同一个引用不会触发 @State 重绘。
+    // 今日任务 = 今天排过的**全部**任务（不是只看最新一轮），详见 AppStore.todayTasks()
+    const source = AppStore.getInstance().todayTasks()
     const todo: Task[] = []
     const finished: Task[] = []
     for (const t of source) {
@@ -73,19 +78,23 @@ export struct Home {
         todo.push(t)
       }
     }
-    this.plan = finished.concat(todo)
+    this.plan = todo.concat(finished)
 
     const goal = AppStore.getInstance().getGoal()
     this.examType = goal.examType
 
-    // 今日数据：直接读 store 里已经算好的聚合结果（权威值），不看镜像
-    const d = AppStore.getInstance().getDashboard()
-    this.dashTodayFocus = d.todayFocusSeconds
-    this.dashRate = d.focusRate
-    this.dashDone = d.todayCompletedTasks
-    this.dashTotal = d.todayTotalTasks
+    // 今日数据：**现算**（`todayStats()` 每次都重新统计，不读 dashboard 快照）。
+    // 为什么不读快照：只要有任意一条路径改了内存里的计划/会话却没触发重算，
+    // 读快照就会一直显示旧值 —— 实测出现的就是"今日任务 3/5，今日数据里完成率却是 —"。
+    // 现算之后，这里和上面「今日任务」卡片看的是同一份数据，不可能再对不上。
+    const t = AppStore.getInstance().todayStats()
+    this.dashTodayFocus = t.focusSeconds
+    this.dashRate = t.focusRate
+    this.dashDone = t.doneTasks
+    this.dashTotal = t.totalTasks
     this.completionRate = this.dashTotal > 0 ? Math.round(this.dashDone / this.dashTotal * 100) : 0
     this.greeting = TimeUtils.greeting(Date.now())
+    this.loadSlogan()
     if (goal.targetDate > 0) {
       const gd = new Date(goal.targetDate)
       this.targetDateText = `${gd.getFullYear()} 年 ${gd.getMonth() + 1} 月 ${gd.getDate()} 日`
@@ -110,12 +119,41 @@ export struct Home {
    * 走 AppStore.toggleTaskDone：落库 + 重算聚合 → 今日数据里的完成率、工作台进度都会跟着变。
    */
   private async toggleTask(id: string): Promise<void> {
-    await AppStore.getInstance().toggleTaskDone(id)
+    try {
+      await AppStore.getInstance().toggleTaskDone(id)
+    } catch (e) {
+      // 落库异常也要继续刷新，否则表现为"勾了没反应"
+    }
     this.refreshPlan()
   }
 
   private displayName(): string {
     return this.nickname.length > 0 ? this.nickname : '同学'
+  }
+
+  /**
+   * 首页语录。
+   *
+   * 先用本地语录池**立即上屏**（首屏不留空白），再用大模型换成更贴合的；
+   * 上一次启动展示过的那句会传下去做避让，保证"每次打开都换一句"。
+   * 同一进程内 AIService 会缓存，重复调用不会反复打网关。
+   */
+  private async loadSlogan(): Promise<void> {
+    const store = AppStore.getInstance()
+    const goal = store.getGoal()
+    this.slogan = AIService.getInstance().localSlogan(goal.examType)
+    try {
+      const last = await store.lastSlogan()
+      const s = await AIService.getInstance().slogan(goal.examType, this.examDays, last)
+      if (s.length > 0) {
+        this.slogan = s
+      }
+      if (this.slogan.length > 0) {
+        await store.rememberSlogan(this.slogan)
+      }
+    } catch (e) {
+      // 语录拿不到就用本地那句，不影响首页其它内容
+    }
   }
 
   /** 目标总览脚下那行提示：没填日期时换一种说法，填了就给倒计时 */
@@ -208,6 +246,9 @@ export struct Home {
     if (!FocusController.getInstance().isRunning()) {
       // 只有主动开始才允许 Focus 页新开会话（会话在跑则直接进去继续）
       AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
+      // 标记「从首页进入」：本次会话默认只挂未完成任务、不带入已完成的
+      // （已完成项仍留在首页「今日任务」，只是这次不重复挂上）。仅新开会话时生效。
+      AppStorage.setOrCreate<number>(StorageKey.FOCUS_HOME_INCOMPLETE_REQUEST, 1)
     }
     router.pushUrl({ url: 'pages/Focus' })
   }
@@ -278,10 +319,13 @@ export struct Home {
               .fontWeight(FontWeight.Bold)
               .fontColor(Colors.TEXT_PRIMARY)
               .width('100%')
-            Text('今天也一起稳稳推进吧')
-              .fontSize(13)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .margin({ top: 6 })
+            // 动态语录：贴近"今天怎么做"，每次启动换一句（见 loadSlogan）
+            Text(this.slogan.length > 0 ? this.slogan : '先坐下来，再谈状态')
+              .fontSize(15)
+              .fontColor(Colors.PRIMARY_DARK)
+              .margin({ top: 8 })
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
               .width('100%')
           }
           .alignItems(HorizontalAlign.Start)
@@ -389,44 +433,72 @@ export struct Home {
           .borderRadius(Radius.MD)
         }
 
-        // 今日任务：与其他模块同款卡片（标题左右对齐一致），勾选即完成并同步进度
+        // 今日任务（标题后带「去规划 ›」胶囊入口）。
+        // 规划入口原先在页面最下面单开一张卡，但它和「今日任务」说的是同一件事
+        // —— 今天要做什么 —— 所以收进这张卡片的标题行，点胶囊跳 AI 规划页。
+        //
+        // ⚠️ **首页这张卡片常驻显示**，没有任务时给空态指引，不隐藏。
+        // "没有任务就不显示"只针对**专注页**：自由专注（跳过规划）时那次会话没有任务，
+        // 不该在计时界面上挂一块空的「今日任务」；首页是总览，必须始终看得见入口。
         Column() {
           Row() {
             Text('今日任务')
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.TEXT_PRIMARY)
+
+            // 「去规划 ›」小胶囊：紧跟在标题后面，点了跳 AI 规划页（改时长、加任务都在那边）。
+            // 实心块用 PRIMARY_STRONG 而不是 PRIMARY —— 品牌绿偏亮，压白字只有约 2.2:1 对比度。
+            Row() {
+              Text('去规划')
+                .fontSize(11)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Color.White)
+              Text('›')
+                .fontSize(12)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Color.White)
+                .margin({ left: 3 })
+            }
+            .padding({ left: 8, right: 7, top: 3, bottom: 3 })
+            .backgroundColor(Colors.PRIMARY_STRONG)
+            .borderRadius(9)
+            .margin({ left: 8 })
+            .onClick(() => {
+              this.openAIPlanning()
+            })
+
             Blank()
             Text(this.plan.length === 0
               ? '待规划'
               : `${this.planDone()} / ${this.plan.length} 已完成`)
-              .fontSize(13)
-              .fontColor(Colors.TEXT_SECONDARY)
-            // 折叠开关：任务多的时候可以收起来
-            Text(this.tasksExpanded ? '收起 ▴' : '展开 ▾')
               .fontSize(12)
-              .fontColor(Colors.PRIMARY_DARK)
-              .margin({ left: 10 })
+              .fontColor(Colors.TEXT_SECONDARY)
+              .maxLines(1)
+            // 折叠开关：任务多的时候可以收起来；没有任务时它没有意义
+            if (this.plan.length > 0) {
+              Text(this.tasksExpanded ? '收起 ▴' : '展开 ▾')
+                .fontSize(11)
+                .fontColor(Colors.PRIMARY_DARK)
+                .maxLines(1)
+                .margin({ left: 10 })
+            }
           }
           .width('100%')
           .margin({ bottom: 12 })
           .onClick(() => {
-            this.tasksExpanded = !this.tasksExpanded
+            // 空态没有可折叠的内容，点标题行不做事（要规划就点「去规划」胶囊）
+            if (this.plan.length > 0) {
+              this.tasksExpanded = !this.tasksExpanded
+            }
           })
 
           if (this.plan.length === 0) {
-            Column() {
-              Text('还没有今日计划')
-                .fontSize(15)
-                .fontColor(Colors.TEXT_PRIMARY)
-              Text('可以直接开始自由专注，或帮你拆一份任务')
-                .fontSize(13)
-                .fontColor(Colors.TEXT_SECONDARY)
-                .margin({ top: 6 })
-            }
-            .width('100%')
-            .padding({ top: 8, bottom: 8 })
-            .alignItems(HorizontalAlign.Start)
+            Text('还没有今日计划，点「去规划」让小伴帮你拆一份')
+              .fontSize(13)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(20)
+              .width('100%')
           } else if (!this.tasksExpanded) {
             Text(`已收起 ${this.plan.length} 个任务，点右上角展开`)
               .fontSize(12)
@@ -434,7 +506,8 @@ export struct Home {
               .width('100%')
               .padding({ top: 4, bottom: 4 })
           } else {
-            Column({ space: Spacing.SM }) {
+            // 间距刻意压到 6：任务条本身有内边距，用 8 以上会显得一屏放不下几条
+            Column({ space: 6 }) {
               ForEach(this.plan, (task: Task) => {
                 TaskCard({
                   title: task.title,
@@ -443,10 +516,10 @@ export struct Home {
                   done: task.done,
                   showCheckbox: true,
                   onToggle: () => {
-                    AppStore.getInstance().togglePlanTask(task.id)
-                    // 必须 slice 出新数组：赋同一个引用不会触发 @State 重绘（勾选状态不更新）
-                    this.plan = AppStore.getInstance().getCurrentPlan().slice()
-                    this.refreshPlan()
+                    // 走 toggleTaskDone：落库 + 重算统计 + 自增 DATA_VERSION，
+                    // 首页 / AI 规划页 / 复盘页才会一起跟着变
+                    //（原来这里是只改内存的 togglePlanTask，勾了等于没勾）
+                    this.toggleTask(task.id)
                   }
                 })
               }, (task: Task) => `${task.id}_${task.done ? 1 : 0}`)
@@ -495,40 +568,6 @@ export struct Home {
           .onClick(() => {
             this.startFocus()
           })
-
-        // 次级入口：AI 规划（不抢主按钮位置）
-        Row() {
-          Text('🤖')
-            .fontSize(18)
-            .width(36)
-            .height(36)
-            .textAlign(TextAlign.Center)
-            .backgroundColor(Colors.CARD)
-            .borderRadius(18)
-          Column() {
-            Text('规划今天的学习')
-              .fontSize(15)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.TEXT_PRIMARY)
-            Text('按目标拆一份今日任务')
-              .fontSize(12)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .margin({ top: 2 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .margin({ left: 12 })
-          .layoutWeight(1)
-          Text('›')
-            .fontSize(20)
-            .fontColor(Colors.PRIMARY_DARK)
-        }
-        .width('100%')
-        .padding(14)
-        .backgroundColor(Colors.CARD)
-        .borderRadius(Radius.MD)
-        .onClick(() => {
-          this.openAIPlanning()
-        })
 
         Blank().height(20)
       }

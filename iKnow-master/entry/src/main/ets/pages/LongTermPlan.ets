@@ -2,6 +2,7 @@ import { router, promptAction } from '@kit.ArkUI'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { SubjectListEditor } from '../components/SubjectList'
+import { PageHeader } from '../components/PageHeader'
 import { StorageService } from '../services/StorageService'
 import { AppStore } from '../store/AppStore'
 import { StudyPlan, SubjectTarget } from '../models/StudyPlan'
@@ -298,11 +299,8 @@ export struct LongTermPlan {
   build() {
     Scroll() {
       Column({ space: Spacing.MD }) {
-        Text('长期计划与目标')
-          .fontSize(24)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.TEXT_PRIMARY)
-          .width('100%')
+        // 顶栏：返回箭头 + 居中页面名称（从「我的」点进来，之前没有返回入口）
+        PageHeader({ title: '长期计划与目标' })
         Text('在这里设置考试目标和各科计划投入时长。')
           .fontSize(12)
           .fontColor(Colors.TEXT_SECONDARY)
@@ -311,7 +309,7 @@ export struct LongTermPlan {
 
         // 目标
         Column() {
-          this.sectionTitle('目标', '用于首页/工作台的考试倒计时，以及 AI 规划时的背景信息')
+          this.sectionTitle('目标', '用于首页的考试倒计时，以及 AI 规划时的背景信息')
           this.field('目标考试', '例如：考研 / 期末 / 六级', this.examType, (v: string) => {
             this.examType = v
           })
@@ -445,9 +443,12 @@ export struct LongTermPlan {
 
         Blank().height(20)
       }
-      .padding(20)
+      // top 收窄：顶栏的返回箭头要贴着页面顶部
+      .padding({ left: 20, right: 20, top: 6, bottom: 20 })
       .width('100%')
     }
+    // 内容不足一屏时也必须从顶部开始排，不能垂直居中
+    .align(Alignment.Top)
     .backgroundColor(Colors.BG)
     .width('100%')
     .height('100%')

@@ -5,12 +5,12 @@ import { AppStore } from '../store/AppStore'
 import { StorageService } from '../services/StorageService'
 import { Metrics } from '../services/Metrics'
 import { SimActivity } from '../services/WatchSignalSimulator'
-import { FocusSession } from '../models/FocusSession'
+import { FocusSession, FocusTimelinePoint } from '../models/FocusSession'
 import { StudyReport as StudyReportModel } from '../models/StudyReport'
 import { QuestionRecord } from '../models/QuestionRecord'
 import { ObservationRecord } from '../models/WatchSignal'
 import { TimeUtils } from '../utils/TimeUtils'
-import { FocusChart } from '../components/FocusChart'
+import { FocusChart, StateRun } from '../components/FocusChart'
 
 /**
  * 与 `FocusController.onObservation` 的规则组合同源：手持手机 / 看手机 / 离开 / 趴桌
@@ -32,9 +32,6 @@ export struct StudyReport {
   @State totalStr: string = ''
   @State netStr: string = ''
   @State distractStr: string = ''
-  @State qaStr: string = ''
-  @State breakStr: string = ''
-  @State pauseStr: string = ''
   @State bestPeriod: string = ''
   @State fatigueMin: number = 0
   @State focusRate: number = 0
@@ -43,13 +40,17 @@ export struct StudyReport {
   @State taskTotal: number = 0
   @State qaCount: number = 0
   @State questions: QuestionRecord[] = []
-  @State levels: number[] = []
-  @State states: string[] = []
-  @State minutes: number[] = []
-  /** 横轴：累计已判定学习秒数（与 levels 一一对应） */
-  @State seconds: number[] = []
-  /** 横轴终点（秒），保证最后一段状态也有宽度 */
-  @State judgedSec: number = 0
+  /** 图的横轴：本次真实时间（毫秒），直接决定刻度上的时刻 */
+  @State chartStartMs: number = 0
+  @State chartEndMs: number = 0
+  /** 状态段（绝对时间，已合并连续同状态）—— 由 buildChartRuns() 组装 */
+  @State chartRuns: StateRun[] = []
+  /**
+   * 横轴是否为**真实时刻**。
+   * 旧记录（没有 atMs）只能按「已判定学习时长」推算，休息/暂停也排不进去 ——
+   * 这时图注要如实说明，不能让用户以为图上就是真实时间。
+   */
+  @State chartClockAxis: boolean = true
   /** 本次专注得分 = 100 − 走神占比（取整，夹 0~100） */
   @State score: number = 0
   /** 走神时间占总学习时间的百分比（取整） */
@@ -107,9 +108,10 @@ export struct StudyReport {
     this.hasData = true
     this.sessionStartMs = session.startTime
     // 全部口径走 Metrics（与同页净专注率同分母），不再直接用墙钟当"总学习时长"
-    this.totalStr = TimeUtils.formatDuration(Metrics.totalStudySec(session))
-    this.netStr = TimeUtils.formatDuration(Metrics.netFocusSec(session))
-    this.distractStr = TimeUtils.formatDuration(Metrics.distractionSec(session))
+    // 统计时长一律**精确到秒**：只用分钟时"本次专注 39 秒"会显示成 0min，像没数据
+    this.totalStr = TimeUtils.formatSec(Metrics.totalStudySec(session))
+    this.netStr = TimeUtils.formatSec(Metrics.netFocusSec(session))
+    this.distractStr = TimeUtils.formatSec(Metrics.distractionSec(session))
     // 本次专注得分：走神占比越低分越高；无数据时按满分处理（避免显示 0 分误导）
     const totalStudy: number = Metrics.totalStudySec(session)
     const ratio: number = totalStudy > 0
@@ -124,9 +126,6 @@ export struct StudyReport {
       sc = 100
     }
     this.score = sc
-    this.qaStr = TimeUtils.formatDuration(Metrics.qaSec(session))
-    this.breakStr = TimeUtils.formatDuration(Metrics.restSec(session))
-    this.pauseStr = TimeUtils.formatDuration(Metrics.pauseSec(session))
     this.bestPeriod = report.bestFocusPeriod
     this.fatigueMin = report.fatiguePoint
     this.focusRate = report.focusRate
@@ -135,24 +134,89 @@ export struct StudyReport {
     this.taskTotal = session.taskIds.length
     this.qaCount = report.questions.length
     this.questions = report.questions
-    const levels: number[] = []
-    const states: string[] = []
-    const minutes: number[] = []
-    const seconds: number[] = []
-    for (const p of session.timeline) {
-      levels.push(p.level)
-      states.push(p.state)
-      minutes.push(p.minute)
-      // 横轴按秒走（旧记录由 StorageService 回填），色带宽度才能和时长数字对上
-      seconds.push(p.sec > 0 ? p.sec : p.minute * 60)
-    }
-    this.levels = levels
-    this.states = states
-    this.minutes = minutes
-    this.seconds = seconds
-    // 横轴终点 = 本次参与状态判定的时长（不含答疑/休息/暂停）
-    this.judgedSec = Metrics.judgedSec(session)
+    this.buildChartRuns(session)
     this.loadObservations(session.id)
+  }
+
+  // ---------- 复盘图的数据组装 ----------
+
+  /**
+   * 把会话的状态时间线组装成「**真实时间**的状态段」。
+   *
+   * 为什么要单独组装（而不像以前那样直接把 levels/states 丢给图）：
+   *  - 图的横轴是真实钟点，所以每个段要有绝对起止时间；
+   *  - 时间线里现在也包含「休息 / 暂停 / 答疑」的采样点（见 FocusController），
+   *    于是这些时段能在图上以黄/灰单独标出，而不是被画成"一直在专注"。
+   *
+   * 旧记录没有 `atMs`（没有时刻信息）：退回按「已判定学习秒数」从会话起点推算，
+   * 并把 `chartClockAxis` 置 false，让图注如实说明"横轴不是真实时间"。
+   */
+  private buildChartRuns(session: FocusSession): void {
+    const tl = session.timeline
+    if (tl.length === 0) {
+      this.chartRuns = []
+      this.chartClockAxis = true
+      return
+    }
+    let hasClock = false
+    for (const p of tl) {
+      if (p.atMs > 0) {
+        hasClock = true
+        break
+      }
+    }
+    this.chartClockAxis = hasClock
+
+    const startMs = session.startTime > 0 ? session.startTime : tl[0].atMs
+    let endMs = session.endTime > 0 ? session.endTime : Date.now()
+    if (endMs <= startMs) {
+      endMs = startMs + 60 * 1000
+    }
+
+    const runs: StateRun[] = []
+    let runStart = startMs
+    let runState = tl[0].state
+    for (let i = 1; i < tl.length; i++) {
+      if (tl[i].state === runState) {
+        continue
+      }
+      const cut = this.pointMs(tl[i], startMs, hasClock)
+      if (cut > runStart) {
+        runs.push(this.runOf(runStart, cut, runState))
+        runStart = cut
+      }
+      runState = tl[i].state
+    }
+    // 最后一段延伸到会话结束：否则最后一个状态在图上没有宽度
+    if (endMs > runStart) {
+      runs.push(this.runOf(runStart, endMs, runState))
+    }
+    this.chartRuns = runs
+    this.chartStartMs = startMs
+    this.chartEndMs = endMs
+  }
+
+  /** 采样点的绝对时刻：新记录直接用 atMs；旧记录按"已判定学习秒数"从起点推算 */
+  private pointMs(p: FocusTimelinePoint, startMs: number, hasClock: boolean): number {
+    if (hasClock && p.atMs > 0) {
+      return p.atMs
+    }
+    const sec = p.sec > 0 ? p.sec : p.minute * 60
+    return startMs + sec * 1000
+  }
+
+  private runOf(fromMs: number, toMs: number, state: string): StateRun {
+    const r = new StateRun()
+    r.fromMs = fromMs
+    r.toMs = toMs
+    r.state = state
+    return r
+  }
+
+  /** 毫秒 → "14:05"（图注里写起止时刻用） */
+  private clockOf(ms: number): string {
+    const d = new Date(ms)
+    return TimeUtils.minuteToClock(d.getHours() * 60 + d.getMinutes())
   }
 
   /**
@@ -208,26 +272,66 @@ export struct StudyReport {
     return `第 ${min} 分钟`
   }
 
-  private finish(): void {
+  /**
+   * 返回「复盘」总页面。
+   *
+   * 为什么不能只 `router.back()`：结束专注时 Focus 是 `replaceUrl` 到本页的，
+   * 页面栈里只剩下「根页 + 本页」，直接退回去会落在根页的**首页（专注）Tab** 上 ——
+   * 用户看到的就是"点返回怎么又回到专注了"。
+   * 所以先把 Tab 请求设成复盘（2），再退回根页，由根页的 onTabRequest 切过去。
+   */
+  private backToReview(): void {
+    AppStorage.setOrCreate<number>(StorageKey.INDEX_TAB_REQUEST, 2)
+    // 栈形状已经由"休息页把结束委托给专注页"保证：本页一律是「根页 → 本页」，
+    // 退一层就是根页，由根页按 INDEX_TAB_REQUEST 切到「复盘」。
+    // （不再用 `router.back(0)`：它在不同版本上行为不稳，反而会退错。）
     router.back()
+  }
+
+  /** 系统返回键与左上角箭头行为保持一致：都回到复盘总页面 */
+  onBackPress(): boolean {
+    this.backToReview()
+    return true
   }
 
   build() {
     Scroll() {
       Column({ space: Spacing.LG }) {
+        // 顶部：左上角返回箭头 → 复盘总页面（本次专注已经结束，不该再退回去继续专注）
+        Row() {
+          Row() {
+            Text('←')
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Text('返回复盘')
+              .fontSize(15)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .margin({ left: 4 })
+          }
+          .padding({ top: 6, bottom: 6, right: 10 })
+          .onClick(() => {
+            this.backToReview()
+          })
+          Blank()
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .margin({ bottom: 2 })
+
         if (!this.hasData) {
           Text('还没有可展示的复盘')
             .fontSize(16)
             .fontColor(Colors.TEXT_SECONDARY)
             .margin({ top: 60 })
-          Button('返回')
+          Button('返回复盘')
             .fontSize(15)
             .fontColor(Color.White)
             .backgroundColor(Colors.PRIMARY_STRONG)
             .height(44)
             .margin({ top: 16 })
             .onClick(() => {
-              this.finish()
+              this.backToReview()
             })
         } else {
           Column() {
@@ -255,19 +359,13 @@ export struct StudyReport {
             Row({ space: 12 }) {
               this.stat('净专注率', `${this.focusRate}%`)
               this.stat('完成任务', this.taskTotal > 0
-                ? `${this.taskDone}/${this.taskTotal} · ${this.completionRate}%` : '本次未设定任务')
+                ? `${this.taskDone}/${this.taskTotal} · ${this.completionRate}%` : '自由专注')
             }
             .width('100%')
             .margin({ top: 10 })
             Row({ space: 12 }) {
               this.stat('AI 答疑', `${this.qaCount} 个问题`)
               this.stat('分心', this.distractStr)
-            }
-            .width('100%')
-            .margin({ top: 10 })
-            Row({ space: 12 }) {
-              this.stat('休息', this.breakStr)
-              this.stat('暂停', this.pauseStr)
             }
             .width('100%')
             .margin({ top: 10 })
@@ -316,22 +414,32 @@ export struct StudyReport {
           }
           .reportCard()
 
-          // ③ 专注曲线
+          // ③ 专注时间轴（横轴=真实时间）+ 心率曲线区
           Column() {
-            this.sectionTitle('专注曲线')
+            this.sectionTitle('专注时间轴')
             FocusChart({
-              levels: this.levels,
-              states: this.states,
-              seconds: this.seconds,
-              minutes: this.minutes,
-              endSec: this.judgedSec
+              runs: this.chartRuns,
+              startMs: this.chartStartMs,
+              endMs: this.chartEndMs,
+              // 会话里还没有心率留痕 → 传空数组，图内画占位虚线并写明"暂无数据"
+              hrPoints: []
             })
-            // 口径自解释：横轴只算"参与状态判定的时间"，色带宽度才和上面的时长数字成比例
-            Text(`横轴：本次已判定学习 0–${Math.round(this.judgedSec / 60)} 分钟（不含答疑/休息/暂停）；色带宽度与「净专注 / 分心」时长成比例`)
+            Text(this.chartClockAxis
+              ? `横轴：本次真实时间 ${this.clockOf(this.chartStartMs)} – ${this.clockOf(this.chartEndMs)}；色带 = 该时刻的状态`
+                + `（绿 专注 / 红 分心 / 黄 休息 / 灰 暂停·答疑）`
+              : '横轴：本条记录较早，未保存时刻信息，按「已判定学习时长」推算；'
+                + '休息 / 暂停未单独标出（色带：绿 专注 / 红 分心）')
               .fontSize(11)
               .fontColor(Colors.TEXT_TERTIARY)
+              .lineHeight(17)
               .width('100%')
               .margin({ top: 6 })
+            Text('纵轴：心率曲线 —— 本版本未接入心率设备，图中为占位虚线，不代表任何测量值')
+              .fontSize(11)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .lineHeight(17)
+              .width('100%')
+              .margin({ top: 4 })
           }
           .reportCard()
 
@@ -568,18 +676,6 @@ export struct StudyReport {
             .reportCard()
           }
 
-          Button('返回')
-            .width('100%')
-            .height(50)
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Color.White)
-            .backgroundColor(Colors.PRIMARY_STRONG)
-            .borderRadius(Radius.LG)
-            .margin({ top: 8 })
-            .onClick(() => {
-              this.finish()
-            })
 
           Blank().height(24)
         }

@@ -12,7 +12,7 @@ import { SessionSnapshot } from '../models/SessionSnapshot'
 import { TimeUtils } from '../utils/TimeUtils'
 
 /**
- * 根容器：4 个底部 Tab（专注 / AI 规划 / 复盘 / 我的）
+ * 根容器：4 个底部 Tab（首页 / AI 规划 / 复盘 / 我的）
  *
  * 导航约定（统一模型）：**本页是唯一根页，永不被 replace**。
  * 二级页（Focus / FocusBreak / AIChat / StudyReport 等）统一 pushUrl，
@@ -58,7 +58,19 @@ struct Index {
       // 结束失败也必须让统计与界面跟上，否则今日数据会停在旧值
       await AppStore.getInstance().syncAfterSession()
     }
+    // 结束专注的出口统一是「复盘」：这里也切过去，再给「已保存本次专注」的提示条
+    this.onTabRequestInner(2)
     this.showSaved = true
+  }
+
+  /** 直接切 Tab（内部用，不经过 INDEX_TAB_REQUEST 的异步回环） */
+  private onTabRequestInner(index: number): void {
+    if (index < 0) {
+      return
+    }
+    this.controller.changeIndex(index)
+    this.currentTab = index
+    this.refreshOnTabSwitch(index)
   }
 
   /**
@@ -126,7 +138,7 @@ struct Index {
       Tabs({ barPosition: BarPosition.End, controller: this.controller }) {
         TabContent() {
           Home()
-        }.tabBar(this.tabBar('专注', 0, '🎯'))
+        }.tabBar(this.tabBar('首页', 0, '🏠'))
 
         TabContent() {
           TaskPlanning()

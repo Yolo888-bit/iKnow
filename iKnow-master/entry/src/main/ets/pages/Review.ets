@@ -6,7 +6,6 @@ import { Metrics, Last30DaysSummary, PracticeSummaryItem, HabitInsight, DaySumma
 import { AIService } from '../services/AIService'
 import { FocusProfile } from '../models/FocusProfile'
 import { RadarChart } from '../components/RadarChart'
-import { FocusChart } from '../components/FocusChart'
 import { CircularProgress } from '../components/CircularProgress'
 import { FocusSession } from '../models/FocusSession'
 import { Task } from '../models/Task'
@@ -16,19 +15,14 @@ import { BarChart } from '../components/BarChart'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 
 /**
- * 折线纵轴量程（**百分制专注度** 0~100）：按峰值挑一档"好看"的量程。
- *  - 档位都取偶数，保证「一半」刻度落在整数上；
- *  - 峰值很小时不回退到 100，否则低迷期曲线会一直贴着底、看不出起伏。
+ * 「近 30 天学习表现」折线的纵轴量程 —— **固定 100**。
+ *
+ * 纵轴是「每日专注度（100 分制）」，所以量程就取满分 100：
+ * 刻度固定为 100 / 50 / 0，不同时期、不同账号的曲线**可以直接对比**。
+ * （曾经按峰值自适应取过档位，好处是低迷期也能看出起伏，
+ *   代价是同一张图在不同时间纵轴含义不同、日期之间没法直接比 —— 按用户要求改回固定 100。）
  */
-function niceMax(peak: number): number {
-  const ladder: number[] = [20, 30, 40, 50, 60, 80, 100]
-  for (const v of ladder) {
-    if (peak <= v) {
-      return v
-    }
-  }
-  return 100
-}
+const TREND_AXIS_MAX = 100
 
 /**
  * 长期学习总结 / 单日学习复盘 —— 单屏区块式复盘页
@@ -46,6 +40,9 @@ export struct Review {
   /** 任务进度：[已完成累计, 规划任务总数]（口径与工作台一致，走 AppStore.mergedTasks） */
   @State taskDone: number = 0
   @State taskTotal: number = 0
+  /** 还没完成的任务（可折叠展示，让用户知道"还差什么"） */
+  @State unfinished: Task[] = []
+  @State showUnfinished: boolean = false
   /** 近 7 天趋势（从工作台搬过来的模块用） */
   @State weekTrend: number[] = []
   @StorageProp(StorageKey.WEEK_FOCUS_SEC) weekFocus: number = 0
@@ -61,21 +58,14 @@ export struct Review {
   @State dayStart: number = 0
   @State day: DaySummary = {
     hasData: false,
-    studyMinutes: 0,
+    studySeconds: 0,
     focusRate: 0,
     completedTasks: 0,
     totalTasks: 0,
-    qaSessions: 0,
+    qaSeconds: 0,
     sessionCount: 0,
     bestPeriod: '',
-    structure: { timeToFocus: -1, longestRun: 0, bouts: 0, recoveryMedian: -1, deepRatio: 0, tailDrop: 0 },
-    levels: [],
-    states: [],
-    minutes: [],
-    seconds: [],
-    separators: [],
-    separatorsSec: [],
-    endSec: 0
+    structure: { timeToFocus: -1, longestRun: 0, bouts: 0, recoveryMedian: -1, deepRatio: 0, tailDrop: 0 }
   }
   @State dayInsight: string = ''
   @State daySuggestions: string[] = []
@@ -148,11 +138,16 @@ export struct Review {
     const now = Date.now()
 
     this.summary = Metrics.last30DaysSummary(sessions, tasks, now)
-    this.practice = Metrics.practiceSummary(sessions, tasks)
+    // 传 mergedTasks()（= 今日计划 ∪ 任务表）：与下面「任务进度」用**同一份**数据，
+    // 否则会出现"任务进度 7/7、练习内容只统计到 5 个"的对不上
+    this.practice = Metrics.practiceSummary(sessions, store.mergedTasks())
     // 任务进度：完成累计 / 规划总数
     const counts: number[] = store.taskProgressCounts()
     this.taskDone = counts[0]
     this.taskTotal = counts[1]
+    // 未完成清单：首页「今日任务」刻意不带跨天的旧任务（每天从零开始），
+    // 用户想回头找"还差什么"就在这里看
+    this.unfinished = store.unfinishedTasks(30, false)
     this.weekTrend = store.getDashboard().weekTrend
     this.habit = Metrics.habitInsights(sessions)
     // 排查用：把库里实际加载到的会话数打到日志，便于判断"历史是否真的落库"
@@ -489,8 +484,12 @@ export struct Review {
   }
 
   private loadDay(): void {
-    const sessions: FocusSession[] = AppStore.getInstance().getSessions()
-    this.day = Metrics.daySummary(sessions, this.dayStart)
+    const store = AppStore.getInstance()
+    const sessions: FocusSession[] = store.getSessions()
+    // 选中的是**今天**时把当天计划一起传进去：「任务完成」才和首页「今日数据」一致
+    // （首页勾选完成的任务不属于任何会话，只统计会话会漏掉）。历史日期传空数组。
+    const isToday = this.dayStart === TimeUtils.dayStart(Date.now())
+    this.day = Metrics.daySummary(sessions, this.dayStart, isToday ? store.todayTasks() : [])
     // 基线以**所选那一天**为锚（看历史某天时，对比的是那天之前的 7/30 天），
     // 窗口与门槛、以及"排除当天"的判定都在 Metrics.baseline 里
     const dayEnd = this.dayStart + 24 * 3600 * 1000
@@ -614,19 +613,13 @@ export struct Review {
     const chartH = h - padTop - padBottom
     const baseY = padTop + chartH
 
-    // 量程自适应：原来固定 60 分钟起步，只要每天只有几分钟，
-    // 折线就永远贴着底部，完全看不出起伏。改为按峰值挑一档"好看"的量程。
-    let peak = 0
-    for (const v of values) {
-      if (v > peak) {
-        peak = v
-      }
-    }
-    const maxV = niceMax(peak)
+    // 纵轴固定满分 100（专注度是 100 分制），刻度 100 / 50 / 0 ——
+    // 不再按峰值自适应，这样不同日期的曲线可以直接对比。
+    const maxV = TREND_AXIS_MAX
     const n = values.length
     const stepX = n > 1 ? chartW / (n - 1) : chartW
 
-    // 纵轴刻度（分钟）+ 网格线：没有刻度时曲线的高度是没有含义的
+    // 纵轴刻度（专注度 0~100）+ 网格线：没有刻度时曲线的高度是没有含义的
     c.font = this.lineFont(11)
     c.textAlign = 'right'
     const ticks: number[] = [maxV, maxV / 2, 0]
@@ -870,43 +863,6 @@ export struct Review {
   }
 
   /** 单日学习总结视图 */
-  /** 曲线图例与口径说明（画布内不放文字，避免与曲线重叠） */
-  @Builder
-  curveLegend() {
-    Column() {
-      Row({ space: 14 }) {
-        this.legendDot(Colors.GREEN, '专注')
-        this.legendDot(Colors.YELLOW, '走神')
-        this.legendDot(Colors.RED, '分心')
-      }
-      .width('100%')
-
-      Text(this.curveCaption())
-        .fontSize(11)
-        .fontColor(Colors.TEXT_TERTIARY)
-        .lineHeight(16)
-        .width('100%')
-        .margin({ top: 6 })
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .margin({ top: 4 })
-  }
-
-  @Builder
-  legendDot(color: string, label: string) {
-    Row() {
-      Circle()
-        .width(6)
-        .height(6)
-        .fill(color)
-      Text(label)
-        .fontSize(11)
-        .fontColor(Colors.TEXT_SECONDARY)
-        .margin({ left: 4 })
-    }
-  }
-
   /** 近 30 天趋势标题：由趋势数组前后半段均值对比得出，样本不足时如实说明 */
   private trendHeadline(): string {
     const t = this.summary.trend
@@ -937,19 +893,6 @@ export struct Review {
     return `最近 15 天与前 15 天基本持平`
   }
 
-  /** 曲线口径：明确纵轴是三档等级、横轴是当天累计分钟，多次专注用虚线分隔 */
-  private curveCaption(): string {
-    // 横轴口径 = 已判定学习时长（净专注 + 分心），不含答疑/休息/暂停，
-    // 这样色带里绿/黄/红各段的宽度与上方「专注率 / 分心」的时长数字严格成比例
-    const span = Math.round(this.day.endSec / 60)
-    // 图已改为状态时间轴（色带）：横轴是时间，颜色只有三档含义，不再有"纵轴等级"
-    const base = `横轴：当天累计学习 0–${span} 分钟；绿=专注 / 黄=轻度分心 / 红=分心`
-    if (this.day.sessionCount > 1) {
-      return `${base}；当天共 ${this.day.sessionCount} 次专注，白线为两次之间的分界`
-    }
-    return base
-  }
-
   @Builder
   dayView() {
     // 顶部状态卡
@@ -965,7 +908,7 @@ export struct Review {
             .fontSize(20)
             .fontWeight(FontWeight.Bold)
             .fontColor(Colors.TEXT_PRIMARY)
-          Text(`本次学习 ${this.day.studyMinutes} 分钟，任务完成 ${this.day.completedTasks}/${this.day.totalTasks}`)
+          Text(`当天累计学习 ${TimeUtils.formatSec(this.day.studySeconds)}，任务完成 ${this.day.completedTasks}/${this.day.totalTasks}`)
             .fontSize(12)
             .fontColor(Colors.TEXT_SECONDARY)
             .margin({ top: 6 })
@@ -984,30 +927,13 @@ export struct Review {
       .alignItems(VerticalAlign.Top)
 
       if (this.day.hasData) {
-        // 圆环与曲线各自独占一行：并排会把 360vp 屏上的图压到约 180vp，看着很挤
+        // 圆环独占一行：当天「分心/专注色带图」按需求已删除（单次复盘里保留状态时间轴）
         Row() {
           CircularProgress({ percent: this.day.focusRate, boxSize: 88, label: '专注率' })
         }
         .width('100%')
         .justifyContent(FlexAlign.Center)
         .margin({ top: 4 })
-
-        Column() {
-          FocusChart({
-            levels: this.day.levels,
-            states: this.day.states,
-            seconds: this.day.seconds,
-            minutes: this.day.minutes,
-            separatorsSec: this.day.separatorsSec,
-            endSec: this.day.endSec,
-            showLegend: false
-          })
-            .width('100%')
-            .height(140)
-          this.curveLegend()
-        }
-        .width('100%')
-        .margin({ top: 8 })
       } else {
         Column() {
           Text('🌱')
@@ -1050,21 +976,23 @@ export struct Review {
 
     // 四项指标
     Row({ space: Spacing.MD }) {
-      this.metricTile('学习时长', `${this.day.studyMinutes}`, '分钟')
+      this.metricTile('学习时长', TimeUtils.formatSec(this.day.studySeconds), '')
       this.metricTile('任务完成率', `${this.day.completedTasks}/${this.day.totalTasks}`, '')
     }
     .width('100%')
 
     Row({ space: Spacing.MD }) {
-      this.metricTile('净专注率', `${this.day.focusRate}`, '%')
-      this.metricTile('答疑回顾', `${this.day.qaSessions}`, '次')
+      // 专注率是"按除答疑时长加权"的当天平均值，不是各次会话的算术平均
+      this.metricTile('平均专注率', `${this.day.focusRate}`, '%')
+      // 答疑按当天累计时长展示（原来是"有几次会话问过"，不是累计量）
+      this.metricTile('答疑', TimeUtils.formatSec(this.day.qaSeconds), '')
     }
     .width('100%')
 
     // 本次洞察
     Column({ space: Spacing.SM }) {
-      this.sectionHeader('⭐', '本次洞察')
-      Text(this.dayInsight.length > 0 ? this.dayInsight : '再完成几次专注，小伴就能给你这次的学习洞察。')
+      this.sectionHeader('⭐', '当日洞察')
+      Text(this.dayInsight.length > 0 ? this.dayInsight : '再完成几次专注，小伴就能给你当天的学习洞察。')
         .fontSize(14)
         .fontColor(Colors.TEXT_PRIMARY)
         .lineHeight(22)
@@ -1124,6 +1052,17 @@ export struct Review {
       out.push(TimeUtils.formatMonthDay(base - day * 24 * 3600 * 1000))
     }
     return out
+  }
+
+  /** 在「未完成」清单里直接勾选完成（复用 AppStore 的权威口径，顺带刷新统计） */
+  private async completeUnfinished(id: string): Promise<void> {
+    try {
+      await AppStore.getInstance().toggleTaskDone(id)
+    } catch (e) {
+      // 落库失败也必须往下走：否则 loadAll 被跳过，界面就成了"勾了没反应"
+      hilog.error(0x0000, 'iKnow.Review', '勾选未完成任务出错，仍继续重算：%{public}s', e.message)
+    }
+    this.loadAll()
   }
 
   /** 任务进度百分比（无规划任务时为 0） */
@@ -1197,7 +1136,8 @@ export struct Review {
 
       Row() {
         this.statCard('学习', `${this.summary.totalHours}`, '小时')
-        this.statCard('完成', `${this.summary.completedTasks}`, '个任务')
+        // 同口径：任务完成数一律取 taskDone，避免同页出现两个数
+        this.statCard('完成', `${this.taskDone}`, '个任务')
         this.statCard('专注率', `${this.summary.focusRate}`, '%')
       }
       .width('100%')
@@ -1276,6 +1216,57 @@ export struct Review {
           .fontSize(12)
           .fontColor(Colors.TEXT_SECONDARY)
           .width('100%')
+
+        // 未完成清单（可折叠）：只读展示，回答"还差什么"
+        if (this.unfinished.length > 0) {
+          Text(this.showUnfinished
+            ? `收起未完成 ${this.unfinished.length} 项 ▴`
+            : `未完成 ${this.unfinished.length} 项 ▾`)
+            .fontSize(11)
+            .fontColor(Colors.PRIMARY_DARK)
+            .width('100%')
+            .margin({ top: 2 })
+            .onClick(() => {
+              this.showUnfinished = !this.showUnfinished
+            })
+
+          if (this.showUnfinished) {
+            ForEach(this.unfinished.slice(0, 6), (t: Task) => {
+              Row() {
+                // 圆圈可以直接点：勾上就当作完成（与首页今日任务同一套 toggleTaskDone）。
+                // 点区包一层 Row 并留白，圆圈本身只有 16vp，直接点太难点中。
+                Row() {
+                  Text('')
+                    .width(16)
+                    .height(16)
+                    .borderRadius(8)
+                    .border({ width: 1.5, color: Colors.LINE })
+                }
+                .padding({ left: 2, right: 6, top: 5, bottom: 5 })
+                .onClick(() => {
+                  this.completeUnfinished(t.id)
+                })
+                Text(t.subject.length > 0 ? `${t.subject}·${t.title}` : t.title)
+                  .fontSize(11)
+                  .fontColor(Colors.TEXT_SECONDARY)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .layoutWeight(1)
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Center)
+              .margin({ top: 4 })
+            }, (t: Task) => `uf_${t.id}`)
+
+            if (this.unfinished.length > 6) {
+              Text(`还有 ${this.unfinished.length - 6} 项…`)
+                .fontSize(11)
+                .fontColor(Colors.TEXT_TERTIARY)
+                .width('100%')
+                .margin({ top: 4 })
+            }
+          }
+        }
       }
       .layoutWeight(1)
       .padding(14)
@@ -1304,10 +1295,19 @@ export struct Review {
       }
       .width('100%')
 
+      // 口径自解释：次数 = 该科目下**完成的任务数**
+      Text('按科目汇总："2 次" = 这个科目完成了 2 个任务')
+        .fontSize(11)
+        .fontColor(Colors.TEXT_TERTIARY)
+        .lineHeight(16)
+        .width('100%')
+
       if (this.practice.length > 0) {
         ForEach(this.practice, (item: PracticeSummaryItem, index: number) => {
           Row() {
-            Text(`${item.subject}：${item.content}`)
+            // 只显示「科目 + 次数」：用户要的是"数学 2 次"这种汇总，
+            // 逐条罗列任务既长、又看不出每个科目实际投入了多少
+            Text(item.subject)
               .fontSize(13)
               .fontColor(Colors.TEXT_PRIMARY)
               .maxLines(1)
@@ -1319,12 +1319,14 @@ export struct Review {
               .margin({ left: 10 })
           }
           .width('100%')
-          .padding({ top: 6, bottom: 6 })
-          // key 带上次数：只更新次数时 ArkUI 会复用旧节点不重绘
+          .padding({ top: 7, bottom: 7 })
+          .alignItems(VerticalAlign.Center)
+          // key 带上会变的字段（次数）：ArkUI 按 key 复用节点，key 不变就不重绘
         }, (item: PracticeSummaryItem, index: number) => `${item.subject}_${index}_${item.count}`)
 
         Row({ space: 8 }) {
-          Text(`累计完成 ${this.summary.completedTasks} 个任务`)
+          // 用 taskDone（= 任务进度里的已完成数），保证和上方卡片对得上
+          Text(`累计完成 ${this.taskDone} 个任务`)
             .fontSize(11)
             .fontColor(Colors.PRIMARY_DARK)
             .padding({ top: 4, bottom: 4, left: 8, right: 8 })
@@ -1519,7 +1521,7 @@ export struct Review {
           .fontColor(Colors.TEXT_PRIMARY)
         Text(s.taskIds.length > 0
           ? `净专注 ${Metrics.focusRatePercent(s)}% · 完成 ${Metrics.completionRate(s)}%`
-          : `净专注 ${Metrics.focusRatePercent(s)}% · 未设定任务`)
+          : `净专注 ${Metrics.focusRatePercent(s)}% · 自由专注`)
           .fontSize(11)
           .fontColor(Colors.TEXT_SECONDARY)
           .margin({ top: 4 })

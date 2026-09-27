@@ -35,14 +35,20 @@ const TREND_AXIS_MAX = 100
 @Component
 export struct Review {
   // ---------- 长期总结状态 ----------
-  @State summary: Last30DaysSummary = { totalHours: 0, completedTasks: 0, focusRate: 0, trend: [] }
+  @State summary: Last30DaysSummary = { totalHours: 0, totalNetSeconds: 0, completedTasks: 0, focusRate: 0, trend: [] }
+  /** 手动刷新进行中（避免重复点击） */
+  @State refreshing: boolean = false
   @State practice: PracticeSummaryItem[] = []
+  /** 任务清单（含当前计划）：把会话的 taskIds 还原成"科目"列表（当日明细用） */
+  @State subjectTasks: Task[] = []
   /** 任务进度：[已完成累计, 规划任务总数]（口径与工作台一致，走 AppStore.mergedTasks） */
   @State taskDone: number = 0
   @State taskTotal: number = 0
   /** 还没完成的任务（可折叠展示，让用户知道"还差什么"） */
   @State unfinished: Task[] = []
   @State showUnfinished: boolean = false
+  /** 练习内容总结：默认只列次数最多的前 3 条，其余折叠；true = 已展开全部 */
+  @State showAllPractice: boolean = false
   /** 近 7 天趋势（从工作台搬过来的模块用） */
   @State weekTrend: number[] = []
   @StorageProp(StorageKey.WEEK_FOCUS_SEC) weekFocus: number = 0
@@ -50,6 +56,8 @@ export struct Review {
   @State aiAdvice: string = ''
   @State profile: FocusProfile = new FocusProfile()
   @State dimValues: number[] = []
+  /** 与 dimValues 同序：该维度是否「无数据」（感知未开启 / 自由专注无任务），雷达图用灰虚线 + 「—」呈现 */
+  @State dimMissing: boolean[] = []
   @State canShowRadar: boolean = false
 
   // ---------- 单日复盘状态 ----------
@@ -113,6 +121,18 @@ export struct Review {
     this.loadAll()
   }
 
+  /** 练习内容总结卡片右上角的「刷新」：直接读盘重算，不依赖 @Watch 是否在后台触发 */
+  private manualRefresh(): void {
+    if (this.refreshing) {
+      return
+    }
+    this.refreshing = true
+    AppStore.getInstance().reloadFromStorage()
+      .then(() => { this.loadAll() })
+      .catch(() => { this.loadAll() })
+      .finally(() => { this.refreshing = false })
+  }
+
   aboutToAppear(): void {
     // 默认选中「今天」+ 初始化日历弹层：只在首次进入时定位，
     // 避免数据刷新（reload）把用户选中的日期重置回今天
@@ -131,6 +151,16 @@ export struct Review {
     this.loadAll()
   }
 
+  /**
+   * 切回复盘 Tab 时重拉一次。
+   * 后台(隐藏) Tab 的 @Watch(DATA_VERSION) 不保证触发，会出现
+   * 「结束专注后切回复盘，练习内容总结还停在旧值(延迟)」的情况；
+   * 这里不依赖 @Watch，切回来就直接重取。
+   */
+  onPageShow(): void {
+    this.loadAll()
+  }
+
   private loadAll(): void {
     const store = AppStore.getInstance()
     const sessions: FocusSession[] = store.getSessions()
@@ -139,8 +169,11 @@ export struct Review {
 
     this.summary = Metrics.last30DaysSummary(sessions, tasks, now)
     // 传 mergedTasks()（= 今日计划 ∪ 任务表）：与下面「任务进度」用**同一份**数据，
-    // 否则会出现"任务进度 7/7、练习内容只统计到 5 个"的对不上
-    this.practice = Metrics.practiceSummary(sessions, store.mergedTasks())
+    // 否则会出现"任务进度 7/7、练习内容只统计到 5 个"的对不上。
+    // 同一份也留给「当日专注明细」把 taskIds 还原成科目（见 sessionSubjectLabel）。
+    const merged = store.mergedTasks()
+    this.practice = Metrics.practiceSummary(sessions, merged)
+    this.subjectTasks = merged
     // 任务进度：完成累计 / 规划总数
     const counts: number[] = store.taskProgressCounts()
     this.taskDone = counts[0]
@@ -161,6 +194,15 @@ export struct Review {
       this.profile.stability,
       this.profile.execution,
       this.profile.antiDistraction
+    ]
+    // 诚实覆盖：抗干扰只在「开启摄像头感知」的会话上算，执行力只在「有任务清单」的会话上算。
+    // 对应维度无数据时不画成 0（看起来像最差），而是灰虚线 + 「—」，并配下方说明。
+    this.dimMissing = [
+      false,
+      false,
+      false,
+      this.profile.taskCount === 0,
+      this.profile.perceptionCount === 0
     ]
     this.canShowRadar = Metrics.canShowProfile(this.profile.sampleCount)
 
@@ -209,6 +251,23 @@ export struct Review {
     }
     const e = new Date(earliest)
     return `范围：近 30 天 · 共 ${list.length} 次专注 · 覆盖 ${days.length} 天 · 最早一次 ${e.getMonth() + 1}月${e.getDate()}日（${Math.round(earliestDuration / 60)} 分钟）`
+  }
+
+  /**
+   * 画像覆盖说明：诚实标注哪些维度「没数据」而非「得分为 0」。
+   * - 抗干扰只在「开启摄像头感知」的会话上计算；自由专注 / 未开感知时无可依据，暂不可评。
+   * - 执行力只在「有任务清单」的会话上计算；以自由专注为主时无可依据，暂不可评。
+   */
+  private coverageNote(): string {
+    const noPerception = this.profile.perceptionCount === 0
+    const noTask = this.profile.taskCount === 0
+    if (noPerception && noTask) {
+      return '未开启摄像头感知、且以自由专注为主，抗干扰与执行力暂不可评'
+    }
+    if (noPerception) {
+      return '未开启摄像头感知，抗干扰暂不可评（仅按有感知的专注评分）'
+    }
+    return '以自由专注为主、未设任务清单，执行力暂不可评（仅按有任务的专注评分）'
   }
 
   /**
@@ -798,56 +857,6 @@ export struct Review {
   // ===================== View builders =====================
 
   @Builder
-  statCard(label: string, value: string, unit: string) {
-    Column() {
-      Text(label)
-        .fontSize(12)
-        .fontColor(Colors.TEXT_SECONDARY)
-      Row() {
-        Text(value)
-          .fontSize(28)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.TEXT_PRIMARY)
-        Text(unit)
-          .fontSize(12)
-          .fontColor(Colors.TEXT_SECONDARY)
-          .margin({ left: 4, bottom: 4 })
-      }
-      .alignItems(VerticalAlign.Bottom)
-    }
-    .layoutWeight(1)
-    .alignItems(HorizontalAlign.Center)
-  }
-
-  @Builder
-  metricTile(label: string, value: string, unit: string) {
-    Column() {
-      Text(label)
-        .fontSize(12)
-        .fontColor(Colors.TEXT_SECONDARY)
-      Row() {
-        Text(value)
-          .fontSize(22)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Colors.TEXT_PRIMARY)
-        if (unit.length > 0) {
-          Text(unit)
-            .fontSize(12)
-            .fontColor(Colors.TEXT_SECONDARY)
-            .margin({ left: 3, bottom: 3 })
-        }
-      }
-      .alignItems(VerticalAlign.Bottom)
-      .margin({ top: 6 })
-    }
-    .layoutWeight(1)
-    .padding(14)
-    .backgroundColor(Colors.CARD)
-    .borderRadius(Radius.LG)
-    .alignItems(HorizontalAlign.Start)
-  }
-
-  @Builder
   sectionHeader(icon: string, title: string) {
     Row() {
       Text(icon)
@@ -866,8 +875,9 @@ export struct Review {
   /** 近 30 天趋势标题：由趋势数组前后半段均值对比得出，样本不足时如实说明 */
   private trendHeadline(): string {
     const t = this.summary.trend
-    if (t.length < 4 || this.summary.totalHours <= 0) {
-      return `近 30 天累计学习 ${this.summary.totalHours} 小时，数据还不足以判断趋势`
+    if (t.length < 4 || this.summary.totalNetSeconds <= 0) {
+      // 用 xxh xxmin 精细口径：累计不足 1 小时时不会显示成 "0 小时"（看起来像没数据）
+      return `近 30 天累计学习 ${TimeUtils.formatHMin(this.summary.totalNetSeconds)}，数据还不足以判断趋势`
     }
     const half = Math.floor(t.length / 2)
     let a = 0
@@ -974,18 +984,92 @@ export struct Review {
       })
     }
 
-    // 四项指标
+    // 四项指标（**内联**，不用带参 @Builder：按值传参的 @Builder 参数变化不会刷新 UI）
     Row({ space: Spacing.MD }) {
-      this.metricTile('学习时长', TimeUtils.formatSec(this.day.studySeconds), '')
-      this.metricTile('任务完成率', `${this.day.completedTasks}/${this.day.totalTasks}`, '')
+      Column() {
+        Text('学习时长')
+          .fontSize(12)
+          .fontColor(Colors.TEXT_SECONDARY)
+        Row() {
+          Text(TimeUtils.formatSec(this.day.studySeconds))
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Colors.TEXT_PRIMARY)
+        }
+        .alignItems(VerticalAlign.Bottom)
+        .margin({ top: 6 })
+      }
+      .layoutWeight(1)
+      .padding(14)
+      .backgroundColor(Colors.CARD)
+      .borderRadius(Radius.LG)
+      .alignItems(HorizontalAlign.Start)
+
+      Column() {
+        Text('任务完成率')
+          .fontSize(12)
+          .fontColor(Colors.TEXT_SECONDARY)
+        Row() {
+          Text(`${this.day.completedTasks}/${this.day.totalTasks}`)
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Colors.TEXT_PRIMARY)
+        }
+        .alignItems(VerticalAlign.Bottom)
+        .margin({ top: 6 })
+      }
+      .layoutWeight(1)
+      .padding(14)
+      .backgroundColor(Colors.CARD)
+      .borderRadius(Radius.LG)
+      .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
 
     Row({ space: Spacing.MD }) {
       // 专注率是"按除答疑时长加权"的当天平均值，不是各次会话的算术平均
-      this.metricTile('平均专注率', `${this.day.focusRate}`, '%')
+      Column() {
+        Text('平均专注率')
+          .fontSize(12)
+          .fontColor(Colors.TEXT_SECONDARY)
+        Row() {
+          Text(`${this.day.focusRate}`)
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Colors.TEXT_PRIMARY)
+          Text('%')
+            .fontSize(12)
+            .fontColor(Colors.TEXT_SECONDARY)
+            .margin({ left: 3, bottom: 3 })
+        }
+        .alignItems(VerticalAlign.Bottom)
+        .margin({ top: 6 })
+      }
+      .layoutWeight(1)
+      .padding(14)
+      .backgroundColor(Colors.CARD)
+      .borderRadius(Radius.LG)
+      .alignItems(HorizontalAlign.Start)
+
       // 答疑按当天累计时长展示（原来是"有几次会话问过"，不是累计量）
-      this.metricTile('答疑', TimeUtils.formatSec(this.day.qaSeconds), '')
+      Column() {
+        Text('答疑')
+          .fontSize(12)
+          .fontColor(Colors.TEXT_SECONDARY)
+        Row() {
+          Text(TimeUtils.formatSec(this.day.qaSeconds))
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Colors.TEXT_PRIMARY)
+        }
+        .alignItems(VerticalAlign.Bottom)
+        .margin({ top: 6 })
+      }
+      .layoutWeight(1)
+      .padding(14)
+      .backgroundColor(Colors.CARD)
+      .borderRadius(Radius.LG)
+      .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
 
@@ -1134,11 +1218,92 @@ export struct Review {
       .height(150)
       .margin({ top: 8, bottom: 8 })
 
+      // ⚠️ 这三个数值块**必须内联**，不能抽成带参数的 @Builder：
+      // ArkUI 中「按值传参」的 @Builder 在参数变化时不会刷新 UI，会导致这些数字一直停在
+      // 首次渲染的旧值（表现就是"近 30 天数据一直没有实时更新"）。内联后随 @State 正常重绘。
       Row() {
-        this.statCard('学习', `${this.summary.totalHours}`, '小时')
-        // 同口径：任务完成数一律取 taskDone，避免同页出现两个数
-        this.statCard('完成', `${this.taskDone}`, '个任务')
-        this.statCard('专注率', `${this.summary.focusRate}`, '%')
+        // 学习：数值分级（用户口径）——
+        //  · 满 1 小时：`xxh yymin`，xx 最大(28)、h 小(12)；yy 居中(18，比 xx 小)、min 小(12，与 h 同)
+        //  · 不足 1 小时：直接 `xxmin`，数值 28、min 小(12)
+        Column() {
+          Text('学习')
+            .fontSize(12)
+            .fontColor(Colors.TEXT_SECONDARY)
+          Row() {
+            if (this.summary.totalNetSeconds >= 3600) {
+              Text(`${Math.floor(this.summary.totalNetSeconds / 3600)}`)
+                .fontSize(28)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text('h')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ left: 1, bottom: 4 })
+              Text(`${Math.floor((this.summary.totalNetSeconds % 3600) / 60)}`)
+                .fontSize(18)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Colors.TEXT_PRIMARY)
+                .margin({ left: 5 })
+              Text('min')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ left: 1, bottom: 4 })
+            } else {
+              Text(`${Math.floor(this.summary.totalNetSeconds / 60)}`)
+                .fontSize(28)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text('min')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ left: 2, bottom: 4 })
+            }
+          }
+          .alignItems(VerticalAlign.Bottom)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Center)
+
+        Column() {
+          Text('完成')
+            .fontSize(12)
+            .fontColor(Colors.TEXT_SECONDARY)
+          Row() {
+            // **30 天口径**：用 summary.completedTasks（会话完成 ∪ 近 30 天创建且已勾选，
+            // 见 last30DaysSummary），不再用全站累计的 taskDone —— 否则这张"近 30 天"卡片里
+            // 会混进历史总数。任务进度卡片的 6/7 是全站累计，两者口径不同，属预期。
+            Text(`${this.summary.completedTasks}`)
+              .fontSize(28)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Text('个任务')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ left: 4, bottom: 4 })
+          }
+          .alignItems(VerticalAlign.Bottom)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Center)
+
+        Column() {
+          Text('专注率')
+            .fontSize(12)
+            .fontColor(Colors.TEXT_SECONDARY)
+          Row() {
+            Text(`${this.summary.focusRate}`)
+              .fontSize(28)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Text('%')
+              .fontSize(12)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .margin({ left: 4, bottom: 4 })
+          }
+          .alignItems(VerticalAlign.Bottom)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Center)
       }
       .width('100%')
       .padding({ top: 8 })
@@ -1159,8 +1324,16 @@ export struct Review {
           .width('100%')
 
         if (this.canShowRadar) {
-          RadarChart({ values: this.dimValues, labels: this.dimLabels, chartSize: 150 })
+          RadarChart({ values: this.dimValues, labels: this.dimLabels, missing: this.dimMissing, chartSize: 150 })
             .margin({ top: 4 })
+          // 诚实说明：哪些维度本次没数据，避免用户误以为「得分为 0 / 最差」
+          if (this.profile.perceptionCount === 0 || this.profile.taskCount === 0) {
+            Text(this.coverageNote())
+              .fontSize(11)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .width('100%')
+              .margin({ top: 6 })
+          }
         } else {
           Column() {
             Text('🌱')
@@ -1286,6 +1459,20 @@ export struct Review {
           .fontWeight(FontWeight.Medium)
           .fontColor(Colors.TEXT_PRIMARY)
         Blank()
+        if (this.refreshing) {
+          Text('刷新中…')
+            .fontSize(12)
+            .fontColor(Colors.TEXT_TERTIARY)
+            .margin({ right: 10 })
+        } else {
+          Text('↻ 刷新')
+            .fontSize(12)
+            .fontColor(Colors.PRIMARY_DARK)
+            .margin({ right: 10 })
+            .onClick(() => {
+              this.manualRefresh()
+            })
+        }
         Text('查看全部 ›')
           .fontSize(12)
           .fontColor(Colors.PRIMARY_DARK)
@@ -1303,7 +1490,9 @@ export struct Review {
         .width('100%')
 
       if (this.practice.length > 0) {
-        ForEach(this.practice, (item: PracticeSummaryItem, index: number) => {
+        // practiceSummary 已按「次数」降序返回，这里默认只展示**前 3 条**（次数最多的），
+        // 其余自动折叠、由用户点开 —— 科目一多，整张卡片会被列表撑得很高。
+        ForEach(this.practice.slice(0, 3), (item: PracticeSummaryItem) => {
           Row() {
             // 只显示「科目 + 次数」：用户要的是"数学 2 次"这种汇总，
             // 逐条罗列任务既长、又看不出每个科目实际投入了多少
@@ -1322,7 +1511,39 @@ export struct Review {
           .padding({ top: 7, bottom: 7 })
           .alignItems(VerticalAlign.Center)
           // key 带上会变的字段（次数）：ArkUI 按 key 复用节点，key 不变就不重绘
-        }, (item: PracticeSummaryItem, index: number) => `${item.subject}_${index}_${item.count}`)
+        }, (item: PracticeSummaryItem) => `${item.subject}_${item.count}`)
+
+        // 超过 3 条才出现折叠开关（与「未完成清单」的折叠样式保持一致）
+        if (this.practice.length > 3) {
+          Text(this.showAllPractice ? '收起 ▴' : `展开剩余 ${this.practice.length - 3} 项 ▾`)
+            .fontSize(11)
+            .fontColor(Colors.PRIMARY_DARK)
+            .width('100%')
+            .margin({ top: 2 })
+            .onClick(() => {
+              this.showAllPractice = !this.showAllPractice
+            })
+
+          if (this.showAllPractice) {
+            ForEach(this.practice.slice(3), (item: PracticeSummaryItem) => {
+              Row() {
+                Text(item.subject)
+                  .fontSize(13)
+                  .fontColor(Colors.TEXT_PRIMARY)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .layoutWeight(1)
+                Text(`${item.count} 次`)
+                  .fontSize(13)
+                  .fontColor(Colors.TEXT_SECONDARY)
+                  .margin({ left: 10 })
+              }
+              .width('100%')
+              .padding({ top: 7, bottom: 7 })
+              .alignItems(VerticalAlign.Center)
+            }, (item: PracticeSummaryItem) => `${item.subject}_${item.count}`)
+          }
+        }
 
         Row({ space: 8 }) {
           // 用 taskDone（= 任务进度里的已完成数），保证和上方卡片对得上
@@ -1506,9 +1727,13 @@ export struct Review {
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor(Colors.TEXT_PRIMARY)
-        Text(s.title.length > 0 ? s.title : '自由专注')
+        // 第二行 = 这次专注涉及的**全部科目**（如「数学·英语」），
+        // 不再只显示 session.title（那是"主要任务"的标题，多科目会话会漏掉其余科目）
+        Text(Metrics.sessionSubjectLabel(s, this.subjectTasks))
           .fontSize(12)
           .fontColor(Colors.TEXT_SECONDARY)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
           .margin({ top: 4 })
       }
       .alignItems(HorizontalAlign.Start)

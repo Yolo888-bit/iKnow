@@ -1,32 +1,29 @@
-import { promptAction, router } from '@kit.ArkUI'
+import { promptAction } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
-import { StorageKey, PrivacyDoc } from '../common/Constants'
+import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { StorageService } from '../services/StorageService'
-import { AuthService } from '../services/AuthService'
-import { PermissionService } from '../services/PermissionService'
 import { PageHeader } from '../components/PageHeader'
 
 /**
- * 隐私与数据（合规：如实说明数据流向 + 数据管理）
+ * 数据管理（从「我的 → 数据管理」点进来）
  *
- * 原「允许麦克风 / 允许健康数据」两个开关已删除：它们既不落盘、也不被任何 Service 读取、
- * 系统权限里也没有对应声明，属于假开关。宁可不给开关，也不给一个点了没用处的。
+ * 本页只保留两块：**分心提醒 / 数据管理**。
+ * 《隐私保护说明》原文与「撤销隐私授权」在 `pages/PrivacyPolicy`
+ * （「我的 → 隐私与数据」直接进那一页），本页不再重复入口。
  *
  * ⚠️ 本页文案必须与实现一致：本项目会**上传画面片段到云端识别**并**在本机保存**，
- * 因此原先"不联网、不保存"的说法已删除，改为如实描述。
- * 授权点只有一个：首页「开始专注」时的感知确认（确认即为授权，默认同意；
- * 选择「仅计时」则完全不抓拍、不上传）。这里不设独立的采集/上传开关，只说明链路与撤回方式。
+ * 因此"不联网、不保存"这类说法一律不写。
+ * 原「允许麦克风 / 允许健康数据」两个开关已删除：它们不落盘、也不被任何 Service 读取、
+ * 系统权限里也没有对应声明，属于假开关。宁可不给开关，也不给一个点了没用处的。
+ * 语音输入（麦克风）能力已整体移除，故本页原「麦克风」模块也一并删除。
  */
 @Entry
 @Component
 export struct Privacy {
   @State showClearConfirm: boolean = false
-  @State showWithdrawConfirm: boolean = false
   @State vibrateOn: boolean = true
   @State voiceOn: boolean = true
-  /** 麦克风（语音输入）的系统授权状态：只读展示，不再做成"假开关" */
-  @State micOn: boolean = false
 
   aboutToAppear(): void {
     StorageService.getInstance().loadKv(StorageKey.VIBRATE_ON).then((v: string) => {
@@ -38,7 +35,6 @@ export struct Privacy {
       this.voiceOn = v !== '0'
       AppStorage.setOrCreate<number>(StorageKey.VOICE_ON, this.voiceOn ? 1 : 0)
     }).catch(() => {})
-    this.micOn = PermissionService.getInstance().isMicrophoneOn()
   }
 
   private clearImages(): void {
@@ -56,95 +52,12 @@ export struct Privacy {
     })
   }
 
-  /** 打开《用户服务协议》/《隐私政策》原文（0 = 协议，1 = 政策） */
-  private openDoc(tab: number): void {
-    AppStorage.setOrCreate<number>(PrivacyDoc.TAB_REQUEST, tab)
-    router.pushUrl({ url: 'pages/PrivacyPolicy' })
-  }
-
-  /**
-   * 撤回隐私授权。
-   *
-   * 只清"同意留痕"，**不删数据、也不强制退出登录** —— 数据删不删由用户自己在上面单独决定；
-   * 撤回的效果是：下次登录时必须重新阅读并勾选同意（符合"撤回同意"的合规要求）。
-   */
-  private doWithdrawConsent(): void {
-    this.showWithdrawConfirm = false
-    AuthService.getInstance().withdrawConsent().then(() => {
-      promptAction.showToast({ message: '已撤回授权，下次登录需重新勾选同意' })
-    }).catch(() => {
-      promptAction.showToast({ message: '撤回失败，请重试' })
-    })
-  }
-
   build() {
     Stack() {
       Scroll() {
         Column({ space: Spacing.LG }) {
-          // 顶栏：返回箭头 + 居中页面名称（从「我的 → 隐私 / 数据管理」点进来）
-          PageHeader({ title: '隐私与数据' })
-
-          // 隐私保护说明（《用户服务协议》+《隐私政策》原文）
-          // 与登录页的勾选项指向**同一份文档**，避免两处说法不一致
-          Column() {
-            Text('隐私保护说明')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.TEXT_PRIMARY)
-              .width('100%')
-
-            Text(`《${PrivacyDoc.AGREEMENT}》与《${PrivacyDoc.POLICY}》原文，登录时勾选的就是这一份。\n`
-              + `当前版本 v${PrivacyDoc.VERSION}，生效日期 ${PrivacyDoc.EFFECTIVE}。`)
-              .fontSize(12)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .lineHeight(20)
-              .width('100%')
-              .margin({ top: 10 })
-
-            Row({ space: 10 }) {
-              Button(`《${PrivacyDoc.POLICY}》`)
-                .layoutWeight(1)
-                .height(44)
-                .fontSize(14)
-                .fontColor(Colors.PRIMARY_DARK)
-                .backgroundColor(Colors.PRIMARY_SOFT)
-                .borderRadius(Radius.MD)
-                .onClick(() => {
-                  this.openDoc(1)
-                })
-              Button(`《${PrivacyDoc.AGREEMENT}》`)
-                .layoutWeight(1)
-                .height(44)
-                .fontSize(14)
-                .fontColor(Colors.TEXT_PRIMARY)
-                .backgroundColor(Colors.BG)
-                .borderRadius(Radius.MD)
-                .onClick(() => {
-                  this.openDoc(0)
-                })
-            }
-            .width('100%')
-            .margin({ top: 14 })
-          }
-          .privacyCard()
-
-          // 摄像头数据
-          Column() {
-            Text('摄像头数据')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.TEXT_PRIMARY)
-              .width('100%')
-
-            Text('✓ 仅在感知信号触发时抓拍 2~3 秒的短片段，不会持续录像\n✓ 片段会上传到云端做「在做什么」识别，并保存在本机供你复盘\n✓ 云端只输出可观察状态（做题/看书/看手机…），不做注意力推断\n✓ 授权方式：开始专注时确认「开启感知」即为授权；选择「仅计时开始」则完全不抓拍、不上传\n✓ 本机保存的画面可随时用下方「清除已保存的画面片段」一键清除')
-              .fontSize(13)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .lineHeight(22)
-              .width('100%')
-              .margin({ top: 10 })
-
-          }
-          .privacyCard()
+          // 顶栏：返回箭头 + 居中页面名称（从「我的 → 数据管理」点进来）
+          PageHeader({ title: '数据管理' })
 
           // 分心提醒方式
           Column() {
@@ -175,26 +88,6 @@ export struct Privacy {
               .lineHeight(16)
               .width('100%')
               .margin({ top: 8 })
-          }
-          .privacyCard()
-
-          // 语音输入（麦克风）
-          Column() {
-            Text('麦克风')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.TEXT_PRIMARY)
-              .width('100%')
-
-            Text(`系统授权状态：${this.micOn ? '已授权' : '未授权'}\n`
-              + '✓ 只在任务规划 / 专注答疑里按住说话时采集，其余时间不采集\n'
-              + '✓ 语音交给系统语音识别服务按在线模式转成文字，音频本身不由本 App 保存\n'
-              + '✓ 未授权时不影响使用，输入框照常可以打字')
-              .fontSize(13)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .lineHeight(22)
-              .width('100%')
-              .margin({ top: 10 })
           }
           .privacyCard()
 
@@ -262,36 +155,6 @@ export struct Privacy {
           }
           .privacyCard()
 
-          // 隐私授权撤回
-          Column() {
-            Text('隐私授权')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.TEXT_PRIMARY)
-              .width('100%')
-
-            Text('撤回后，下次登录需要重新阅读并勾选《用户服务协议》与《隐私政策》。\n'
-              + '本机已保存的数据不会被删除，如需清除请用上方对应按钮。')
-              .fontSize(12)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .lineHeight(20)
-              .width('100%')
-              .margin({ top: 10 })
-
-            Button('撤回隐私授权')
-              .width('100%')
-              .height(46)
-              .fontSize(15)
-              .fontColor(Colors.TEXT_PRIMARY)
-              .backgroundColor(Colors.CARD)
-              .borderRadius(Radius.MD)
-              .margin({ top: 12 })
-              .onClick(() => {
-                this.showWithdrawConfirm = true
-              })
-          }
-          .privacyCard()
-
           Blank().height(20)
         }
         // top 收窄：顶栏的返回箭头要贴着页面顶部
@@ -352,55 +215,6 @@ export struct Privacy {
         .alignItems(HorizontalAlign.Center)
       }
 
-      // 撤回授权确认（与清除数据的弹窗同一套写法，遮罩在下、面板在上）
-      if (this.showWithdrawConfirm) {
-        Column() {
-          Column() {
-            Text('撤回隐私授权？')
-              .fontSize(17)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(Colors.TEXT_PRIMARY)
-            Text('撤回后，下次登录需要重新阅读并勾选同意。已保存的数据不会被删除。')
-              .fontSize(14)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .lineHeight(21)
-              .margin({ top: 8 })
-
-            Row({ space: 12 }) {
-              Button('取消')
-                .layoutWeight(1)
-                .height(44)
-                .fontSize(15)
-                .fontColor(Colors.TEXT_SECONDARY)
-                .backgroundColor(Colors.BG)
-                .borderRadius(Radius.MD)
-                .onClick(() => {
-                  this.showWithdrawConfirm = false
-                })
-              Button('确认撤回')
-                .layoutWeight(1)
-                .height(44)
-                .fontSize(15)
-                .fontColor(Colors.PRIMARY_DARK)
-                .backgroundColor(Colors.PRIMARY_SOFT)
-                .borderRadius(Radius.MD)
-                .onClick(() => {
-                  this.doWithdrawConsent()
-                })
-            }
-            .margin({ top: 20 })
-          }
-          .width('82%')
-          .padding(24)
-          .backgroundColor(Colors.CARD)
-          .borderRadius(Radius.LG)
-        }
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#66000000')
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
-      }
     }
     .width('100%')
     .height('100%')

@@ -1,6 +1,7 @@
-import { router } from '@kit.ArkUI'
+import { router, promptAction } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { PrivacyDoc } from '../common/Constants'
+import { AuthService } from '../services/AuthService'
 
 /**
  * 隐私保护说明（《用户服务协议》+《隐私政策》）
@@ -8,7 +9,7 @@ import { PrivacyDoc } from '../common/Constants'
  * 两个入口：
  *  1. **登录 / 注册页**的勾选项 —— 用户必须先读这份文档并勾选同意，才能建号或登录
  *     （门禁在 `pages/Login` + `AuthService`，本页只负责"说清楚"）；
- *  2. 「我的 → 隐私」与「关于」页 —— 已登录用户随时可以回来查看。
+ *  2. **「我的 → 隐私与数据」** —— 已登录用户直接进这一页；标题右侧另有「撤销隐私授权」红色胶囊。
  *
  * 写作原则（重要）：
  *  - **必须与实现一致**。本项目会抓拍画面短片段上传云端识别、会把学习上下文发给大模型服务商、
@@ -38,7 +39,7 @@ const HIGHLIGHTS: string[] = [
   '摄像头只在感知触发时抓拍 2~3 秒短片段，不做持续录像；选「仅计时」则完全不抓拍',
   '画面短片段会上传到云端做「你在做什么」的识别，云端只回状态，不做注意力推断',
   'AI 规划 / 答疑 / 复盘会把必要的学习上下文发给大模型服务商，不发送无关信息',
-  '每一项数据都能在「我的 → 隐私」里单独清除，或一次性全部清除'
+  '每一项数据都能在「我的 → 数据管理」里单独清除，或一次性全部清除'
 ]
 
 /** 《用户服务协议》各节 */
@@ -69,7 +70,7 @@ const AGREEMENT_SECTIONS: DocSection[] = [
   ]),
   new DocSection('六、服务变更、中断与终止', [
     '· 随着版本迭代，功能可能新增、调整或下线（例如感知能力的升级或降级）。',
-    '· 依赖第三方服务（大模型、语音识别、云端画面识别）的功能，可能因服务商调整、网络或额度原因暂时不可用；此时应用会明确提示，并降级到仍然可用的能力（例如仅计时模式）。',
+    '· 依赖第三方服务（大模型、云端画面识别）的功能，可能因服务商调整、网络或额度原因暂时不可用；此时应用会明确提示，并降级到仍然可用的能力（例如仅计时模式）。',
     '· 你可以随时停止使用；卸载应用即视为终止使用，本机数据会一并删除。'
   ]),
   new DocSection('七、免责与责任限制', [
@@ -93,7 +94,6 @@ const POLICY_SECTIONS: DocSection[] = [
     '· 学习数据：目标与考试日期、AI 规划出的任务与时长、每次专注的起止时间、专注与分心时长、状态时间线、复盘记录、练习内容统计。',
     '· 感知数据：开启专注感知时，信号触发会抓拍 2~3 秒的画面短片段，同时记录可观察状态（做题 / 看书 / 看手机 / 趴桌 / 画面无人）。',
     '· 生理数据（可选）：连接标准蓝牙心率设备（手环 / 胸带）时读取心率与 HRV；不连接则不采集。',
-    '· 语音数据（可选）：仅在任务规划或专注答疑里按住说话时采集，用于转写成文字。',
     '· 我们不收集：通讯录、短信、通话记录、精确位置、应用列表，也不读取相册。'
   ]),
   new DocSection('二、信息如何被使用', [
@@ -105,27 +105,25 @@ const POLICY_SECTIONS: DocSection[] = [
   new DocSection('三、存储位置与保存期限', [
     '· 全部数据保存在本机应用沙箱内：结构化数据在本地数据库，少量配置在本地键值缓存。',
     '· 画面短片段保存在应用私有目录，不会出现在系统相册里。',
-    '· 保存期限：直到你在「我的 → 隐私」中主动清除，或者卸载应用。卸载会一并删除沙箱内的全部数据。',
+    '· 保存期限：直到你在「我的 → 数据管理」中主动清除，或者卸载应用。卸载会一并删除沙箱内的全部数据。',
     '· 当前版本不提供跨设备同步：换一台设备使用，看到的是一份全新的空数据。'
   ]),
   new DocSection('四、第三方与共享', [
     '· 云端画面识别服务：接收画面短片段，返回状态标签。',
     '· 大模型服务商：接收上文所述的对话上下文，返回文本结果。',
-    '· 系统语音识别服务：接收你按住说话时录制的音频，返回文字。',
     '· 我们不会向第三方出售你的数据，也不做广告画像。',
     '· 上述服务商对数据的处理受其自身隐私政策约束；本应用只在实现对应功能所必需的范围内发送数据。'
   ]),
   new DocSection('五、系统权限与用途', [
     '· 网络（系统授予，无需你操作）：仅用于调用云端画面识别与大模型接口。',
     '· 相机：专注感知抓拍。可在系统设置中关闭；关闭后应用会自动降级为「仅计时模式」，不再抓拍。',
-    '· 麦克风：语音输入转文字。未授权时输入框照常可以打字，只是没有语音入口。',
     '· 蓝牙：连接心率设备。不连接则不使用。',
-    '· 震动：确认分心时震动提醒，可在「我的 → 隐私」里关闭。'
+    '· 震动：确认分心时震动提醒，可在「我的 → 数据管理」里关闭。'
   ]),
   new DocSection('六、你的权利：查看、清除与撤回', [
     '· 查看：产生的数据都能在「首页 / 复盘」中看到。',
-    '· 清除：在「我的 → 隐私」里可以分别清除学习数据、已保存的画面片段、生理数据，或一次性清除全部数据。清除操作不可恢复。',
-    '· 撤回采集授权：开始专注时选择「仅计时」即本次完全不抓拍、不上传；不连接心率设备即不做生理采集；不使用语音输入，麦克风就不会采集。',
+    '· 清除：在「我的 → 数据管理」里可以分别清除学习数据、已保存的画面片段、生理数据，或一次性清除全部数据。清除操作不可恢复。',
+    '· 撤回采集授权：开始专注时选择「仅计时」即本次完全不抓拍、不上传；不连接心率设备即不做生理采集。',
     '· 撤回同意：撤回后，下次登录需要重新阅读并勾选同意。已经保存在本机、尚未清除的数据不受影响，需要你单独清除。'
   ]),
   new DocSection('七、未成年人保护', [
@@ -153,6 +151,9 @@ export struct PrivacyPolicy {
     if (req !== undefined && (req === 0 || req === 1)) {
       this.tab = req
     }
+    // 用完即清（同 INDEX_TAB_REQUEST 的做法）：否则从「我的 → 隐私与数据」进来时
+    // 会沿用上一次看过的页签，而不是默认的《隐私政策》。
+    AppStorage.setOrCreate<number>(PrivacyDoc.TAB_REQUEST, -1)
     this.applyTab()
   }
 
@@ -166,6 +167,37 @@ export struct PrivacyPolicy {
     }
     this.tab = m
     this.applyTab()
+  }
+
+  /**
+   * 撤销隐私授权：二次确认后清掉"同意留痕"，下次登录需重新阅读并勾选同意。
+   * **不删数据、也不强制退出登录** —— 数据删不删由用户在「我的 → 数据管理」单独决定。
+   */
+  private confirmWithdraw(): void {
+    AlertDialog.show({
+      title: '撤回隐私授权？',
+      message: '撤回后，下次登录需要重新阅读并勾选同意。已保存的数据不会被删除。',
+      primaryButton: {
+        value: '撤回',
+        fontColor: Colors.RED,
+        action: () => {
+          this.doWithdrawConsent()
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      }
+    })
+  }
+
+  private doWithdrawConsent(): void {
+    AuthService.getInstance().withdrawConsent().then(() => {
+      promptAction.showToast({ message: '已撤回授权，下次登录需重新勾选同意' })
+    }).catch(() => {
+      promptAction.showToast({ message: '撤回失败，请重试' })
+    })
   }
 
   @Builder
@@ -209,13 +241,29 @@ export struct PrivacyPolicy {
           router.back()
         })
 
-        // 标题 + 版本
+        // 标题 + 版本（「隐私保护说明」右侧挂红色胶囊「撤销隐私授权」）
         Column() {
-          Text('隐私保护说明')
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Colors.TEXT_PRIMARY)
-            .width('100%')
+          Row() {
+            Text('隐私保护说明')
+              .fontSize(24)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Colors.TEXT_PRIMARY)
+              .layoutWeight(1)
+            Text('撤销隐私授权')
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Color.White)
+              .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+              .backgroundColor(Colors.CAMERA_RED)
+              .borderRadius(15)
+              .margin({ left: 10 })
+              .onClick(() => {
+                this.confirmWithdraw()
+              })
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+
           Text(`版本 v${PrivacyDoc.VERSION} · 生效日期 ${PrivacyDoc.EFFECTIVE}`)
             .fontSize(12)
             .fontColor(Colors.TEXT_TERTIARY)

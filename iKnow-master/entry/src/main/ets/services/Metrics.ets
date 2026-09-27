@@ -1,4 +1,4 @@
-import { FocusState, FocusSource, TaskStatus } from '../models/Enums'
+import { FocusState, FocusSource, TaskStatus, PerceptionMode } from '../models/Enums'
 import { FocusSession } from '../models/FocusSession'
 import { Task } from '../models/Task'
 import { StudyPlan } from '../models/StudyPlan'
@@ -7,6 +7,8 @@ import { FocusTuning } from '../common/FocusTuning'
 
 export interface Last30DaysSummary {
   totalHours: number
+  /** 近 30 天净专注总秒数：`totalHours` 只有小时粒度、会丢掉分钟，精细 "xxh xxmin" 展示用它 */
+  totalNetSeconds: number
   completedTasks: number
   focusRate: number
   /**
@@ -123,6 +125,10 @@ export interface FiveDim {
   stability: number
   execution: number
   antiDistraction: number
+  /** 计入「抗干扰」的会话数（仅感知开启的会话），0 表示无数据 */
+  perceptionCount: number
+  /** 计入「执行力」的会话数（仅含任务清单的会话），0 表示无数据 */
+  taskCount: number
 }
 
 /** 近 7 天 vs 前 7 天（§6.2）。变化幅度不到 10% 一律算"基本持平"，不把波动说成趋势 */
@@ -366,31 +372,42 @@ export class Metrics {
   /**
    * §6 五维（纯计算，不含样本门禁）。
    * 调用方须先用 canShowProfile(sampleCount) 判断是否达到 N>=3，未达请勿渲染数值。
-   *  - efficiency     = 0.6*净专注率均值 + 0.4*完成率均值
+   *  - efficiency     = 0.6*净专注率均值 + 0.4*完成率均值（完成率仅取「有任务清单」的会话）
    *  - concentration  = 净专注率均值
    *  - stability      = 净专注率序列 σ：σ>0.3 → 0；否则 100*(1-σ/0.4)
-   *  - execution      = 完成率均值
-   *  - antiDistraction= 100*(1-分心率均值)
+   *  - execution      = 完成率均值（**仅**含任务清单的会话；自由专注无任务，不计入也不计 0）
+   *  - antiDistraction= 100*(1-分心率均值)（**仅**感知开启的会话；没开摄像头时 distractionDuration 恒为 0，
+   *                    若混入会把「没数据」算成「抗干扰满分」，故剔除。无感知会话时 perceptionCount=0）
    */
   static fiveDim(sessions: FocusSession[]): FiveDim {
     const finished = sessions.filter((s: FocusSession): boolean => Metrics.totalStudySec(s) > 0)
     if (finished.length === 0) {
-      return { efficiency: 0, concentration: 0, stability: 0, execution: 0, antiDistraction: 0 }
+      return { efficiency: 0, concentration: 0, stability: 0, execution: 0, antiDistraction: 0,
+        perceptionCount: 0, taskCount: 0 }
     }
     const rates: number[] = finished.map((s: FocusSession): number => Metrics.netFocusRate(s) * 100)
-    const comps: number[] = finished.map((s: FocusSession): number => Metrics.completionRate(s))
-    const distrs: number[] = finished.map((s: FocusSession): number => Metrics.distractionRate(s))
     const avgRate = Metrics.mean(rates)
-    const avgComp = Metrics.mean(comps)
-    const avgDistr = Metrics.mean(distrs)
     const sigma = Metrics.stddev(rates) / 100
+
+    // 执行力：只统计「有任务清单」的会话；自由专注（无任务）不拉低、也不计入分母
+    const taskSessions = finished.filter((s: FocusSession): boolean => s.taskIds.length > 0)
+    const comps: number[] = taskSessions.map((s: FocusSession): number => Metrics.completionRate(s))
+    const avgComp = comps.length > 0 ? Metrics.mean(comps) : 0
+
+    // 抗干扰：只统计「感知开启（PERCEPTION_FULL）」的会话；没开摄像头时 distractionDuration 恒为 0，
+    // 混入会把"无数据"误算成"抗干扰满分"，故剔除
+    const perceptionSessions = finished.filter((s: FocusSession): boolean =>
+      s.perceptionMode === PerceptionMode.PERCEPTION_FULL)
+    const distrs: number[] = perceptionSessions.map((s: FocusSession): number => Metrics.distractionRate(s))
+    const avgDistr = distrs.length > 0 ? Metrics.mean(distrs) : 0
 
     const efficiency = Math.round(0.6 * avgRate + 0.4 * avgComp)
     const concentration = Math.round(avgRate)
     const stability = sigma > 0.3 ? 0 : Math.round(100 * (1 - Metrics.clamp(sigma / 0.4, 0, 1)))
     const execution = Math.round(avgComp)
     const antiDistraction = Math.round(100 * (1 - Metrics.clamp(avgDistr, 0, 1)))
-    return { efficiency, concentration, stability, execution, antiDistraction }
+    return { efficiency, concentration, stability, execution, antiDistraction,
+      perceptionCount: perceptionSessions.length, taskCount: taskSessions.length }
   }
 
   /** §6 是否达到展示门槛（N>=3） */
@@ -412,18 +429,29 @@ export class Metrics {
 
     // 每日「专注度」（100 分制）：当天多次专注就取各次专注度的**平均值**，没学就是 0。
     // 之前这里是「当天净专注分钟数」，纵轴单位是分钟；现在统一成百分比，纵轴 0~100。
+    //
+    // 同时记录**每日权重 = 当天净专注时长（秒）**：总体「专注率」不再是"30 天一把抓"的
+    // 净专注/已判定，而是**「单日专注率」按当天专注时长加权求平均**（用户明确口径）。
+    // 这样 1 分钟的会话与 2 小时的会话不会被同等对待（各次的算术平均会把短会话放大）。
+    const dayRates: number[] = []
+    const dayWeights: number[] = []
     for (let i = 29; i >= 0; i--) {
       const dayStart = TimeUtils.dayStart(now) - i * dayMs
       const dayEnd = dayStart + dayMs
       let rateSum = 0
       let count = 0
+      let dayNet = 0
       for (const s of sessions) {
         if (s.startTime >= dayStart && s.startTime < dayEnd) {
           rateSum += Metrics.focusRatePercent(s)
           count += 1
+          dayNet += Metrics.netFocusSec(s)
         }
       }
-      trend.push(count > 0 ? Math.round(rateSum / count) : 0)
+      const dayRate = count > 0 ? Math.round(rateSum / count) : 0
+      trend.push(dayRate)
+      dayRates.push(dayRate)
+      dayWeights.push(dayNet)
     }
 
     for (const s of sessions) {
@@ -439,10 +467,28 @@ export class Metrics {
       }
     }
 
-    // 专注率的分母 = 净专注 + 分心（不含答疑），与单次会话 `focusRatePercent` 同一口径
-    const judged = totalNetSec + totalDistSec
-    const focusRate = judged > 0 ? Math.round(totalNetSec / judged * 100) : 0
-    return { totalHours: Math.round(totalNetSec / 3600), completedTasks: completedIds.length, focusRate: focusRate, trend: trend }
+    // 「完成」按**近 30 天**口径统计：会话里完成过的 ∪ 近 30 天内创建且已勾选的。
+    // 只用会话会漏掉"在首页 / 复盘直接勾选"的那种完成（它不会进任何会话的 completedTaskIds）；
+    // 只用任务表又会把 30 天前的旧勾选也算进来。取并集才与卡片标题的「近 30 天」相符。
+    const counted: string[] = completedIds.slice()
+    for (const t of tasks) {
+      if ((t.done || t.status === TaskStatus.DONE) && t.createdAt >= cutoff
+        && counted.indexOf(t.id) < 0) {
+        counted.push(t.id)
+      }
+    }
+
+    // 总体专注率 = Σ(单日专注率 × 当天专注时长) / Σ(当天专注时长)
+    // 权重 = 当天净专注秒数；当天无专注（权重 0，含"没学"那天）不参与，分母为 0 时如实给 0。
+    let wRateSum = 0
+    let wSum = 0
+    for (let i = 0; i < dayRates.length; i++) {
+      wRateSum += dayRates[i] * dayWeights[i]
+      wSum += dayWeights[i]
+    }
+    const focusRate = wSum > 0 ? Math.round(wRateSum / wSum) : 0
+    return { totalHours: Math.round(totalNetSec / 3600), totalNetSeconds: totalNetSec,
+      completedTasks: counted.length, focusRate: focusRate, trend: trend }
   }
 
   // ===================== 长期计划目标进度（§4）=====================
@@ -987,6 +1033,48 @@ export class Metrics {
 
   /** 归一化：去掉空白与常见标点，只用于"判断是不是同一项练习"，不改展示文案 */
 /** 练习内容总结的一项：某科目**一共完成了几个任务** */
+  /**
+   * 一次会话涉及的**全部科目**（去重，保持任务在 `taskIds` 里的先后）。
+   *
+   * 为什么需要：学习记录列表原来只显示 `session.title`，那是"**主要任务**"的标题 ——
+   * 一次专注里先做数学、再做英语，列表里也只写一个，用户会觉得"莫名只给一个科目"。
+   * 现在按会话的 `taskIds` 找回各任务的 `subject`，拼成「数学·英语」。
+   * 空科目归到「未标注科目」，不让它悄悄消失；`subject` 为空的会话返回空数组。
+   */
+  static sessionSubjects(s: FocusSession, tasks: Task[]): string[] {
+    const map = new Map<string, string>()
+    for (const t of tasks) {
+      map.set(t.id, t.subject)
+    }
+    const out: string[] = []
+    for (const id of s.taskIds) {
+      const raw = map.get(id)
+      if (raw === undefined) {
+        continue
+      }
+      const name = raw.trim().length > 0 ? raw.trim() : '未标注科目'
+      if (out.indexOf(name) < 0) {
+        out.push(name)
+      }
+    }
+    return out
+  }
+
+  /**
+   * 一次会话的**科目标签**（列表里直接显示的那一串）：
+   *  • 有科目 → 用「·」连接，如「数学·英语」；
+   *  • 没有挂任务（自由专注）→ 退回 `session.title`，标题也为空就写「自由专注」。
+   *
+   * 学习记录列表与复盘「当日专注明细」共用这一个方法，避免两处各写一遍 fallback。
+   */
+  static sessionSubjectLabel(s: FocusSession, tasks: Task[]): string {
+    const subs = Metrics.sessionSubjects(s, tasks)
+    if (subs.length > 0) {
+      return subs.join('·')
+    }
+    return s.title.length > 0 ? s.title : '自由专注'
+  }
+
   /**
    * 练习内容总结：**按科目统计"一共完成了几个任务"**。
    *

@@ -292,19 +292,6 @@ export struct SimWorkbench {
             this.rev += 1
           })
 
-        Button('演示：分心（看手机）')
-          .width('100%')
-          .height(38)
-          .fontSize(13)
-          .fontColor(Color.White)
-          .backgroundColor(Colors.YELLOW)
-          .borderRadius(Radius.MD)
-          .margin({ top: 8 })
-          .onClick(() => {
-            // 与上面的「看手机」同一个入口：一键走完整流程（抓拍 → 云端识别 → 落库带照片 → 干预）
-            this.runFlow('看手机')
-          })
-
         this.note('上面这组：正常档（静息/专注/正常/98%/静止/写字）只改模拟数据；' +
           '异常档（紧张/HRV偏低/低血氧/大幅移动）会立即演示一次提醒，并记进学习记录。' +
           `${SensorService.getInstance().isWristPresent() ? '当前已佩戴手表，提醒会尝试震动。' : '当前未佩戴手表，提醒走手机声音与屏幕。'}`)

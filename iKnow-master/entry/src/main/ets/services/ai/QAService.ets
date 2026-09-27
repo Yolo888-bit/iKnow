@@ -10,6 +10,11 @@ export interface QAMessage {
 
 export interface QATextPayload {
   question: string
+  /**
+   * ⚠️ **已停用**（qa@2.0.0）：原为"当前任务 / 科目"，会被拼进 user message，
+   * 导致回答总往当前任务上扯（用户反馈观感诡异）。现在 `AIChat` 不再传、
+   * `GatewayAIService` 也不再注入，字段保留仅为契约兼容。
+   */
   subject?: string
   history?: Array<QAMessage>
   /** 该用户最近问过的问题（跨会话记忆，用于"能接着上次聊"） */

@@ -1,13 +1,12 @@
-import { router } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { PageHeader } from '../components/PageHeader'
 
 /**
- * 关于（版本 / 能力说明 / AI 身份 / 隐私入口）
+ * 关于（版本 / 能力说明 / AI 身份 / 联系我们）
  *
  * 原先指向 Placeholder 占位页（"该模块正在完善中"）。评审看的是完备度，一页如实说明比占位页强，
- * 但**不许编**：版本号与 AppScope/app.json5 的 versionName 一致，能力说明与实现一致，
- * 没有可核对来源的信息（作者、联系方式）宁可不写。
+ * 但**不许编**：版本号与 AppScope/app.json5 的 versionName 一致，能力说明与实现一致。
+ * 「联系我们」写的是团队名与邮箱（uDefine / 3142488461@qq.com），由项目方给出，非杜撰。
  */
 @Entry
 @Component
@@ -77,28 +76,28 @@ export struct About {
         .aboutCard()
 
         Column() {
-          Text('隐私与数据')
+          Text('联系我们')
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
-          Text('画面与数据的上传范围、保存位置与清除方式，见隐私页。')
+          Text('有任何建议或问题，欢迎联系开发团队 uDefine，我们会尽快回复。')
             .fontSize(13)
             .fontColor(Colors.TEXT_SECONDARY)
             .lineHeight(22)
             .margin({ top: 10 })
             .width('100%')
-          Button('查看隐私与数据')
+          // 邮箱做成可长按复制的实心块，方便直接拷贝
+          Text('3142488461@qq.com')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.PRIMARY_DARK)
             .width('100%')
-            .height(44)
-            .fontSize(15)
-            .fontColor(Colors.TEXT_PRIMARY)
-            .backgroundColor(Colors.BG)
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .backgroundColor(Colors.PRIMARY_SOFT)
             .borderRadius(Radius.MD)
-            .margin({ top: 14 })
-            .onClick(() => {
-              router.pushUrl({ url: 'pages/Privacy' })
-            })
+            .margin({ top: 12 })
+            .copyOption(CopyOptions.LocalDevice)
         }
         .aboutCard()
 

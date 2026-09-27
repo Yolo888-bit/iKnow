@@ -16,7 +16,6 @@ import { StudyPlan } from '../models/StudyPlan'
 import { TimeUtils } from '../utils/TimeUtils'
 import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
 import { UserAvatar } from '../components/UserAvatar'
-import { VoiceInputButton } from '../components/VoiceInputButton'
 
 /**
  * 手动新增的哨兵 id：`editId` 等于它时，`editPanel` 走"新增"而不是"编辑"分支，
@@ -28,8 +27,8 @@ const NEW_TASK_ID = '__new__'
 /**
  * 任务规划 —— 微信式一问一答的对话规划
  *
- *  顶部：iKnow 品牌 + 居中「任务规划 / 在线」+ 右上角用户头像
- *  消息：AI 在左（深色 AI 圆头像 + 暖米色气泡），用户在右（浅绿气泡 + 用户头像）
+ *  顶部：左空占位（不显示品牌字，仅保证标题居中）+ 居中「任务规划 / 在线」+ 右上角用户头像
+ *  消息：AI 在左（「iKnow」圆角方块头像 + 暖米色气泡），用户在右（浅绿气泡 + 用户头像）
  *  下方：居中「待确认任务」+ 圆圈列表（可点选、点文字可编辑）
  *  底部：✓ 进入 X 分钟专注学习 + 绿色大按钮 + 提示文案
  *
@@ -108,6 +107,28 @@ export struct TaskPlanning {
     // 用户要求删掉；那些信息改成界面上的提示条，不再占用对话）
     this.pushAI(AIService.getInstance().planningIntro())
     this.loadLongPlan()
+  }
+
+  /**
+   * 切回规划页时兜底校验：若这期间又跑完过一次专注（会话数变多），
+   * 直接刷新成新一轮 —— 清掉历史聊天、重新载入未完成任务。
+   *
+   * `DATA_VERSION` 的 `@Watch` 也能触发同样的逻辑，但后台 Tab 的 `@Watch`
+   * 在某些时序下不保证先跑；这里用「可见即校验」兜住，保证"开始专注后回来
+   * 一定是个全新页面、不保留历史聊天"（用户明确要求）。
+   */
+  onPageShow(): void {
+    const store = AppStore.getInstance()
+    const sessionCount = store.getSessions().length
+    if (this.sessionCountAtInit < 0) {
+      // 还没建立基线（首次）：只记录，不刷新
+      this.sessionCountAtInit = sessionCount
+      return
+    }
+    if (sessionCount > this.sessionCountAtInit) {
+      this.sessionCountAtInit = sessionCount
+      this.startNewRound()
+    }
   }
 
   /**
@@ -799,7 +820,8 @@ export struct TaskPlanning {
   @Builder
   header() {
     Row() {
-      // 左：等宽占位（不显示文字，仅用来让中间标题真正居中，与右侧头像同宽）
+      // 左：等宽**空**占位（用户要求去掉左上角的绿色图标 —— 保留同宽空位让中间标题真居中，
+      // 与右侧用户头像等宽）。iKnow 品牌标识只保留在对话头像与桌面图标里，页面顶栏不再放。
       Row() {
       }
       .width(74)
@@ -829,9 +851,9 @@ export struct TaskPlanning {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Center)
 
-      // 右：用户头像（与左侧同宽，标题才是真居中）
+      // 右：用户头像（圆形，与 AI 头像同尺寸，标题才是真居中）
       Row() {
-        UserAvatar({ avatar: this.avatar, diameter: 38, radius: 10, bg: Colors.PRIMARY_SOFT })
+        UserAvatar({ avatar: this.avatar, diameter: 38, radius: 19, bg: Colors.PRIMARY_SOFT })
       }
       .width(74)
       .justifyContent(FlexAlign.End)
@@ -844,22 +866,21 @@ export struct TaskPlanning {
   @Builder
   aiBubble(content: string) {
     Row({ space: 10 }) {
-      // 考伴头像：深色圆角块 + 品牌字「iKnow」
-      // 用户要求：不要写「AI」，直接用 iKnow —— 小伴本来就叫 iKnow，标 AI 反而像外挂。
-      // 做成圆角方块（不是圆）：圆的可用宽度只有直径的 ~0.7 倍，5 个字母会被挤到换行。
+      // 考伴头像：绿色圆形 + 白色「iKnow」文字（圆形、与用户头像同尺寸；文字白色填充）
       Stack() {
         Text('iKnow')
-          .fontSize(10)
+          .fontSize(9)
           .fontWeight(FontWeight.Bold)
-          .fontStyle(FontStyle.Italic)
           .fontColor(Color.White)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Clip })
+          .textAlign(TextAlign.Center)
+          .width(38)
       }
       .width(38)
       .height(38)
-      .backgroundColor(Colors.AI_AVATAR_BG)
-      .borderRadius(11)
+      .backgroundColor(Colors.PRIMARY)
+      .borderRadius(19)
       Text(content)
         .fontSize(15)
         .fontColor(Colors.TEXT_PRIMARY)
@@ -885,8 +906,8 @@ export struct TaskPlanning {
         .padding({ left: 14, right: 14, top: 11, bottom: 11 })
         .borderRadius(14)
         .constraintSize({ maxWidth: '74%' })
-      // 用户头像（emoji 或相册照片，右上角与工作台一致）
-      UserAvatar({ avatar: this.avatar, diameter: 34, radius: 10, bg: Colors.PRIMARY_SOFT })
+      // 用户头像（圆形，与 AI 头像同尺寸）
+      UserAvatar({ avatar: this.avatar, diameter: 38, radius: 19, bg: Colors.PRIMARY_SOFT })
     }
     .width('100%')
     .alignItems(VerticalAlign.Top)
@@ -1195,15 +1216,6 @@ export struct TaskPlanning {
         .onSubmit(() => {
           this.send()
         })
-
-      // 按住说话：识别结果写回输入框，用户确认后再发（不自动发送，留出纠错余地）
-      VoiceInputButton({
-        onFinal: (text: string) => {
-          if (text.length > 0) {
-            this.inputValue = text
-          }
-        }
-      })
 
       Button('发送')
         .height(44)

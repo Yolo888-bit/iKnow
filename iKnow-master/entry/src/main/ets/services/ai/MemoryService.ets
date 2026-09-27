@@ -16,6 +16,8 @@ export interface ProfileFields {
   focusThreshold?: number
   bestFocusTime?: string
   sampleCount?: number
+  perceptionCount?: number
+  taskCount?: number
 }
 
 export interface MemoryPayload {

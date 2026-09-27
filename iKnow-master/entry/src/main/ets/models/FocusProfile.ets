@@ -14,6 +14,8 @@ export class FocusProfile {
   monthlyTrend: number[] = []         // 近 30 天平均专注时长演变
   // ---- §6 统计样本（N>=3 才显示五维，否则"还在了解你"）----
   sampleCount: number = 0             // 已纳入统计的会话数
+  perceptionCount: number = 0         // 计入「抗干扰」的会话数（感知开启）；0 = 无数据
+  taskCount: number = 0               // 计入「执行力」的会话数（有任务清单）；0 = 无数据
   recentConcentrations: number[] = [] // 最近若干次净专注率（%）
   recentDistractionRates: number[] = [] // 最近若干次分心率（0-1）
   updatedAt: number = 0

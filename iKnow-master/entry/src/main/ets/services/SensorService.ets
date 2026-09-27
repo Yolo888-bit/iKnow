@@ -26,15 +26,22 @@ export class SensorService implements FocusSensor {
     return SensorService.inst
   }
 
-  /** 启动时读回佩戴状态（否则用户切了开关，重启就变回未佩戴） */
+  /**
+   * 启动初始化。
+   *
+   * 「模拟佩戴手表」开关已从设备页下架（2026-09-27）：模拟设备**恒为未佩戴**，
+   * 因此这里不再回读历史 KV_PRESENT，而是把它清成 0 —— 否则老用户上次开的"模拟佩戴"
+   * 会在重启后幽灵般保留，导致界面上"未佩戴"的文案与 `isWristPresent()` 的判定互相打架。
+   * 真实佩戴以 BLE 连接为准（见 `isWristPresent()` / `BleWatchService`）。
+   */
   async init(): Promise<void> {
+    this.connected = false
+    this.baseHeartRate = 0
+    this.baseHrv = 0
     try {
-      const v = await StorageService.getInstance().loadKv(SensorService.KV_PRESENT)
-      if (v === '1') {
-        this.setPresent(true)
-      }
+      await StorageService.getInstance().saveKv(SensorService.KV_PRESENT, '0')
     } catch (e) {
-      // 读取失败保持默认（未佩戴）
+      // 清残留失败无碍：内存里已经是不佩戴
     }
   }
 
@@ -115,10 +122,12 @@ export class SensorService implements FocusSensor {
     this.setPresent(false)
   }
 
+  /** 手表状态一句话（设备页「模拟手表」条目下方的小字） */
   getStatusText(): string {
-    if (!this.connected) {
-      return '未佩戴（模拟设备未连接）'
+    if (!this.isWristPresent()) {
+      return '未佩戴，走神干预为手机声音与屏幕'
     }
-    return `心率 ${this.baseHeartRate} bpm · HRV ${this.baseHrv} ms · 动作正常`
+    const hr = this.getHeartRate()
+    return hr > 0 ? `已佩戴 · 心率 ${hr} bpm` : '已佩戴'
   }
 }

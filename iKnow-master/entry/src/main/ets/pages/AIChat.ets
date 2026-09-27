@@ -13,7 +13,6 @@ import { IdUtils } from '../utils/IdUtils'
 import { TimeUtils } from '../utils/TimeUtils'
 import { AITag } from '../components/AITag'
 import { AIFirstDisclaimer } from '../components/AIFirstDisclaimer'
-import { VoiceInputButton } from '../components/VoiceInputButton'
 
 /** 专注中的 AI 答疑（计时不中断） */
 @Entry
@@ -142,11 +141,9 @@ export struct AIChat {
       const m = this.messages[i]
       all.push({ role: m.role === MessageRole.USER ? 'user' : 'assistant', content: m.content })
     }
-    const task = FocusController.getInstance().getCurrentTask()
+    // 纯答疑：**不再把"当前任务"塞进上下文** —— 用户反馈回答老往"你现在在复习什么"上扯，
+    // 观感很诡异。这里只带会话内历史与"之前问过什么"，用于短追问的指代消解。
     const payload: QATextPayload = { question: text, history: all.slice(-8) }
-    if (task !== null) {
-      payload.subject = task.title
-    }
     if (this.priorQuestions.length > 0) {
       payload.recentQuestions = this.priorQuestions
     }
@@ -427,15 +424,6 @@ export struct AIChat {
               .onSubmit(() => {
                 this.send()
               })
-
-            // 按住说话：识别结果写回输入框，用户可以改完再发（不自动发送，留出纠错余地）
-            VoiceInputButton({
-              onFinal: (text: string) => {
-                if (text.length > 0) {
-                  this.inputValue = text
-                }
-              }
-            })
 
             Button('发送')
               .height(44)

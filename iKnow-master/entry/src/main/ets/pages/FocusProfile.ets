@@ -13,6 +13,7 @@ import { AITag } from '../components/AITag'
 export struct FocusProfile {
   @State profile: Profile = new Profile()
   @State dimValues: number[] = []
+  @State dimMissing: boolean[] = []
   @State trend: number[] = []
   @State hardest: string = ''
   /** 长期分析文案：在 refresh() 里算好（窗口指标现算，不放进持久化的 Profile） */
@@ -27,6 +28,9 @@ export struct FocusProfile {
     const p = AppStore.getInstance().getProfile()
     this.profile = p
     this.dimValues = [p.efficiency, p.concentration, p.stability, p.execution, p.antiDistraction]
+    // 与复盘页同口径：抗干扰只在感知开启的会话上算、执行力只在有任务清单的会话上算；
+    // 无数据维度用灰虚线 + 「—」呈现，不画成 0
+    this.dimMissing = [false, false, false, p.taskCount === 0, p.perceptionCount === 0]
     this.trend = p.monthlyTrend.slice(-14)
     this.hardest = this.hardestSubject()
     // 近 7 天/前 7 天与连续学习天数是**窗口指标**，每次现算（§6.4：不进 FocusProfile）
@@ -34,6 +38,19 @@ export struct FocusProfile {
     const sessions = AppStore.getInstance().getSessions()
     this.aiAdvice = AIService.getInstance().longTermAnalysis(this.profile, this.hardest,
       Metrics.trend7v7(sessions, now), Metrics.streaks(sessions, now))
+  }
+
+  /** 与复盘页同口径的覆盖说明（诚实标注不可评维度） */
+  private coverageNote(): string {
+    const noPerception = this.profile.perceptionCount === 0
+    const noTask = this.profile.taskCount === 0
+    if (noPerception && noTask) {
+      return '未开启摄像头感知、且以自由专注为主，抗干扰与执行力暂不可评'
+    }
+    if (noPerception) {
+      return '未开启摄像头感知，抗干扰暂不可评（仅按有感知的专注评分）'
+    }
+    return '以自由专注为主、未设任务清单，执行力暂不可评（仅按有任务的专注评分）'
   }
 
   /** 推进最慢的科目；没有科目数据时返回空串（原来返回硬编码的『数学类任务』= 凭空生成结论） */
@@ -63,7 +80,14 @@ export struct FocusProfile {
         if (Metrics.canShowProfile(this.profile.sampleCount)) {
         // 五维雷达图
         Column() {
-          RadarChart({ values: this.dimValues, labels: this.dimLabels, chartSize: 280 })
+          RadarChart({ values: this.dimValues, labels: this.dimLabels, missing: this.dimMissing, chartSize: 280 })
+          if (this.profile.perceptionCount === 0 || this.profile.taskCount === 0) {
+            Text(this.coverageNote())
+              .fontSize(11)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .width('100%')
+              .margin({ top: 6 })
+          }
         }
         .profileCard()
 

@@ -67,6 +67,14 @@ export class Colors {
   static readonly QA_ACCENT = '#067A52'
   static readonly QA_SOFT = '#DFF7EE'
 
+  // ---------- 专注时间轴状态色（与绿/黄/红对照，新增蓝、灰两档） ----------
+  /** 答疑：中性蓝，既非专注（绿）也非分心（红），与全站绿系区分 */
+  static readonly BLUE = '#3B82F6'
+  static readonly BLUE_SOFT = '#E8F1FC'
+  /** 休息 / 暂停：中性灰，不参与专注率计算，也不是分心 */
+  static readonly GRAY = '#9AA3A0'
+  static readonly GRAY_SOFT = '#EDEFF0'
+
   // ---------- 阴影 ----------
   /** 卡片柔和阴影 */
   static readonly SHADOW = '#12000000'

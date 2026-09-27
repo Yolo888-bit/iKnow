@@ -350,9 +350,8 @@ export class GatewayAIService implements AIService {
         messages.push({ role: h.role === 'ai' || h.role === 'assistant' ? 'assistant' : 'user', content: h.content })
       }
     }
-    const subject: string = input.subject !== undefined && input.subject.length > 0
-      ? `（我目前正在做：${input.subject}）` : ''
-    messages.push({ role: 'user', content: `${input.question}${subject}` })
+    // 纯答疑：**不再拼"（我目前正在做：…）"**，避免回答被强行拉到当前任务上（用户反馈观感诡异）
+    messages.push({ role: 'user', content: input.question })
 
     const started: number = Date.now()
     const content: string = await this.chatJson(messages, BridgeConfig.MODEL_TEXT, 0.6, 1400,
@@ -421,9 +420,8 @@ export class GatewayAIService implements AIService {
         messages.push({ role: h.role === 'ai' || h.role === 'assistant' ? 'assistant' : 'user', content: h.content })
       }
     }
-    const subject: string = input.subject !== undefined && input.subject.length > 0
-      ? `（我目前正在做：${input.subject}）` : ''
-    messages.push({ role: 'user', content: `${input.question}${subject}` })
+    // 纯答疑：**不再拼"（我目前正在做：…）"**（同 runQA）
+    messages.push({ role: 'user', content: input.question })
 
     const out: StreamOutcome = await this.streamJson(messages, BridgeConfig.MODEL_TEXT, 0.6, 1400,
       BridgeConfig.timeoutForScene('qa_text'), 'answer', onDelta)

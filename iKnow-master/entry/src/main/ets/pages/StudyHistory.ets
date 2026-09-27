@@ -4,6 +4,7 @@ import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { Metrics } from '../services/Metrics'
 import { FocusSession } from '../models/FocusSession'
+import { Task } from '../models/Task'
 import { TimeUtils } from '../utils/TimeUtils'
 import { PageHeader } from '../components/PageHeader'
 
@@ -17,11 +18,23 @@ import { PageHeader } from '../components/PageHeader'
 @Component
 export struct StudyHistory {
   @State sessions: FocusSession[] = []
+  /** 任务表（含当前计划）：用于把会话的 taskIds 还原成"科目"列表 */
+  @State tasks: Task[] = []
 
   aboutToAppear(): void {
     const sorted: FocusSession[] = AppStore.getInstance().getSessions().slice()
     sorted.sort((a: FocusSession, b: FocusSession): number => b.startTime - a.startTime)
     this.sessions = sorted
+    this.tasks = AppStore.getInstance().mergedTasks()
+  }
+
+  /**
+   * 列表第二行的文案 = 这次专注涉及的**全部任务类别**，形如「数学·英语」。
+   * 原来直接显示 `session.title`（"**主要任务**"的标题），多科目会话里只会写一个，
+   * 看起来像"莫名只给一个科目"。具体拼法与 fallback 统一在 `Metrics.sessionSubjectLabel`。
+   */
+  private subjectLine(s: FocusSession): string {
+    return Metrics.sessionSubjectLabel(s, this.tasks)
   }
 
   private openReport(s: FocusSession): void {
@@ -46,9 +59,11 @@ export struct StudyHistory {
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor(Colors.TEXT_PRIMARY)
-        Text(s.title.length > 0 ? s.title : '自由专注')
+        Text(this.subjectLine(s))
           .fontSize(12)
           .fontColor(Colors.TEXT_SECONDARY)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
           .margin({ top: 4 })
       }
       .alignItems(HorizontalAlign.Start)

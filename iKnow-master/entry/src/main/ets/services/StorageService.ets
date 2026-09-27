@@ -96,8 +96,9 @@ export class StorageService {
       recent_concentrations TEXT, recent_distraction_rates TEXT, updated_at INTEGER)`)
 
     // ---- 新增表（Phase 0）----
+    // 注：历史库（老安装）里可能还留着已废弃的 microphone 列 —— 只是不再读写，留着无害。
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS authorization (
-      id TEXT PRIMARY KEY, camera INTEGER, microphone INTEGER, health INTEGER,
+      id TEXT PRIMARY KEY, camera INTEGER, health INTEGER,
       notification INTEGER, updated_at INTEGER)`)
     await this.store.executeSql(`CREATE TABLE IF NOT EXISTS session_snapshot (
       session_id TEXT, ts INTEGER, total_sec INTEGER, focus_sec INTEGER,
@@ -646,6 +647,8 @@ export class StorageService {
     f.weeklyTrend = this.parseNumberArray(this.getString(rs, 'weekly_trend'))
     f.monthlyTrend = this.parseNumberArray(this.getString(rs, 'monthly_trend'))
     f.sampleCount = this.getNum(rs, 'sample_count')
+    f.perceptionCount = this.getNum(rs, 'perception_count')
+    f.taskCount = this.getNum(rs, 'task_count')
     f.recentConcentrations = this.parseNumberArray(this.getString(rs, 'recent_concentrations'))
     f.recentDistractionRates = this.parseNumberArray(this.getString(rs, 'recent_distraction_rates'))
     f.updatedAt = this.getNum(rs, 'updated_at')
@@ -667,6 +670,8 @@ export class StorageService {
       'weekly_trend': JSON.stringify(f.weeklyTrend),
       'monthly_trend': JSON.stringify(f.monthlyTrend),
       'sample_count': f.sampleCount,
+      'perception_count': f.perceptionCount,
+      'task_count': f.taskCount,
       'recent_concentrations': JSON.stringify(f.recentConcentrations),
       'recent_distraction_rates': JSON.stringify(f.recentDistractionRates),
       'updated_at': f.updatedAt
@@ -683,7 +688,6 @@ export class StorageService {
     }
     const a = new Authorization()
     a.camera = this.getBool(rs, 'camera')
-    a.microphone = this.getBool(rs, 'microphone')
     a.health = this.getBool(rs, 'health')
     a.notification = this.getBool(rs, 'notification')
     a.updatedAt = this.getNum(rs, 'updated_at')
@@ -695,7 +699,6 @@ export class StorageService {
     const v: relationalStore.ValuesBucket = {
       'id': 'global',
       'camera': a.camera ? 1 : 0,
-      'microphone': a.microphone ? 1 : 0,
       'health': a.health ? 1 : 0,
       'notification': a.notification ? 1 : 0,
       'updated_at': a.updatedAt

@@ -58,8 +58,20 @@ export struct Home {
   @State slogan: string = ''
   /** 目标日期文案（目标总览里展示） */
   @State targetDateText: string = ''
+  /** 手动刷新进行中（避免重复点击） */
+  @State refreshing: boolean = false
 
   aboutToAppear(): void {
+    this.refreshPlan()
+  }
+
+  /**
+   * 切回首页时重拉一次。
+   * 后台(隐藏) Tab 的 @Watch(DATA_VERSION) 不保证触发，会出现
+   * 「在别的页勾了任务 / 结束专注后，首页今日数据还停在旧值」的情况；
+   * 这里不依赖 @Watch，切回来就直接重取。
+   */
+  onPageShow(): void {
     this.refreshPlan()
   }
 
@@ -125,6 +137,18 @@ export struct Home {
       // 落库异常也要继续刷新，否则表现为"勾了没反应"
     }
     this.refreshPlan()
+  }
+
+  /** 今日数据卡片右上角的「刷新」：直接读盘重算，不依赖 @Watch 是否在后台触发 */
+  private manualRefresh(): void {
+    if (this.refreshing) {
+      return
+    }
+    this.refreshing = true
+    AppStore.getInstance().reloadFromStorage()
+      .then(() => { this.refreshPlan() })
+      .catch(() => { this.refreshPlan() })
+      .finally(() => { this.refreshing = false })
   }
 
   private displayName(): string {
@@ -290,22 +314,6 @@ export struct Home {
       return `${Math.floor(sec)}秒`
     }
     return TimeUtils.formatHMin(sec)
-  }
-
-  @Builder
-  statTile(value: string, label: string) {
-    Column() {
-      Text(value)
-        .fontSize(22)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Colors.TEXT_PRIMARY)
-      Text(label)
-        .fontSize(12)
-        .fontColor(Colors.TEXT_SECONDARY)
-        .margin({ top: 4 })
-    }
-    .layoutWeight(1)
-    .alignItems(HorizontalAlign.Center)
   }
 
   build() {
@@ -535,18 +543,73 @@ export struct Home {
 
         // 今日数据
         Column() {
-          Text('今日数据')
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Colors.TEXT_PRIMARY)
-            .width('100%')
-            .margin({ bottom: 14 })
+          Row() {
+            Text('今日数据')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.TEXT_PRIMARY)
+            Blank()
+            if (this.refreshing) {
+              Text('刷新中…')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_TERTIARY)
+            } else {
+              Text('↻ 刷新')
+                .fontSize(12)
+                .fontColor(Colors.PRIMARY_DARK)
+                .onClick(() => {
+                  this.manualRefresh()
+                })
+            }
+          }
+          .width('100%')
+          .margin({ bottom: 14 })
 
+          // 三个数值块**直接内联**，不要抽成带参数的 @Builder：
+          // ArkUI 中「按值传递参数」的 @Builder 在参数变化时**不会刷新 UI**，
+          // 之前这里就是 statTile(value, label) 形态，导致勾选/刷新后
+          // this.dash* / completionRate 明明变了，格子里的数字却纹丝不动 ——
+          // 表现就是"点了很多次刷新，今日数据一直不动"。内联后随 @State 正常重绘。
           Row({ space: 8 }) {
-            this.statTile(`${this.liveRate()}%`, '净专注率')
-            this.statTile(this.focusSecondsText(), '今日专注时长')
-            // 口径写清：这是**今日计划**的勾选完成率，与「长期计划与目标」里的各科目标进度不是同一个数
-          this.statTile(this.dashTotal > 0 ? `${this.completionRate}%` : '—', '今日任务完成率')
+            Column() {
+              Text(`${this.liveRate()}%`)
+                .fontSize(22)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text('净专注率')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ top: 4 })
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Center)
+
+            Column() {
+              Text(this.focusSecondsText())
+                .fontSize(22)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text('今日专注时长')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ top: 4 })
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Center)
+
+            // 口径：**今日计划**的勾选完成率，与「长期计划与目标」里的各科目标进度不是同一个数
+            Column() {
+              Text(this.dashTotal > 0 ? `${this.completionRate}%` : '—')
+                .fontSize(22)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.TEXT_PRIMARY)
+              Text('今日任务完成率')
+                .fontSize(12)
+                .fontColor(Colors.TEXT_SECONDARY)
+                .margin({ top: 4 })
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Center)
           }
           .width('100%')
         }

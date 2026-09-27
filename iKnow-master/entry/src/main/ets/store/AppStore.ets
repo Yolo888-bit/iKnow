@@ -117,6 +117,10 @@ export class AppStore {
     await this.restorePlan()
     // PRD FR-15：人格必须生效 → 启动即把持久化人格同步给 AI 层
     AIService.getInstance().setPersonality(this.user.aiPersonality)
+    // 同时把持久化人格写回 AppStorage：FocusController 等运行时干预文案直接读
+    // AppStorage[USER_PERSONALITY]，若只靠后面的 pushAggregates 同步，存在时序窗口
+    // 会回落到 initAppStorageDefaults 的默认 GENTLE。这里立即落一遍，消除冷启动回落。
+    AppStorage.setOrCreate<string>(StorageKey.USER_PERSONALITY, this.user.aiPersonality)
     await this.refreshAggregates()
     this.initialized = true
   }
@@ -837,6 +841,27 @@ export class AppStore {
     // 目标进度：入参在这里组装，计算仍由 Metrics 负责（纯函数，不读存储）
     this.planProgress = Metrics.planProgress(this.tasks, this.plan)
     this.pushAggregates()
+  }
+
+  /**
+   * 从磁盘重新读回全部学习数据（当前计划 / 会话 / 任务 / 画像），再重算聚合。
+   *
+   * 用途：页面「手动刷新」按钮 + onPageShow 兜底。Home / Review 之前只靠
+   * @Watch(DATA_VERSION) 在切回 Tab 时重取；后台(隐藏) Tab 的 @Watch 不保证触发，
+   * 于是出现「勾了任务首页今日数据没变 / 复盘练习内容总结延迟」——这里直接读盘，
+   * 不依赖 @Watch 是否在后台触发，保证一定拿到最新值。
+   */
+  async reloadFromStorage(): Promise<void> {
+    try {
+      await this.restorePlan()
+      this.sessions = await StorageService.getInstance().loadSessions()
+      this.tasks = await StorageService.getInstance().loadTasks()
+      const p = await StorageService.getInstance().loadProfile()
+      this.profile = p !== null ? p : new FocusProfile()
+    } catch (e) {
+      hilog.error(0x0000, 'iKnow.Store', '从磁盘重载数据失败：%{public}s', e.message)
+    }
+    await this.refreshAggregates()
   }
 
   /**

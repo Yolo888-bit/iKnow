@@ -22,12 +22,12 @@ export class StateRun {
  * 按**时刻**定位（刻度直接标 `14:05`），一段状态就是一条色带，
  * 于是"某时刻到某时刻是什么状态"可以直接读出来。
  *
- * ## 颜色只有四档，含义唯一
+ * ## 颜色五档，含义唯一
  *  - 绿 = 专注
- *  - 红 = **分心（含轻度分心）** —— 轻度走神在这张图上不再单独配色，
- *    黄色的槽位让给了「休息」（用户明确要求：休息=黄、专注=绿、分心=红）；
- *  - 黄 = 休息
- *  - 灰绿 = 暂停 / 答疑（中性态：既不是专注也不是分心，不参与专注率计算）
+ *  - 红 = 分心（"离开 / 多人"等明显走神）
+ *  - 黄 = 轻度分心（"看手机 / 趴桌"等轻提示态，单独配色以和重度分心区分）
+ *  - 灰 = 休息 / 暂停（中性态：既不专注也不分心，不参与专注率计算）
+ *  - 蓝 = 答疑（中性态：与绿系区分，也不参与专注率计算）
  *
  * ## 纵轴 = 心率（目前是占位）
  * 设计上纵轴是心率曲线（bpm）。当前版本**没有把心率按时间采集成会话数据**
@@ -81,16 +81,22 @@ export struct FocusChart {
     return `${vp2px(vpSize)}px sans-serif`
   }
 
-  /** 状态 → 色带颜色（含义见文件头，四档） */
+  /** 状态 → 色带颜色（含义见文件头，五档） */
   private colorOf(state: string): string {
-    if (state === 'RESTING') {
+    if (state === 'QA_MODE') {
+      // 答疑：中性蓝，与绿系区分，也不参与专注率计算
+      return Colors.BLUE
+    }
+    if (state === 'RESTING' || state === 'PAUSED') {
+      // 休息 / 暂停：中性灰
+      return Colors.GRAY
+    }
+    if (state === 'SLIGHTLY_DISTRACTED') {
+      // 轻度分心：黄色系（与重度分心的红区分）
       return Colors.YELLOW
     }
-    if (state === 'PAUSED' || state === 'QA_MODE') {
-      // 中性灰绿：暂停 / 答疑既不是专注也不是分心
-      return Colors.TEXT_TERTIARY
-    }
-    if (state === 'SLIGHTLY_DISTRACTED' || state === 'DISTRACTED') {
+    if (state === 'DISTRACTED') {
+      // 重度分心：红
       return Colors.RED
     }
     return Colors.GREEN
@@ -141,17 +147,17 @@ export struct FocusChart {
     const xOf = (ms: number): number => padLeft + usable * (ms - range[0]) / span
 
     // ---------- 图例 ----------
-    const names: string[] = ['专注', '分心', '休息', '暂停 · 答疑']
-    const keys: string[] = ['FOCUSED', 'DISTRACTED', 'RESTING', 'PAUSED']
-    c.font = this.fontOf(10)
+    const names: string[] = ['专注', '分心', '轻度分心', '休息·暂停', '答疑']
+    const keys: string[] = ['FOCUSED', 'DISTRACTED', 'SLIGHTLY_DISTRACTED', 'RESTING', 'QA_MODE']
+    c.font = this.fontOf(9)
     c.textAlign = 'left'
     let lx = padLeft - 26
     for (let i = 0; i < keys.length; i++) {
       c.fillStyle = this.colorOf(keys[i])
       c.fillRect(lx, 5, 10, 10)
       c.fillStyle = Colors.TEXT_SECONDARY
-      c.fillText(names[i], lx + 14, 14)
-      lx += 14 + names[i].length * 10 + 10
+      c.fillText(names[i], lx + 13, 14)
+      lx += 12 + names[i].length * 9 + 8
     }
 
     // ---------- 纵轴区：心率曲线（当前为占位） ----------

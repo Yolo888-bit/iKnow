@@ -283,9 +283,11 @@ export struct Mine {
           this.menuItem('🎯', '长期计划与目标', '考试倒计时 · 科目 · 长期计划', 'pages/LongTermPlan', '')
           this.menuItem('🗂️', '学习记录', '历史专注复盘', 'pages/StudyHistory', '')
           this.menuItem('⌚', '设备', '摄像头 · 蓝牙心率设备', 'pages/Device', '')
-          this.menuItem('🔒', '隐私', '授权与数据权限', 'pages/Privacy', '')
-          this.menuItem('🗂️', '数据管理', '清除学习数据与画面片段', 'pages/Privacy', '')
-          this.menuItem('ℹ️', '关于', '版本 · 能力说明 · 隐私入口', 'pages/About', '')
+          // 隐私与数据：**直接**进《隐私保护说明》原文页（「撤销隐私授权」也放在那一页标题旁）
+          this.menuItem('🔒', '隐私与数据', '隐私保护说明 · 授权与撤回', 'pages/PrivacyPolicy', '')
+          // 数据管理：分心提醒 / 清除数据（语音输入已整体移除）
+          this.menuItem('🗂️', '数据管理', '分心提醒 · 清除学习数据', 'pages/Privacy', '')
+          this.menuItem('ℹ️', '关于', '版本 · 能力说明 · 联系我们', 'pages/About', '')
         }
         .width('100%')
 

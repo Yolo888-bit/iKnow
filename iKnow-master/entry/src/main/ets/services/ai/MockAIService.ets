@@ -382,6 +382,36 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
    */
   private async produceDialog(input: PlanningDialogInput): Promise<PlanningDialogResult> {
     await this.delay(420)
+    // 已落地：用户这句话 + 上文已经说清「动作 + 数量」→ 直接出计划，不追问。
+    // 与 Prompts.taskDialog@1.7.0 的口径一致：离线兜底也必须遵守"够具体就别问"。
+    const accText = this.composeUserText(input)
+    if (this.isConcrete(accText)) {
+      const raw = this.buildTasks(accText, 0)
+      if (raw.length > 0) {
+        const existing: string[] = input.existingTasks !== undefined ? input.existingTasks : []
+        const tasks: PlanTask[] = []
+        let skipped = 0
+        for (const t of raw) {
+          if (this.alreadyPlanned(t.subject, t.title, existing)) {
+            skipped += 1
+            continue
+          }
+          tasks.push(t)
+        }
+        if (tasks.length > 0) {
+          let total = 0
+          for (const t of tasks) {
+            total += t.estimatedDuration
+          }
+          const head = skipped > 0 ? `清单里已有的 ${skipped} 条不重复加，` : ''
+          return {
+            reply: `${head}已为你直接排好 ${tasks.length} 条，预计约 ${total} 分钟；建议每 30~45 分钟休息 5~10 分钟。`,
+            done: true,
+            tasks: tasks
+          }
+        }
+      }
+    }
     if (input.step === 0) {
       return { reply: '可以，具体想做哪几种？比如看例题、做课后题、整理错题，还是背单词？', done: false }
     }
@@ -464,6 +494,20 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     return false
   }
 
+  /** 判断用户描述是否已"落地"：含明确动作 + 数量（带量词、或带数字 + 动作动词）。 */
+  private isConcrete(goal: string): boolean {
+    const g = goal
+    // 数字 + 量词（道/题/页/单词/个/篇/章/分钟/小时/节/组/遍）
+    if (/(\d+)\s*(道|题|页|个?单词|篇|章|分钟|小时|节|组|遍)/.test(g)) {
+      return true
+    }
+    // 数字 + 明确动作动词（背/做/写/看/读/听/练/整理/默写/抄/翻译）
+    if (/\d+/.test(g) && /(背|做|写|看|读|听|练|整理|默写|抄|翻译)/.test(g)) {
+      return true
+    }
+    return false
+  }
+
   /** 把历史里用户说过的话（奇数下标为 AI）拼成一段目标描述 */
   private composeUserText(input: PlanningDialogInput): string {
     const h: string[] = input.history !== undefined ? input.history : []
@@ -478,6 +522,13 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
   /**
    * 本地兜底任务生成：按用户原话命名（未知学科也直接用其说法），
    * 并可选地按「用户可用时间」等比缩放总时长（±15% 内，单条 5~120 分钟）。
+   *
+   * 任务粒度原则（与 Prompts.taskDialog / taskPlan 一致）：**能不拆就不拆**。
+   *  - 用户点名了某个具体动作（"背 50 个单词""做 10 道题""看 20 页"）→ 只出那一条，
+   *    绝不替用户凭空加别的练习，也不把一条清晰任务机械切成两半；
+   *  - 用户只丢了一个科目、没说具体动作（"复习高数""学英语"）→ 才拆成「理解 + 练习」两段，
+   *    这种"模糊且量大"的科目才有拆分价值，但也不硬凑 3~4 条；
+   *  - 单条时长按动作性质推算（单词≈0.6 分/个、题≈3 分/道、书≈1.8 分/页），可被可用时间缩放。
    */
   private buildTasks(goal: string, availableMinutes: number): PlanTask[] {
     const g = goal.trim()
@@ -485,35 +536,109 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
       return []
     }
     const tasks: PlanTask[] = []
+    const clamp = (m: number): number => Math.max(5, Math.min(120, Math.round(m / 5) * 5))
     const add = (title: string, subject: string, min: number): void => {
-      tasks.push(PlanTask.create(title, subject, min, tasks.length))
+      tasks.push(PlanTask.create(title, subject, clamp(min), tasks.length))
     }
-    // 各科目**独立判断**（原来是 else-if 链：聊到"再加上英语"时永远只出第一科，
-    // 追加的科目根本不会出现在候选里）。总量仍控制在 6 条以内，避免越聊越长。
-    const hasMath = g.indexOf('高数') >= 0 || g.indexOf('数学') >= 0 || g.indexOf('极限') >= 0 || g.indexOf('导数') >= 0
-    const hasEnglish = g.indexOf('英语') >= 0 || g.indexOf('单词') >= 0
-    const hasPolitics = g.indexOf('政治') >= 0
+    const has = (...keys: string[]): boolean => {
+      for (const k of keys) {
+        if (g.indexOf(k) >= 0) {
+          return true
+        }
+      }
+      return false
+    }
+    const numBefore = (re: RegExp): number => {
+      const m = g.match(re)
+      return m ? Number(m[1]) : 0
+    }
+
+    // 各科目**独立判断**（原来是 else-if 链：聊到"再加上英语"时永远只出第一科）。
+    // 总量控制在 6 条以内，避免越聊越长。
+    const hasMath = has('高数', '数学', '极限', '导数', '级数')
+    const hasEnglish = has('英语', '单词')
+    const hasPolitics = has('政治')
+
     if (hasMath) {
-      add('复习极限章节（定理 + 典型例题）', '高等数学', 30)
-      add('完成极限练习题 10 道', '高等数学', 30)
-      add('复习导数章节（求导法则）', '高等数学', 30)
-      add('完成导数练习题 10 道', '高等数学', 30)
+      // 只出用户点名的动作；都没点名才给「理解 + 练习」两段（模糊大科目才拆）
+      const specific = has('极限', '导数', '级数', '例题', '题', '练习', '看书', '预习', '笔记')
+      if (has('极限')) {
+        add('复习极限章节（定理 + 典型例题）', '高等数学', 30)
+      }
+      if (has('导数')) {
+        add('复习导数章节（求导法则）', '高等数学', 30)
+      }
+      if (has('级数')) {
+        add('复习级数章节', '高等数学', 30)
+      }
+      if (has('例题') && !has('极限', '导数', '级数')) {
+        add('看典型例题', '高等数学', 25)
+      }
+      if (has('题', '练习')) {
+        const n = numBefore(/(\d+)\s*道/)
+        add(n > 0 ? `完成 ${n} 道练习题` : '完成对应练习题', '高等数学', n > 0 ? n * 3 : 30)
+      }
+      if (has('看书', '预习')) {
+        add('看书 / 预习章节', '高等数学', 30)
+      }
+      if (has('笔记')) {
+        add('整理笔记与错题', '高等数学', 20)
+      }
+      // 只说"复习高数/数学"、没点任何具体动作 → 才拆两段
+      if (!specific) {
+        add('复习高数重点章节（看例题 + 整理）', '高等数学', 35)
+        add('完成对应练习题', '高等数学', 30)
+      }
     }
+
     if (hasEnglish) {
-      add('背诵 50 个核心单词', '英语', 25)
-      add('精读 1 篇阅读理解', '英语', 35)
-      add('整理今日生词与长难句', '英语', 20)
+      const mentionWord = has('背', '单词')
+      const mentionRead = has('阅读', '阅读理解')
+      const mentionTidy = has('生词', '长难句', '整理')
+      if (mentionWord) {
+        const n = numBefore(/(\d+)\s*个?\s*单词/)
+        const cnt = n > 0 ? n : 50
+        add(`背诵 ${cnt} 个单词`, '英语', cnt * 0.6)
+      }
+      if (mentionRead) {
+        add('精读 1 篇阅读理解', '英语', 35)
+      }
+      if (mentionTidy) {
+        add('整理今日生词与长难句', '英语', 20)
+      }
+      // 只说"学英语/英语"、没点任何具体动作 → 才拆两段（背单词 + 阅读）
+      if (!mentionWord && !mentionRead && !mentionTidy) {
+        add('背诵核心单词', '英语', 25)
+        add('精读 1 篇阅读理解', '英语', 35)
+      }
     }
+
     if (hasPolitics) {
-      add('梳理马原第一章框架', '政治', 40)
-      add('完成 20 道选择题', '政治', 30)
-      add('错题复盘', '政治', 20)
+      const mentionFrame = has('框架', '梳理', '看')
+      const mentionProb = has('题', '选择')
+      const mentionReview = has('错题', '复盘')
+      if (mentionFrame) {
+        add('梳理本章框架', '政治', 40)
+      }
+      if (mentionProb) {
+        const n = numBefore(/(\d+)\s*道/)
+        add(n > 0 ? `完成 ${n} 道选择题` : '完成对应选择题', '政治', n > 0 ? n * 1.5 : 30)
+      }
+      if (mentionReview) {
+        add('错题复盘', '政治', 20)
+      }
+      // 只说"政治"、没点任何具体动作 → 才拆两段
+      if (!mentionFrame && !mentionProb && !mentionReview) {
+        add('梳理本章框架', '政治', 40)
+        add('完成 20 道选择题', '政治', 30)
+      }
     }
+
     if (!hasMath && !hasEnglish && !hasPolitics) {
       add(`梳理「${g}」的核心概念与框架`, '综合', 40)
       add(`完成「${g}」的专项练习`, '综合', 40)
-      add('整理错题与笔记', '综合', 20)
     }
+
     const capped: PlanTask[] = []
     for (const t of tasks) {
       if (capped.length >= 6) {
@@ -682,6 +807,8 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
       stability: d.stability,
       execution: d.execution,
       antiDistraction: d.antiDistraction,
+      perceptionCount: d.perceptionCount,
+      taskCount: d.taskCount,
       averageFocusDuration: Math.round(finished.reduce((a, s) => a + s.focusDuration, 0) / finished.length / 60),
       focusThreshold: Metrics.focusThreshold(finished),
       bestFocusTime: Metrics.goldenWindow(finished),
@@ -879,6 +1006,8 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
       profile.stability = d.stability
       profile.execution = d.execution
       profile.antiDistraction = d.antiDistraction
+      profile.perceptionCount = d.perceptionCount
+      profile.taskCount = d.taskCount
       profile.averageFocusDuration = Math.round(finished.reduce((a, s) => a + s.focusDuration, 0) / finished.length / 60)
       profile.focusThreshold = Metrics.focusThreshold(finished)
       profile.bestFocusTime = Metrics.goldenWindow(finished)
@@ -892,6 +1021,8 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
       profile.stability = 0
       profile.execution = 0
       profile.antiDistraction = 0
+      profile.perceptionCount = 0
+      profile.taskCount = 0
     }
     profile.updatedAt = Date.now()
     return profile

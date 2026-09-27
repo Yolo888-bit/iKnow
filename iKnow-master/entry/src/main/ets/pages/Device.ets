@@ -8,12 +8,16 @@ import { CameraService } from '../services/CameraService'
 import { PermissionService } from '../services/PermissionService'
 import { PageHeader } from '../components/PageHeader'
 
-/** 设备连接（含真实 BLE 心率设备 + 设备自检）。模拟状态已移到「专注页 → 模拟状态」。 */
+/**
+ * 设备（含真实 BLE 心率设备 + 设备自检）。
+ *
+ * 「模拟手表」开关已下架：模拟手表恒为**未佩戴**，红级走神干预走**手机声音 + 屏幕**（不假装震动）；
+ * 真实佩戴以 BLE 连接为准。需要手动驱动状态（做题 / 看手机 / 趴桌 / 离开…）请到「专注页 → 模拟状态」。
+ */
 @Entry
 @Component
 export struct Device {
   @State devices: DeviceInfo[] = []
-  @State watchPresent: boolean = false
   @State bleNames: string[] = []
   @State bleIds: string[] = []
   @State bleStatus: string = '未连接'
@@ -79,7 +83,6 @@ export struct Device {
 
   private refresh(): void {
     this.devices = DeviceService.getInstance().getDevices()
-    this.watchPresent = DeviceService.getInstance().isWatchPresent()
     // 设备自检：摄像头数量 / 权限 / 蓝牙开关
     const ctx = getContext(this) as common.UIAbilityContext
     this.camCount = CameraService.getInstance().probe(ctx)
@@ -106,7 +109,7 @@ export struct Device {
     Scroll() {
       Column({ space: Spacing.LG }) {
         // 顶栏：返回箭头 + 居中页面名称（从「我的」点进来，之前没有返回入口）
-        PageHeader({ title: '设备连接' })
+        PageHeader({ title: '设备' })
 
         Column({ space: Spacing.SM }) {
           ForEach(this.devices, (d: DeviceInfo) => {
@@ -183,7 +186,7 @@ export struct Device {
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
 
-          Text('多数手环使用厂商私有协议，可能扫描不到，属正常现象；此时可以用下面的模拟佩戴。')
+          Text('多数手环使用厂商私有协议，可能扫描不到，属正常现象；此时走神干预走手机声音与屏幕，不影响使用。')
             .fontSize(12)
             .fontColor(Colors.TEXT_SECONDARY)
             .lineHeight(18)
@@ -249,55 +252,6 @@ export struct Device {
               .padding({ top: 10, bottom: 10 })
             }, (n: string, idx: number) => `${n}_${idx}`)
           }
-        }
-        .deviceCard()
-
-        // 模拟手表（只保留"是否佩戴"这一个设备属性；
-        // 状态/信号的手动驱动已统一移到「专注页 → 模拟状态」）
-        Column() {
-          Text('模拟手表')
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Colors.TEXT_PRIMARY)
-            .width('100%')
-
-          Text('手表为模拟设备（默认未佩戴）。未佩戴时红级提醒走手机声音与屏幕，不会假装震动。')
-            .fontSize(13)
-            .fontColor(Colors.TEXT_SECONDARY)
-            .lineHeight(20)
-            .width('100%')
-            .margin({ top: 8 })
-
-          Row() {
-            Column() {
-              Text('模拟佩戴手表')
-                .fontSize(15)
-                .fontColor(Colors.TEXT_PRIMARY)
-              Text(this.watchPresent ? '已佩戴：红级干预尝试手表震动' : '未佩戴：红级干预走手机声音 + 屏幕')
-                .fontSize(12)
-                .fontColor(Colors.TEXT_SECONDARY)
-                .margin({ top: 2 })
-            }
-            .alignItems(HorizontalAlign.Start)
-            .layoutWeight(1)
-
-            Toggle({ type: ToggleType.Switch, isOn: this.watchPresent })
-              .selectedColor(Colors.PRIMARY)
-              .onChange((v: boolean) => {
-                this.watchPresent = v
-                DeviceService.getInstance().setWatchPresent(v)
-                this.refresh()
-              })
-          }
-          .width('100%')
-          .padding({ top: 14, bottom: 4 })
-
-          Text('要手动驱动状态（做题 / 看手机 / 趴桌 / 离开…），请到「专注页 → 模拟状态」。')
-            .fontSize(11)
-            .fontColor(Colors.TEXT_TERTIARY)
-            .lineHeight(16)
-            .width('100%')
-            .margin({ top: 6 })
         }
         .deviceCard()
 

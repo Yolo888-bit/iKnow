@@ -7,6 +7,8 @@ export struct RadarChart {
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings)
   @Prop @Watch('redraw') values: number[] = []
   @Prop labels: string[] = []
+  /** 哪些维度「无数据」：该轴用灰色虚线 + 「—」呈现，不再把缺失画成 0（看起来像最差） */
+  @Prop missing: boolean[] = []
   @Prop chartSize: number = 260
   private ready: boolean = false
 
@@ -76,9 +78,16 @@ export struct RadarChart {
       c.beginPath()
       c.moveTo(cx, cy)
       c.lineTo(cx + r * Math.cos(ang), cy + r * Math.sin(ang))
-      c.strokeStyle = Colors.LINE
+      if (this.missing[i]) {
+        c.strokeStyle = Colors.TEXT_TERTIARY
+        c.setLineDash([4, 4])
+      } else {
+        c.strokeStyle = Colors.LINE
+        c.setLineDash([])
+      }
       c.lineWidth = 1
       c.stroke()
+      c.setLineDash([])
     }
 
     // 数据多边形
@@ -105,10 +114,23 @@ export struct RadarChart {
     for (let i = 0; i < n; i++) {
       const ang = this.angle(i, n)
       const rr = r * Math.max(0, Math.min(100, this.values[i])) / 100
-      c.fillStyle = Colors.PRIMARY
-      c.beginPath()
-      c.arc(cx + rr * Math.cos(ang), cy + rr * Math.sin(ang), 3, 0, Math.PI * 2)
-      c.fill()
+      const px = cx + rr * Math.cos(ang)
+      const py = cy + rr * Math.sin(ang)
+      if (this.missing[i]) {
+        // 无数据：空心灰环，强调「这次没算它」而非「得分为 0」
+        c.fillStyle = Colors.CARD
+        c.strokeStyle = Colors.TEXT_TERTIARY
+        c.lineWidth = 1.5
+        c.beginPath()
+        c.arc(px, py, 3.5, 0, Math.PI * 2)
+        c.fill()
+        c.stroke()
+      } else {
+        c.fillStyle = Colors.PRIMARY
+        c.beginPath()
+        c.arc(px, py, 3, 0, Math.PI * 2)
+        c.fill()
+      }
     }
 
     // 标签：名字与数值分两行，并按顶点在左右哪一侧决定对齐方式 ——
@@ -121,8 +143,9 @@ export struct RadarChart {
       const lx = cx + (r + 8) * cosv
       const ly = cy + (r + 8) * Math.sin(ang)
       c.textAlign = cosv > 0.2 ? 'left' : (cosv < -0.2 ? 'right' : 'center')
+      c.fillStyle = this.missing[i] ? Colors.TEXT_TERTIARY : Colors.TEXT_SECONDARY
       c.fillText(this.labels[i], lx, ly)
-      c.fillText(`${Math.round(this.values[i])}`, lx, ly + 14)
+      c.fillText(this.missing[i] ? '—' : `${Math.round(this.values[i])}`, lx, ly + 14)
     }
   }
 }

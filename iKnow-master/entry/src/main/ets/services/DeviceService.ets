@@ -36,23 +36,16 @@ export class DeviceService {
     camera.statusText = cameraOn ? '感知中（信号触发时抓拍）' : '已关闭'
     list.push(camera)
 
+    // 手表：模拟设备恒为「未佩戴」；只有真实 BLE 心率设备连上才算"有手腕设备"。
+    // 用 isWristPresent()（含真实 BLE）而不是模拟开关，避免"真表已连却显示未连接"的自相矛盾。
     const watch = new DeviceInfo()
     watch.type = 'WATCH'
     watch.name = '模拟手表（非真实设备）'
-    watch.connected = SensorService.getInstance().isConnected()
+    watch.connected = SensorService.getInstance().isWristPresent()
     watch.statusText = SensorService.getInstance().getStatusText()
     list.push(watch)
 
     return list
-  }
-
-  /** 模拟佩戴 / 断开手表（诚实开关：默认未佩戴） */
-  isWatchPresent(): boolean {
-    return SensorService.getInstance().isWristPresent()
-  }
-
-  setWatchPresent(present: boolean): void {
-    SensorService.getInstance().setPresent(present)
   }
 
   isCameraOn(): boolean {

@@ -186,7 +186,7 @@ export struct Device {
             .fontColor(Colors.TEXT_PRIMARY)
             .width('100%')
 
-          Text('多数手环使用厂商私有协议，可能扫描不到，属正常现象；此时走神干预走手机声音与屏幕，不影响使用。')
+          Text('多数手环使用厂商私有协议，可能扫描不到，属正常现象。没有手表时，分心提醒走手机声音与屏幕，不影响使用。')
             .fontSize(12)
             .fontColor(Colors.TEXT_SECONDARY)
             .lineHeight(18)

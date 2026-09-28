@@ -372,27 +372,79 @@ export class Metrics {
   /**
    * §6 五维（纯计算，不含样本门禁）。
    * 调用方须先用 canShowProfile(sampleCount) 判断是否达到 N>=3，未达请勿渲染数值。
-   *  - efficiency     = 0.6*净专注率均值 + 0.4*完成率均值（完成率仅取「有任务清单」的会话）
-   *  - concentration  = 净专注率均值
-   *  - stability      = 净专注率序列 σ：σ>0.3 → 0；否则 100*(1-σ/0.4)
-   *  - execution      = 完成率均值（**仅**含任务清单的会话；自由专注无任务，不计入也不计 0）
-   *  - antiDistraction= 100*(1-分心率均值)（**仅**感知开启的会话；没开摄像头时 distractionDuration 恒为 0，
-   *                    若混入会把「没数据」算成「抗干扰满分」，故剔除。无感知会话时 perceptionCount=0）
+   *
+   * 口径统一为「跨会话汇总」，**不用"各会话百分比的算术平均"** —— 后者给一次 1 分钟的会话
+   * 和一次 2 小时的会话同样的权重：短会话里有一个任务没打钩就能把分数拉到很低，
+   * 于是出现"任务完成度很高、执行力却只有 20 分"。
+   *
+   *  - concentration  = Σ净专注 / Σ已判定（按时长加权，与复盘页「总体专注率」同一口径）
+   *  - efficiency     = 0.6*concentration + 0.4*execution
+   *  - execution      = 这些会话里**用户承诺过的任务**现在真正完成的比例。
+   *                     按**任务表当前状态**判定 —— 在首页 / 复盘里补勾的也算。否则
+   *                     `completedTaskIds` 是会话结束那一刻的快照，之后补勾的完成永远不计入。
+   *  - stability      = 各会话专注率的 σ：σ>0.3 → 0；否则 100*(1-σ/0.4)
+   *  - antiDistraction= 100*(1-分心率)（**仅**感知开启的会话；没开摄像头时 distractionDuration
+   *                     恒为 0，混入会把「没数据」算成「抗干扰满分」，故剔除）
+   *
+   * @param tasks 任务表（含当前勾选状态）。传入才能把"会话结束后补勾"的完成计入执行力；
+   *              不传则退回"会话内已勾选"的口径（仅老调用方兼容用）。
    */
-  static fiveDim(sessions: FocusSession[]): FiveDim {
+  static fiveDim(sessions: FocusSession[], tasks?: Task[]): FiveDim {
     const finished = sessions.filter((s: FocusSession): boolean => Metrics.totalStudySec(s) > 0)
     if (finished.length === 0) {
       return { efficiency: 0, concentration: 0, stability: 0, execution: 0, antiDistraction: 0,
         perceptionCount: 0, taskCount: 0 }
     }
-    const rates: number[] = finished.map((s: FocusSession): number => Metrics.netFocusRate(s) * 100)
-    const avgRate = Metrics.mean(rates)
+
+    // 专注度：Σ净专注 / Σ已判定（按时长加权）；σ 仍按"每次会话的专注率"算（稳定性讲的就是波动）
+    let netSec = 0
+    let judgedSec = 0
+    const rates: number[] = []
+    for (const s of finished) {
+      netSec += Metrics.netFocusSec(s)
+      judgedSec += Metrics.judgedSec(s)
+      rates.push(Metrics.netFocusRate(s) * 100)
+    }
+    const weightedRate = judgedSec > 0 ? (netSec / judgedSec) * 100 : 0
     const sigma = Metrics.stddev(rates) / 100
 
     // 执行力：只统计「有任务清单」的会话；自由专注（无任务）不拉低、也不计入分母
     const taskSessions = finished.filter((s: FocusSession): boolean => s.taskIds.length > 0)
-    const comps: number[] = taskSessions.map((s: FocusSession): number => Metrics.completionRate(s))
-    const avgComp = comps.length > 0 ? Metrics.mean(comps) : 0
+    const committed: string[] = []
+    for (const s of taskSessions) {
+      for (const id of s.taskIds) {
+        if (committed.indexOf(id) < 0) {
+          committed.push(id)
+        }
+      }
+    }
+    let execution = 0
+    if (committed.length > 0) {
+      const doneIds: string[] = []
+      if (tasks !== undefined && tasks.length > 0) {
+        // 以任务表当前状态为准（补勾也算）
+        for (const t of tasks) {
+          if (t.done || t.status === TaskStatus.DONE) {
+            doneIds.push(t.id)
+          }
+        }
+      } else {
+        for (const s of taskSessions) {
+          for (const id of s.completedTaskIds) {
+            if (doneIds.indexOf(id) < 0) {
+              doneIds.push(id)
+            }
+          }
+        }
+      }
+      let doneCount = 0
+      for (const id of committed) {
+        if (doneIds.indexOf(id) >= 0) {
+          doneCount += 1
+        }
+      }
+      execution = Math.round((doneCount / committed.length) * 100)
+    }
 
     // 抗干扰：只统计「感知开启（PERCEPTION_FULL）」的会话；没开摄像头时 distractionDuration 恒为 0，
     // 混入会把"无数据"误算成"抗干扰满分"，故剔除
@@ -401,10 +453,9 @@ export class Metrics {
     const distrs: number[] = perceptionSessions.map((s: FocusSession): number => Metrics.distractionRate(s))
     const avgDistr = distrs.length > 0 ? Metrics.mean(distrs) : 0
 
-    const efficiency = Math.round(0.6 * avgRate + 0.4 * avgComp)
-    const concentration = Math.round(avgRate)
+    const concentration = Math.round(weightedRate)
+    const efficiency = Math.round(0.6 * weightedRate + 0.4 * execution)
     const stability = sigma > 0.3 ? 0 : Math.round(100 * (1 - Metrics.clamp(sigma / 0.4, 0, 1)))
-    const execution = Math.round(avgComp)
     const antiDistraction = Math.round(100 * (1 - Metrics.clamp(avgDistr, 0, 1)))
     return { efficiency, concentration, stability, execution, antiDistraction,
       perceptionCount: perceptionSessions.length, taskCount: taskSessions.length }

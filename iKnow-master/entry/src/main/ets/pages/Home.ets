@@ -238,19 +238,28 @@ export struct Home {
     })
   }
 
-  /** 进专注页前确认感知授权；拒绝或申请失败则降级为仅计时模式（诚实告知） */
+  /**
+   * 进专注页前确认**本次**是否开启摄像头感知。
+   *
+   * **每次都问**（原来只在"本地没授权标记"时问一次）：隐私政策第六节写明
+   * "开始专注时选择「仅计时」即本次完全不抓拍、不上传"，那就必须每次都给这个出口 ——
+   * 否则第一次授权之后再没人问，这句话就变成假的。相机权限本身只需申请一次，
+   * `ensureCamera()` 已授权时立即返回、不弹窗，所以反复调用没有副作用。
+   */
   private beginFocus(): void {
-    if (this.cameraOn()) {
+    // 已有会话在跑：这是"继续"，不是"开始"，再问一次没有意义
+    if (FocusController.getInstance().isRunning()) {
       this.enterFocus()
       return
     }
     const ctx = getContext(this) as common.UIAbilityContext
     AlertDialog.show({
-      title: '开启摄像头感知？',
-      message: '开启后，小伴会用前置摄像头感知你的专注状态（仅在触发时抓拍短片段）。你也可以选择仅计时模式。',
+      title: '本次开启摄像头感知？',
+      message: '开启后，小伴会用前置摄像头感知你的专注状态（仅在触发时抓拍短片段）。选「仅计时」则本次完全不抓拍、不上传。',
       primaryButton: {
         value: '开启感知',
         action: () => {
+          AppStorage.setOrCreate<number>(StorageKey.FOCUS_TIMER_ONLY_REQUEST, 0)
           // 真正申请系统相机权限（user_grant）；失败也照常进入专注，降级为仅计时模式
           PermissionService.getInstance().ensureCamera(ctx).then(() => {
             this.enterFocus()
@@ -260,6 +269,7 @@ export struct Home {
       secondaryButton: {
         value: '仅计时开始',
         action: () => {
+          AppStorage.setOrCreate<number>(StorageKey.FOCUS_TIMER_ONLY_REQUEST, 1)
           this.enterFocus()
         }
       }

@@ -63,6 +63,15 @@ export struct Focus {
 
   aboutToAppear(): void {
     const controller = FocusController.getInstance()
+    // 「仅计时」标记**无论是否新开会话都要消费掉**：否则它会被残留到下一次主动开始，
+    // 让用户莫名其妙地"这次没开感知"（正是我们要避免的那类幽灵状态）。
+    const timerOnlyRaw: number | undefined = AppStorage.get<number>(StorageKey.FOCUS_TIMER_ONLY_REQUEST)
+    const timerOnly = timerOnlyRaw !== undefined && timerOnlyRaw === 1
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_TIMER_ONLY_REQUEST, 0)
+    // 外部入口（服务卡片 / 意图 / hdc）来的：本页要先弹一次感知确认再开会话
+    const confirmRaw: number | undefined = AppStorage.get<number>(StorageKey.FOCUS_CONFIRM_PERCEPTION_REQUEST)
+    const needConfirm = confirmRaw !== undefined && confirmRaw === 1
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_CONFIRM_PERCEPTION_REQUEST, 0)
     if (!controller.isRunning()) {
       // 只有"主动开始"才新开会话；否则（如从复盘返回）退回根页，避免静默开始一段新专注
       const raw: number | undefined = AppStorage.get<number>(StorageKey.FOCUS_START_REQUEST)
@@ -72,27 +81,10 @@ export struct Focus {
         router.back()
         return
       }
-      // 自由专注：本次不挂任何任务。
-      // 两个入口都走这里 —— 「跳过规划，直接开始专注」，以及规划页里
-      // **一条任务都没勾选**就点了「确认并开始」（比如今天的任务都做完了）。
-      // 今日计划不清空，首页照旧显示；只是这次会话里没有任务。
-      const freeRaw: number | undefined = AppStorage.get<number>(StorageKey.FOCUS_FREE_REQUEST)
-      const free = freeRaw !== undefined && freeRaw === 1
-      AppStorage.setOrCreate<number>(StorageKey.FOCUS_FREE_REQUEST, 0)
-      // 从首页进入：本次只挂未完成任务，已完成的不带进会话（仍保留在首页「今日任务」里）
-      const homeIncRaw: number | undefined = AppStorage.get<number>(StorageKey.FOCUS_HOME_INCOMPLETE_REQUEST)
-      const homeIncomplete = homeIncRaw !== undefined && homeIncRaw === 1
-      AppStorage.setOrCreate<number>(StorageKey.FOCUS_HOME_INCOMPLETE_REQUEST, 0)
-      if (free) {
-        const none: Task[] = []
-        controller.start(none)
+      if (needConfirm) {
+        this.askPerceptionThenStart()
       } else {
-        let plan = AppStore.getInstance().getCurrentPlan()
-        if (homeIncomplete) {
-          // 「默认选择未完成的任务，同时不带已完成的任务」：本次会话只聚焦还没做完的
-          plan = plan.filter((t: Task): boolean => !t.done)
-        }
-        controller.start(plan)
+        this.startSessionFromRequest(timerOnly)
       }
     }
     // 干预链路接上 UI：引擎决策 → 卡片（原先 setOnIntervention 无人调用，链路是死的）
@@ -108,6 +100,71 @@ export struct Focus {
     this.camCount = CameraService.getInstance().probe(probeCtx)
     this.cameraError = CameraService.getInstance().getLastError()
     this.refreshTask()
+  }
+
+  /**
+   * 按既有的一套请求标记开一段会话（从「首页 / 规划页 / 外部唤起」进来的三条路共用）。
+   *
+   * 自由专注：本次不挂任何任务。入口有两个 —— 「跳过规划，直接开始专注」，
+   * 以及规划页里**一条任务都没勾选**就点了「确认并开始」（比如今天的任务都做完了）。
+   * 今日计划不清空，首页照旧显示；只是这次会话里没有任务。
+   *
+   * @param timerOnly 本次不抓拍、不上传（用户显式选的「仅计时」）
+   */
+  private startSessionFromRequest(timerOnly: boolean): void {
+    const freeRaw: number | undefined = AppStorage.get<number>(StorageKey.FOCUS_FREE_REQUEST)
+    const free = freeRaw !== undefined && freeRaw === 1
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_FREE_REQUEST, 0)
+    // 从首页 / 外部入口进入：本次只挂未完成任务，已完成的不带进会话（仍留在首页「今日任务」里）
+    const homeIncRaw: number | undefined = AppStorage.get<number>(StorageKey.FOCUS_HOME_INCOMPLETE_REQUEST)
+    const homeIncomplete = homeIncRaw !== undefined && homeIncRaw === 1
+    AppStorage.setOrCreate<number>(StorageKey.FOCUS_HOME_INCOMPLETE_REQUEST, 0)
+    const controller = FocusController.getInstance()
+    if (free) {
+      const none: Task[] = []
+      controller.start(none, timerOnly)
+    } else {
+      let plan = AppStore.getInstance().getCurrentPlan()
+      if (homeIncomplete) {
+        // 「默认选择未完成的任务，同时不带已完成的任务」：本次会话只聚焦还没做完的
+        plan = plan.filter((t: Task): boolean => !t.done)
+      }
+      controller.start(plan, timerOnly)
+    }
+  }
+
+  /**
+   * 外部入口（服务卡片「开始专注」/ 意图框架 / `hdc aa start`）的感知确认。
+   *
+   * 为什么要多这一步：摄像头采集的**授权点只有一个** —— "开始专注时确认是否开启感知"。
+   * 外部入口若静默带着感知开起来，就等于多了一个绕过同意的入口。
+   * 文案与首页 `Home.beginFocus()` 保持同一条，不换说法（换了会让人以为这里不用授权）。
+   */
+  private askPerceptionThenStart(): void {
+    const ctx = getContext(this) as common.UIAbilityContext
+    AlertDialog.show({
+      title: '本次开启摄像头感知？',
+      message: '开启后，小伴会用前置摄像头感知你的专注状态（仅在触发时抓拍短片段）。选「仅计时」则本次完全不抓拍、不上传。',
+      primaryButton: {
+        value: '开启感知',
+        action: () => {
+          // 真正申请系统相机权限（user_grant）；失败也照常开始，降级为仅计时
+          PermissionService.getInstance().ensureCamera(ctx).then(() => {
+            this.startSessionFromRequest(false)
+          })
+        }
+      },
+      secondaryButton: {
+        value: '仅计时开始',
+        action: () => {
+          this.startSessionFromRequest(true)
+        }
+      },
+      // 没选就退出（按返回键关掉弹窗）：此时还没开会话，留在这一页只会是个空壳页面
+      cancel: () => {
+        router.back()
+      }
+    })
   }
 
   aboutToDisappear(): void {

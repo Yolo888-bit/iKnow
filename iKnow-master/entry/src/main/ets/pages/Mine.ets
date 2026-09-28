@@ -5,6 +5,7 @@ import { NavParams } from '../models/NavParams'
 import { AppStore } from '../store/AppStore'
 import { StorageService } from '../services/StorageService'
 import { AuthService } from '../services/AuthService'
+import { FeedbackService } from '../services/FeedbackService'
 import { AIPersonality } from '../models/Enums'
 import { UserAvatar } from '../components/UserAvatar'
 import { AvatarPicker } from '../components/AvatarPicker'
@@ -29,6 +30,10 @@ export struct Mine {
   @State renameValue: string = ''
   /** 模拟模式（默认开：当前无真机/真表，靠合成信号驱动演示） */
   @State simMode: boolean = true
+  /** 当前人格这一档会不会出声（极简安静型不出声，先说清楚，省得以为坏了） */
+  @State voicePackNote: string = ''
+  /** 试听结果：如实显示"正在播放哪个文件"或失败原因 */
+  @State voiceDiag: string = ''
   private types: CompanionType[] = [
     { key: AIPersonality.STRICT, emoji: '🎯', label: '严格教练型', desc: '直接 · 高执行力 · 适合拖延严重' },
     { key: AIPersonality.GENTLE, emoji: '🌤️', label: '温和陪伴型', desc: '鼓励 · 温和 · 低压力' },
@@ -36,6 +41,7 @@ export struct Mine {
   ]
   aboutToAppear(): void {
     this.personality = AppStore.getInstance().getUser().aiPersonality
+    this.voicePackNote = FeedbackService.getInstance().describeVoicePack()
     StorageService.getInstance().loadKv(StorageKey.SIM_MODE).then((v: string) => {
       this.simMode = v !== '0'
       AppStorage.setOrCreate<number>(StorageKey.SIM_MODE, this.simMode ? 1 : 0)
@@ -57,6 +63,20 @@ export struct Mine {
     this.personality = key
     AppStore.getInstance().saveUserPersonality(key)
     promptAction.showToast({ message: '已切换考伴类型' })
+    // 语音包是按人格分的，换了人格要重新说明"这一档会不会出声"
+    this.voicePackNote = FeedbackService.getInstance().describeVoicePack()
+    this.voiceDiag = ''
+  }
+
+  /**
+   * 试听当前人格的提醒语音。
+   *
+   * 走的是和分心时**完全同一条**播放链路，并**等播放真正开始/失败之后**再回显结果 ——
+   * 早先的实现是乐观返回"已播放…"，实际抛了错也显示成功，把排查带偏了。
+   */
+  private async tryVoice(): Promise<void> {
+    this.voiceDiag = '正在播放…'
+    this.voiceDiag = await FeedbackService.getInstance().tryout()
   }
 
   /** 打开改称呼的覆盖层 */
@@ -240,6 +260,46 @@ export struct Mine {
             }, (t: CompanionType) => t.label)
           }
           .width('100%')
+
+          // 提醒语音：语音包本身就是按人格分的，所以试听放在考伴类型下面最顺
+          // （原先在「数据管理」里，和"数据"没关系，也离人格选择太远）
+          Divider()
+            .color(Colors.LINE)
+            .margin({ top: 16, bottom: 14 })
+
+          Text('提醒语音')
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.TEXT_PRIMARY)
+            .width('100%')
+
+          Text(this.voicePackNote)
+            .fontSize(12)
+            .fontColor(Colors.TEXT_SECONDARY)
+            .lineHeight(18)
+            .width('100%')
+            .margin({ top: 6 })
+
+          Button('试听当前人格的提醒语音')
+            .width('100%')
+            .height(44)
+            .fontSize(15)
+            .fontColor(Colors.TEXT_PRIMARY)
+            .backgroundColor(Colors.BG)
+            .borderRadius(Radius.MD)
+            .margin({ top: 12 })
+            .onClick(() => {
+              this.tryVoice().catch((): void => {})
+            })
+
+          if (this.voiceDiag.length > 0) {
+            Text(this.voiceDiag)
+              .fontSize(11)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(17)
+              .width('100%')
+              .margin({ top: 8 })
+          }
         }
         .width('100%')
         .padding(18)

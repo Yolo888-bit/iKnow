@@ -93,6 +93,31 @@ export class StorageKey {
    * 与 `FOCUS_START_REQUEST` 同一时机设置、仅在新开会话时被 `Focus.ets` 消费一次。
    */
   static readonly FOCUS_HOME_INCOMPLETE_REQUEST = 'ik_focus_home_incomplete_request'
+  /**
+   * 首页授权弹窗选「仅计时开始」时设置：本次会话**不抓拍、不上传**。
+   *
+   * 这是隐私政策里"撤回采集授权"的出口，必须真的生效。此前感知模式完全由
+   * "有没有摄像头硬件"决定，于是这个选项形同虚设（选过一次之后再也见不到弹窗）。
+   * 只被 `Focus.ets` 消费一次；无论是否新开会话都要清掉，避免残留到下一段会话。
+   */
+  static readonly FOCUS_TIMER_ONLY_REQUEST = 'ik_focus_timer_only_request'
+  /**
+   * 服务卡片 / 意图框架 / `hdc aa start` 等**外部入口**唤起时设置：
+   * 专注页要先弹一次感知确认（与首页「开始专注」同一条文案）再开会话。
+   *
+   * 为什么不能直接开始：摄像头采集的授权点只有一个 —— "开始专注时确认是否开启感知"。
+   * 外部入口如果静默带着感知开起来，就等于**多了一个绕过同意的入口**。
+   */
+  static readonly FOCUS_CONFIRM_PERCEPTION_REQUEST = 'ik_focus_confirm_perception_request'
+
+  // ===================== 外部唤起的 want 参数名 =====================
+  //
+  // 服务卡片 / 意图框架 / `hdc aa start` 三个入口共用同一套参数名（取值见
+  // `insightintent/ExternalEntry.ets`）。参数名放在这里、而不是放在那个模块里，
+  // 是为了让**服务卡片能单独引用** —— 卡片跑在独立进程，不该为了两个字符串
+  // 把 AppStore / StorageService 一起拉进来。
+  static readonly IK_ACTION = 'ik_action'
+  static readonly IK_MODE = 'ik_mode'
 
   /** 贴合目标的励志标语（AI 生成，进程内缓存；目标变更时置空重新生成） */
   static readonly GOAL_SLOGAN = 'ik_goal_slogan'

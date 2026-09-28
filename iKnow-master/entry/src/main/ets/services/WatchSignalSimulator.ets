@@ -75,15 +75,15 @@ export class SimActivity {
   /** 状态在当前规则组合下会产生什么结论（给工作台如实提示，避免"点了没反应"的误解） */
   static effectOf(activity: string): string {
     if (SimActivity.DISTRACTING.includes(activity)) {
-      return '判定分心 → 触发干预'
+      return '会出声提醒（红色）'
     }
     if (SimActivity.LIGHT_ONLY.includes(activity)) {
-      return '判定轻度分心 → 轻提示'
+      return '只出提示卡片（黄色）'
     }
     if (SimActivity.LEARNING.includes(activity)) {
-      return '确认学习中 → 回到专注'
+      return '保持专注（绿色）'
     }
-    return '不产生结论（宁可不提示，也不猜）'
+    return '不会提醒（看不出来就不猜）'
   }
 }
 

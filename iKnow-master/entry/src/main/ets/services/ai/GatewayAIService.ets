@@ -1,5 +1,6 @@
 import { http } from '@kit.NetworkKit'
 import { util } from '@kit.ArkTS'
+import { hilog } from '@kit.PerformanceAnalysisKit'
 import { AIService, AIScene, AIRequest, AIResponse, AIError, AIPayload, AIResult } from './AIService'
 import { QATextPayload, QAImagePayload, QAResp, QA_DISCLAIMER } from './QAService'
 import { CompanionContext, CompanionDecision } from './CompanionService'
@@ -40,6 +41,53 @@ interface GatewayHeaders {
   'Content-Type': string
   'Authorization': string
 }
+
+/**
+ * 多模态（画面观察）请求体：与文本请求的区别只有一处 —— `content` 是**分片数组**
+ * （一段文字 + 若干张 base64 图），OpenAI 兼容协议里 vision 就是这么传的。
+ *
+ * 注意：`type` 用单接口 + 可选字段表达（`type:'text'` 只填 text，`type:'image_url'` 只填
+ * image_url），不用"接口联合类型" —— ArkTS 对联合类型上的对象字面量校验很严，容易报错。
+ */
+interface VisionImageUrl {
+  url: string
+}
+
+interface VisionPart {
+  type: string
+  text?: string
+  image_url?: VisionImageUrl
+}
+
+interface VisionMessage {
+  role: string
+  content: VisionPart[]
+}
+
+interface VisionRequestBody {
+  model: string
+  messages: VisionMessage[]
+  temperature: number
+  max_tokens: number
+}
+
+/** 画面观察的原始输出（运行时逐字段防御，缺字段一律当"无结论"） */
+interface RawObservation {
+  activity?: string
+  confidence?: number
+  evidence?: string
+  handheld?: boolean
+  facingDesk?: boolean
+}
+
+/**
+ * 一次观察最多上传几帧。
+ *
+ * 为什么要封顶：抓拍一束是 6 帧，全传上去会让单次请求的体积（base64 后还要再放大 1.33 倍）
+ * 与云端按图计费的成本一起上去。多帧对"在做什么"的判定增益很快饱和，
+ * 4 帧足够覆盖触发前后，再多只是花成本。
+ */
+const VISION_MAX_FRAMES = 4
 
 /** chat/completions 响应（字段可选，便于运行时防御） */
 interface ChatRespMessage {
@@ -213,14 +261,62 @@ export class GatewayAIService implements AIService {
   }
 
   /**
-   * 真实多模态识别（触发时抓拍的帧 → 可观察状态）。
+   * 真实多模态识别（触发时抓拍的帧 → 可观察状态）——「手表粗筛 → 抓拍 → 云端看照片判断」
+   * 的最后一跳。
    *
-   * 隐私约束（PRD §14.7）：**原始影像不上传**，因此这里不接视觉大模型，
-   * 直接返回 null —— 调用方据此降级为「模拟输入源」或如实记为「无法判断」，
-   * 而不是伪造一个识别结果（硬规则 §5：不伪造感知数据）。
+   * 此前这里恒返回 null（"不接视觉大模型"），于是整条链路是断的：照片拍到了、也落盘了，
+   * 但永远得到"无法判断"、置信度 0，再被状态机的置信度门禁拦下 —— 表现就是"抓拍了但什么都没发生"。
+   * 现在按 2026-09-19 的决策（保留画面云端上传，见「隐私与数据」页）真正接上视觉模型。
+   *
+   * 约定（硬规则 §5：不伪造感知数据）：
+   *  - 未配置 Key / 没有帧 → 返回 null，调用方如实记为「无法判断」
+   *  - 非 200 / 超时 / JSON 不合法 → 返回 null
+   *  - 成功 → `evidence` 里带上"已上传 N 帧 + 模型给的一句话依据"，供学习记录复查
    */
   async recognizeActivity(frames: ArrayBuffer[]): Promise<ObservationRecord | null> {
-    return null
+    if (!this.isReady() || frames.length === 0) {
+      return null
+    }
+    // 只取前若干帧：多帧更准，但 base64 后体积放大 1.33 倍，必须封顶
+    const used: ArrayBuffer[] = frames.slice(0, VISION_MAX_FRAMES)
+    const parts: VisionPart[] = []
+    for (const f of used) {
+      parts.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${GatewayAIService.toBase64(f)}` } })
+    }
+    // 指令放最后：部分多模态模型对"先图后文"更敏感
+    parts.push({ type: 'text', text: Prompts.observation() })
+
+    const started: number = Date.now()
+    const content: string = await this.callVision(parts, BridgeConfig.MODEL_MULTIMODAL,
+      BridgeConfig.timeoutForScene('qa_image'))
+    if (content.length === 0) {
+      return null
+    }
+    const json: string = GatewayAIService.extractJson(content)
+    if (json.length === 0) {
+      return null
+    }
+    let raw: RawObservation | null = null
+    try {
+      raw = JSON.parse(json) as RawObservation
+    } catch (e) {
+      raw = null
+    }
+    if (raw === null || raw.activity === undefined || raw.activity.length === 0) {
+      return null
+    }
+    const conf: number = raw.confidence !== undefined ? raw.confidence : 0
+    const o = new ObservationRecord()
+    o.activity = raw.activity
+    o.confidence = conf < 0 ? 0 : (conf > 1 ? 1 : conf)
+    o.handheld = raw.handheld === true
+    o.facingDesk = raw.facingDesk === true
+    const why: string = raw.evidence !== undefined ? raw.evidence : ''
+    o.evidence = `云端识别（已上传 ${used.length} 帧）：${why.length > 0 ? why : '模型未给依据'}`
+    hilog.info(0x0000, 'iKnow.Gateway',
+      '画面观察完成：activity=%{public}s confidence=%{public}d 帧数=%{public}d 耗时=%{public}dms',
+      o.activity, Math.round(o.confidence * 100), used.length, Date.now() - started)
+    return o
   }
 
   // ===================== 场景路由（PRD §14.1 / §14.2）=====================
@@ -833,6 +929,69 @@ export class GatewayAIService implements AIService {
       }
       return msg.content
     } catch (err) {
+      return ''
+    } finally {
+      request.destroy()
+    }
+  }
+
+  /** JPEG 帧 → base64（multimodal 的 data URI 用） */
+  private static toBase64(buf: ArrayBuffer): string {
+    try {
+      return new util.Base64Helper().encodeToStringSync(new Uint8Array(buf))
+    } catch (e) {
+      return ''
+    }
+  }
+
+  /**
+   * 多模态调用：POST {base}/chat/completions，`content` 为「图片 + 文字」分片数组。
+   * 与 `callModelRaw` 同协议，只是消息体形状不同，因此单独一个方法（不改动文本路径）。
+   */
+  private async callVision(parts: VisionPart[], model: string, timeoutMs: number): Promise<string> {
+    const body: VisionRequestBody = {
+      model: model,
+      messages: [{ role: 'user', content: parts }],
+      // 观察任务要的是稳定复现，不是发挥：温度压低
+      temperature: 0.2,
+      max_tokens: 300
+    }
+    const headers: GatewayHeaders = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${BridgeConfig.AI_API_KEY}`
+    }
+    const options: http.HttpRequestOptions = {
+      method: http.RequestMethod.POST,
+      header: headers,
+      extraData: JSON.stringify(body),
+      connectTimeout: timeoutMs,
+      readTimeout: timeoutMs
+    }
+
+    const request = http.createHttp()
+    try {
+      const res = await request.request(`${BridgeConfig.AI_API_BASE_URL}/chat/completions`, options)
+      if (res.responseCode !== 200) {
+        hilog.warn(0x0000, 'iKnow.Gateway', '画面观察 HTTP %{public}d', res.responseCode)
+        return ''
+      }
+      const rawResult: string | Object | ArrayBuffer = res.result
+      const text: string = typeof rawResult === 'string' ? rawResult : ''
+      if (text.length === 0) {
+        return ''
+      }
+      const parsed = JSON.parse(text) as ChatCompletion
+      const choices = parsed.choices
+      if (choices === undefined || choices.length === 0) {
+        return ''
+      }
+      const msg = choices[0].message
+      if (msg === undefined || msg.content === undefined) {
+        return ''
+      }
+      return msg.content
+    } catch (err) {
+      hilog.error(0x0000, 'iKnow.Gateway', '画面观察失败：%{public}s', (err as Error).message)
       return ''
     } finally {
       request.destroy()

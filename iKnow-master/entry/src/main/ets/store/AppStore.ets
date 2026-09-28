@@ -722,7 +722,8 @@ export class AppStore {
     await this.syncAfterSession()
     // 画像更新依赖最新会话列表，因此必须排在 syncAfterSession 之后；失败不影响统计
     try {
-      this.profile = AIService.getInstance().updateProfile(this.profile, this.sessions)
+      // tasks 要一起传：执行力的完成情况以任务表当前状态为准（含会话结束后补勾的）
+      this.profile = AIService.getInstance().updateProfile(this.profile, this.sessions, this.tasks)
       await StorageService.getInstance().saveProfile(this.profile)
     } catch (e) {
       hilog.error(0x0000, 'iKnow.Store', '画像更新失败：%{public}s', e.message)

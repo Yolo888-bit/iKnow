@@ -115,7 +115,7 @@ export class ObservationQueue {
 
   private async runTask(task: QueueTask): Promise<void> {
     const rec = await this.recognizeWithRetry(task.frames)
-    const o = rec !== null ? rec : this.unknownRecord()
+    const o = rec !== null ? rec : this.unknownRecord(task.frames.length)
     o.id = IdUtils.uuid()
     o.sessionId = task.sessionId
     o.eventId = task.event.id
@@ -148,14 +148,31 @@ export class ObservationQueue {
     if (r !== null) {
       return r
     }
+    // **上传过画面的调用不重试**：重试等于把同一批照片再传一遍，云端成本与端到端时延都翻倍，
+    // 而失败原因多半是网络/额度，重试也救不回来。没有帧要上传时（模拟识别器 / 空帧）
+    // 重试一次不产生额外成本，保留。
+    if (frames.length > 0) {
+      return null
+    }
     return await this.recognizer.recognize(frames).catch(() => null)
   }
 
-  private unknownRecord(): ObservationRecord {
+  /**
+   * 没有结论时的记录。**必须写清"画面到底有没有上去"** ——
+   * 否则用户（和评审）无法分辨"没拍到""拍到了但没上传""上传了但模型没给结论"，
+   * 只能看到一个笼统的「无法判断」。
+   */
+  private unknownRecord(frameCount: number): ObservationRecord {
     const o = new ObservationRecord()
     o.activity = '无法判断'
     o.confidence = 0
-    o.evidence = this.recognizer === null ? '云端识别未接入' : '云端识别失败或未配置'
+    if (this.recognizer === null) {
+      o.evidence = '云端识别未接入（本次未上传画面）'
+    } else if (frameCount === 0) {
+      o.evidence = '没有取到画面，未做识别'
+    } else {
+      o.evidence = `已上传 ${frameCount} 帧，云端未返回可用结论`
+    }
     return o
   }
 

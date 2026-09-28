@@ -1,37 +1,40 @@
 import { vibrator } from '@kit.SensorServiceKit'
 import { media } from '@kit.MediaKit'
-import { textToSpeech } from '@kit.CoreSpeechKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { resourceManager } from '@kit.LocalizationKit'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { StorageKey } from '../common/Constants'
+import { ReminderLines, ReminderLevel } from '../common/ReminderLines'
 import { StorageService } from './StorageService'
-import { IdUtils } from '../utils/IdUtils'
 
 const DOMAIN = 0x0000
 const TAG = 'iKnow.Feedback'
 
-/** 语音提醒的两种场景 */
-export type ReminderKind = 'PHONE' | 'AWAY'
+/** 等播放真正开始的超时：既没到 playing 也没报错时，如实报"超时"而不是假装播过 */
+const PLAY_TIMEOUT_MS = 3000
 
 /**
  * 反馈服务 —— 云端**确认**分心后的触达手段。
  *
  * 设计约束（重要）：
- *  - 只在"识别结果明确"时调用，**且必须由状态机真正转入分心那一刻触发**
- *    （见 `FocusController.onDetection`），不跟手表线索联动 —— 线索一变就响会变成骚扰；
- *  - 所有调用**失败静默**：无振动器、权限未授、模拟器不支持、语音引擎或音频文件缺失，
+ *  - 只在"识别结果明确"时调用，且由 `FocusController.evaluateIntervention()` 在
+ *    **产生了重度干预事件**时触发（那条路径自带冷却与 10 分钟预算），
+ *    不跟手表线索联动 —— 线索一变就响会变成骚扰；
+ *  - 所有调用**失败静默**：无振动器、权限未授、音频文件缺失、播放器报错，
  *    都不影响专注主流程。
  *
- * 发声走**两级通道**：
- *  ① 系统语音合成（`@kit.CoreSpeechKit` textToSpeech）—— 按文档以**离线模式**请求
- *     （`CreateEngineParams.online`：0 = 在线，1 = 离线。字段名叫 online 但语义是反的，别写错）。
- *     好处是提醒语能随人格变化，而且不必往仓库里塞音频文件。
- *  ② 内置音频文件（`resources/rawfile/`）—— 引擎建不起来时兜底。
- *     没放文件也不会报错，只是这一次没有声音，卡片照常出现。
+ * 发声用**用户提供的语音包**（`resources/rawfile/` 下的 mp3，见 `common/ReminderLines.ets`），
+ * 不使用系统语音合成。文案与音频的对应关系只有 `ReminderLines` 一份，这里不重写句子。
  *
- * ⚠️ 引擎与离线中文音色是否存在取决于设备（本机只有模拟器，无法验证）。
- * 首次发声时探测一次，结论缓存下来；探测失败就整段会话都走 ②。
+ * ⚠️ **AVPlayer 必须走状态机**，不能设完 `fdSrc` 就直接 `play()`：
+ *     fdSrc → initialized → `prepare()` → prepared → `play()` → playing
+ *  `play()` 的文档前置条件是 prepared/paused/completed，跳步会抛 5400102
+ *  Operation not allowed —— 表现就是"没有声音、也没有任何界面提示"。
+ *
+ * 哪些情况**不出声**（都是设计如此，不是故障）：
+ *  - 轻度（黄灯）：语音包只有重度文案，没有轻度录音；
+ *  - 极简安静型：产品要求"无文字话术、无语音"，只出界面徽标；
+ *  - 分心未持续到重度门槛（见 `FocusTuning.INTERVENTION_HEAVY_AFTER_MS`）。
  */
 export class FeedbackService {
   private static inst: FeedbackService | null = null
@@ -39,10 +42,8 @@ export class FeedbackService {
   private player: media.AVPlayer | null = null
   /** 正在播放的 rawfile 名：播完要按名 closeRawFdSync，不能泄漏 fd */
   private playingRawName: string = ''
-  /** 语音合成引擎；懒建一次，之后复用 */
-  private tts: textToSpeech.TextToSpeechEngine | null = null
-  /** 引擎探测结论：-1 未探测 / 0 不可用 / 1 可用。避免每次提醒都重试一遍建引擎 */
-  private ttsOk: number = -1
+  /** 最近一次发声的结果说明，供试听按钮如实显示 */
+  private lastDiag: string = '还没试听过'
 
   static getInstance(): FeedbackService {
     if (FeedbackService.inst === null) {
@@ -64,21 +65,23 @@ export class FeedbackService {
     return this.switchOn(StorageKey.VIBRATE_ON, true)
   }
 
-  /**
-   * 语音提醒开关（默认**开**）。
-   * 原先是默认关，理由是"依赖 HMS，环境不支持时无意义"；现在提醒音是内置音频文件，
-   * 不依赖任何系统语音能力，默认关着只会让人以为功能没接上。
-   */
+  /** 语音提醒开关（默认**开**） */
   isVoiceOn(): boolean {
     return this.switchOn(StorageKey.VOICE_ON, true)
   }
 
+  private currentPersonality(): string {
+    return AppStorage.get<string>(StorageKey.USER_PERSONALITY) ?? 'GENTLE'
+  }
+
   /**
-   * 短震一次（约 0.3 秒）。用于"云端确认分心"的提醒。
-   * 失败静默——没有振动器或权限未授时不该影响专注流程。
+   * 短震一次。用于"确认分心"的提醒。
+   *
+   * 极简安静型**不震**：产品给它的设定是"手表轻震/强震 + 界面徽标"，
+   * 而当前设备没有手表 —— 按项目既有的"绝不假装震动"口径，它就只有徽标。
    */
   vibrateOnce(): void {
-    if (!this.isVibrateOn()) {
+    if (!this.isVibrateOn() || this.currentPersonality() === 'QUIET') {
       return
     }
     try {
@@ -93,54 +96,196 @@ export class FeedbackService {
     }
   }
 
-  /** 兜底音频文件名：放在 `entry/src/main/resources/rawfile/` 下，可选 */
-  private fileNameOf(kind: ReminderKind): string {
-    return kind === 'PHONE' ? 'remind_phone.wav' : 'remind_away.wav'
+  // ---------- 发声 ----------
+
+  /**
+   * 重度分心提醒：播当前人格对应的那段录音（同人格多段轮换），并**一直循环**下去。
+   *
+   * 循环是产品要求：确认长时间分心之后，提醒要一直响到人回来为止，
+   * 而不是响一句就没了。停止由 `FocusController.syncVoiceLoop()` 在**离开分心态**时调用
+   * `stopReminder()` —— 也就是说：回到专注、休息、暂停、答疑、结束都会立刻停。
+   *
+   * 不 await、不抛出 —— 触达不能阻塞专注主流程。
+   */
+  remind(level: ReminderLevel): void {
+    if (!this.isVoiceOn()) {
+      this.lastDiag = '语音提醒开关是关着的'
+      return
+    }
+    // 已经在循环就不重启（也避免白白推进轮换游标、跳过一句录音）——
+    // 新的重度事件不该打断正在响的循环
+    if (this.isReminding()) {
+      this.lastDiag = '提醒正在循环播放中，本次不重启'
+      return
+    }
+    const line = ReminderLines.nextForVoice(this.currentPersonality(), level)
+    if (line === null) {
+      // 没有对应录音：极简安静型、或这一档本来就没录音 —— 如实记下，不假装播过
+      this.lastDiag = ReminderLines.hasVoice(this.currentPersonality(), level)
+        ? '没有可用的录音文件'
+        : `${this.currentPersonality()} 的${level === 'HEAVY' ? '重度' : '轻度'}提醒没有录音，本次只出界面提示`
+      hilog.info(DOMAIN, TAG, '无对应录音：%{public}s', this.lastDiag)
+      return
+    }
+    this.playFile(line.file, line.text, true).catch((): void => {})
   }
 
   /**
-   * 兜底通道：播放内置提醒音（仅在语音合成引擎不可用时走这里）。
-   *
-   * 缺文件 / 播放失败都只记一行日志，**不弹错、不打断专注流程** ——
-   * 没放音频文件是正常情况（提醒语本来就由语音合成负责），
-   * 不能因为没放文件就让专注页出问题。
+   * 停止提醒（含正在循环的）。
+   * 幂等：没在播时什么都不做 —— 状态同步点（`FocusController.syncVoiceLoop`）每秒都会调它。
    */
-  private async playReminder(kind: ReminderKind): Promise<void> {
-    const name = this.fileNameOf(kind)
-    const ctx = StorageService.getInstance().appContext()
-    if (ctx === null) {
+  stopReminder(): void {
+    if (this.player === null) {
       return
     }
-    let raw: resourceManager.RawFileDescriptor
+    const p = this.player
     try {
-      raw = ctx.resourceManager.getRawFdSync(name)
+      p.stop().catch((): void => {})
     } catch (e) {
-      // 文件不存在时会抛 —— 这是"还没录音频"的正常情况，不当成错误
-      hilog.info(DOMAIN, TAG, '提醒音 %{public}s 不存在，本次只出提示卡片', name)
-      return
+      // 忽略：状态不允许 stop 时直接释放也一样停
     }
-    // 先记下文件名：这样后面任何一步失败，`releasePlayer()` 都能把 fd 还回去
-    this.playingRawName = name
-    try {
-      const player = await media.createAVPlayer()
-      this.player = player
-      player.on('stateChange', (state: media.AVPlayerState) => {
-        // 播完或出错都要释放，否则下一次请求会被"正在播"挡住，提醒从此哑掉
-        if (state === 'completed' || state === 'error') {
+    this.releasePlayer()
+    hilog.info(DOMAIN, TAG, '已停止分心提醒')
+  }
+
+  /** 是否正在响（含循环中）—— 供状态同步点判断，避免重复启动 */
+  isReminding(): boolean {
+    return this.player !== null
+  }
+
+  /**
+   * 试听：播一句当前人格的重度提醒，**等播放真正开始/失败之后**再返回结果说明。
+   *
+   * 为什么必须等：播放是异步的，早先的实现直接返回"已播放…"，
+   * 结果实际抛了 5400102（状态机跳步）却显示成功 —— 排查时完全被误导。
+   * 现在只有真的进到 playing 才算成功，出错/超时都如实回显。
+   */
+  async tryout(): Promise<string> {
+    if (!this.isVoiceOn()) {
+      this.lastDiag = '语音提醒开关是关着的，先打开「识别到分心时语音提醒」'
+      return this.lastDiag
+    }
+    const personality = this.currentPersonality()
+    const line = ReminderLines.nextForVoice(personality, 'HEAVY')
+    if (line === null) {
+      this.lastDiag = personality === 'QUIET'
+        ? '极简安静型不出声：界面只显示「⚠️轻度分心 / 🔴重度分心」徽标'
+        : '当前人格还没有录音文件'
+      return this.lastDiag
+    }
+    // 试听只播一遍，不循环 —— 循环是"分心没回来"才有的行为
+    await this.playFile(line.file, line.text, false)
+    return this.lastDiag
+  }
+
+  /** 最近一次发声的结果说明（诚实的失败原因，不是"应该可以"） */
+  getDiagnosis(): string {
+    return this.lastDiag
+  }
+
+  /** 当前人格的语音包情况（页面用来如实说明"这一档会不会出声"） */
+  describeVoicePack(): string {
+    const p = this.currentPersonality()
+    if (p === 'QUIET') {
+      return '极简安静型不出声：界面只显示「⚠️轻度分心 / 🔴重度分心」徽标'
+    }
+    if (!ReminderLines.hasVoice(p, 'HEAVY')) {
+      return '当前人格还没有录音文件，分心时不会出声'
+    }
+    return '重度分心后一直循环播放，回到专注就停（同一人格的多段录音轮流使用）'
+  }
+
+  /**
+   * 播放一个 rawfile 音频。返回 true = 真的开始播了。
+   *
+   * AVPlayer 的状态机（**必须按顺序走**，跳步会抛 5400102）：
+   *   createAVPlayer() → idle
+   *   设 fdSrc        → initialized   ← 在这里 prepare()
+   *   prepare() 完成  → prepared      ← 在这里 play()
+   *   play()          → playing
+   *
+   * `loop = true` 时用播放器自带的循环（播完停在 playing，不会到 completed），
+   * 要停只能由 `stopReminder()` 显式来停。
+   */
+  private playFile(file: string, text: string, loop: boolean): Promise<boolean> {
+    return new Promise<boolean>((resolve: (ok: boolean) => void) => {
+      if (this.player !== null) {
+        this.lastDiag = '上一次提醒还在播，本次跳过'
+        hilog.info(DOMAIN, TAG, '上一次提醒还在播，忽略这次请求')
+        resolve(false)
+        return
+      }
+      const ctx = StorageService.getInstance().appContext()
+      if (ctx === null) {
+        this.lastDiag = '拿不到应用上下文，无法播放'
+        resolve(false)
+        return
+      }
+      let raw: resourceManager.RawFileDescriptor
+      try {
+        raw = ctx.resourceManager.getRawFdSync(file)
+      } catch (e) {
+        hilog.info(DOMAIN, TAG, '语音包文件 %{public}s 读不到', file)
+        this.lastDiag = `语音包文件 ${file} 读不到（rawfile 里没有？），本次只出界面提示`
+        resolve(false)
+        return
+      }
+
+      let settled = false
+      let timer: number = -1
+      const finish = (ok: boolean, note: string): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        if (timer >= 0) {
+          clearTimeout(timer)
+          timer = -1
+        }
+        this.lastDiag = note
+        hilog.info(DOMAIN, TAG, '播放结果 %{public}s：%{public}s', ok ? 'OK' : 'FAIL', note)
+        if (!ok) {
           this.releasePlayer()
         }
+        resolve(ok)
+      }
+
+      this.playingRawName = file
+      media.createAVPlayer().then((player: media.AVPlayer): void => {
+        this.player = player
+        // 循环播放由播放器自己做（播完自动重头），比在 completed 里手动重播可靠
+        player.loop = loop
+        // 超时兜底**必须先挂上**：状态回调可能在 fdSrc 赋值后立刻到达，
+        // 那时若还没挂 timer，成功路径就漏掉了清理（定时器会白跑 3 秒）
+        timer = setTimeout(() => {
+          finish(false, `播放超时（${PLAY_TIMEOUT_MS} ms 内没有进入播放状态）`)
+        }, PLAY_TIMEOUT_MS)
+        player.on('stateChange', (state: media.AVPlayerState) => {
+          if (state === 'initialized') {
+            // fdSrc 设好才会到这里；**先 prepare，不能直接 play**
+            player.prepare().catch((e: BusinessError): void => {
+              finish(false, `prepare 失败 ${e.code}：${e.message}`)
+            })
+          } else if (state === 'prepared') {
+            player.play()
+          } else if (state === 'playing') {
+            finish(true, loop ? `正在循环播放 ${file}：「${text}」` : `正在播放 ${file}：「${text}」`)
+          } else if (state === 'completed') {
+            // 只在"播一遍"的模式下会到这里；循环模式下播放器自己重头，不会完成。
+            // 释放掉，否则下一次请求会被"正在播"挡住，提醒从此哑掉。
+            this.releasePlayer()
+          } else if (state === 'error') {
+            finish(false, '播放状态变为 error')
+          }
+        })
+        player.on('error', (err: BusinessError) => {
+          finish(false, `播放失败 ${err.code}：${err.message}`)
+        })
+        player.fdSrc = { fd: raw.fd, offset: raw.offset, length: raw.length }
+      }).catch((err: BusinessError): void => {
+        finish(false, `播放器创建失败 ${err.code}：${err.message}`)
       })
-      player.on('error', (err: BusinessError) => {
-        hilog.info(DOMAIN, TAG, '提醒音播放失败（可忽略）：%{public}s', err.message)
-        this.releasePlayer()
-      })
-      player.fdSrc = { fd: raw.fd, offset: raw.offset, length: raw.length }
-      player.play()
-      hilog.info(DOMAIN, TAG, '播放分心提醒音：%{public}s', name)
-    } catch (e) {
-      hilog.info(DOMAIN, TAG, '提醒音播放器创建失败（可忽略），本次只出提示卡片')
-      this.releasePlayer()
-    }
+    })
   }
 
   private releasePlayer(): void {
@@ -167,117 +312,6 @@ export class FeedbackService {
       ctx.resourceManager.closeRawFdSync(name)
     } catch (e) {
       // 忽略
-    }
-  }
-
-  /**
-   * 按考伴人格给一句提醒词 —— **本地模板**，不走网络。
-   * 分心那一刻需要的是立刻出声，等一次大模型往返会把"提醒"变成"迟到"。
-   */
-  private reminderText(kind: ReminderKind): string {
-    const p: string = AppStorage.get<string>(StorageKey.USER_PERSONALITY) ?? 'GENTLE'
-    if (kind === 'PHONE') {
-      if (p === 'STRICT') {
-        return '手机先放下，把手头这条做完。'
-      }
-      if (p === 'QUIET') {
-        return '放下手机，继续。'
-      }
-      return '看到你在看手机，我们回来接着学吧。'
-    }
-    if (p === 'STRICT') {
-      return '人不在座位上，回来继续。'
-    }
-    if (p === 'QUIET') {
-      return '回来继续。'
-    }
-    return '画面里没看到你，还在吗？回来接着学吧。'
-  }
-
-  /**
-   * 分心语音提醒（按场景）。
-   *
-   * 优先用系统语音合成朗读；**建引擎失败**（设备没这能力）才回落到内置音频文件。
-   * 引擎建起来了但某次朗读出错就只记日志 —— 那时多半已经出声，
-   * 再放一遍音频文件会变成重复提醒。
-   *
-   * 全程不 await、不抛出：触达不能阻塞专注主流程。
-   */
-  speak(kind: ReminderKind): void {
-    if (!this.isVoiceOn()) {
-      return
-    }
-    const text = this.reminderText(kind)
-    hilog.info(DOMAIN, TAG, '分心提醒：%{public}s', text)
-    this.byVoiceChannel(text, kind).catch((): void => {})
-  }
-
-  /**
-   * 先试语音合成，不行再放音频文件。
-   *
-   * 只对音频通道做"正在播就跳过"的判断：语音合成那边不需要 ——
-   * 提醒只在确认转入分心时触发，而红级冷却就有 5 分钟，两次提醒不可能挨在一起。
-   */
-  private async byVoiceChannel(text: string, kind: ReminderKind): Promise<void> {
-    if (this.player !== null) {
-      hilog.info(DOMAIN, TAG, '上一次提醒音还在播，忽略这次请求')
-      return
-    }
-    if (this.ttsOk !== 0 && await this.ensureTts()) {
-      this.speakByTts(text)
-      return
-    }
-    await this.playReminder(kind)
-  }
-
-  /** 建语音合成引擎（只在首次发声时探测一次，结论缓存） */
-  private async ensureTts(): Promise<boolean> {
-    if (this.ttsOk === 0) {
-      return false
-    }
-    if (this.tts !== null) {
-      return true
-    }
-    try {
-      const params: textToSpeech.CreateEngineParams = {
-        language: 'zh-CN',
-        person: 0,
-        // 0 = 在线，1 = 离线（SDK 文档口径，与字段名相反）。这里要的是离线。
-        online: 1
-      }
-      this.tts = await textToSpeech.createEngine(params)
-      this.ttsOk = 1
-      hilog.info(DOMAIN, TAG, '语音合成引擎就绪（离线）')
-      return true
-    } catch (e) {
-      this.tts = null
-      this.ttsOk = 0
-      hilog.info(DOMAIN, TAG, '语音合成引擎不可用，回落到内置提醒音')
-      return false
-    }
-  }
-
-  /**
-   * 念一句提醒词。回调只做记录 —— 已经出声了，这时候再回落到音频文件反而会重复响。
-   */
-  private speakByTts(text: string): void {
-    const engine = this.tts
-    if (engine === null) {
-      return
-    }
-    const requestId = IdUtils.uuid()
-    engine.setListener({
-      onStart: (id: string, response: textToSpeech.StartResponse): void => {},
-      onComplete: (id: string, response: textToSpeech.CompleteResponse): void => {},
-      onStop: (id: string, response: textToSpeech.StopResponse): void => {},
-      onError: (id: string, errorCode: number, errorMessage: string): void => {
-        hilog.info(DOMAIN, TAG, '语音合成出错（可忽略）：%{public}d %{public}s', errorCode, errorMessage)
-      }
-    })
-    try {
-      engine.speak(text, { requestId: requestId })
-    } catch (e) {
-      hilog.info(DOMAIN, TAG, '语音合成调用失败（可忽略）')
     }
   }
 }

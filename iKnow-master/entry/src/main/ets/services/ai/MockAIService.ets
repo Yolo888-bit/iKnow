@@ -40,6 +40,8 @@ import { StudyReport } from '../../models/StudyReport'
 import { Metrics, DaySummary, Baseline, Trend7v7, Streaks } from '../Metrics'
 import { IdUtils } from '../../utils/IdUtils'
 import { TimeUtils } from '../../utils/TimeUtils'
+import { ReminderLines } from '../../common/ReminderLines'
+import { FocusTuning } from '../../common/FocusTuning'
 
 interface RetryConfig {
   timeoutMs: number
@@ -56,6 +58,15 @@ interface WordingMap {
   STRICT: WordingLevel
   QUIET: WordingLevel
   ADAPTIVE: WordingLevel
+}
+
+/**
+ * 分心提醒文案 —— 单一事实源在 `common/ReminderLines.ets`，
+ * 因为**同一句话还要以录音形式播出来**（音频在 `FeedbackService`），
+ * 文案与音频分两处维护迟早对不上。这里只做包装。
+ */
+function reminderText(personality: string, level: 'LIGHT' | 'HEAVY'): string {
+  return ReminderLines.textOf(personality, level)
 }
 
 /**
@@ -175,23 +186,17 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     ['memory', { timeoutMs: 30000, retries: 1 }]
   ])
 
+  /**
+   * 分心提醒文案表。
+   *
+   * 注意：**内容来自 `ReminderLines`（唯一事实源）**，不在这里重写一遍字符串 ——
+   * 这些句子同时是语音包的文字稿（见该文件表头说明）。
+   */
   private static readonly WORDING: WordingMap = {
-    GENTLE: {
-      light: '感觉你有点走神啦，先喝口水缓一缓？不用急，慢慢来。',
-      heavy: '你已经离开屏幕有一会儿了，要不要先休息 5 分钟，回来状态会更好。'
-    },
-    STRICT: {
-      light: '专注度下降了，把手机放远一点，回到任务上。',
-      heavy: '已经明显分心，必须停下来。现在去休息，别硬撑。'
-    },
-    QUIET: {
-      light: '走神了。回到屏幕。',
-      heavy: '离开太久。先休息。'
-    },
-    ADAPTIVE: {
-      light: '节奏有点松，调整一下？继续就好。',
-      heavy: '分心较久，建议短暂休息后再战。'
-    }
+    GENTLE: { light: reminderText('GENTLE', 'LIGHT'), heavy: reminderText('GENTLE', 'HEAVY') },
+    STRICT: { light: reminderText('STRICT', 'LIGHT'), heavy: reminderText('STRICT', 'HEAVY') },
+    QUIET: { light: reminderText('QUIET', 'LIGHT'), heavy: reminderText('QUIET', 'HEAVY') },
+    ADAPTIVE: { light: reminderText('ADAPTIVE', 'LIGHT'), heavy: reminderText('ADAPTIVE', 'HEAVY') }
   }
 
   /** §14.7 QA 免责声明（所有 AI 输出必须携带） */
@@ -697,9 +702,10 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     if (!distracted) {
       return { shouldIntervene: false, level: 'NONE', channel: 'quiet', message: '', action: 'continue' }
     }
-    const sinceSec = ctx.sinceMs / 1000
     let level: 'LIGHT' | 'HEAVY' = 'LIGHT'
-    if (ctx.state === 'DISTRACTED' && sinceSec >= 60) {
+    // 级别按**这一次分心持续了多久**算（黄灯恒为轻度，红灯持续够久才升级为重度）。
+    // 门槛是 FocusTuning 里的常量，不在这里写死数字。
+    if (ctx.state === 'DISTRACTED' && ctx.sinceMs >= FocusTuning.INTERVENTION_HEAVY_AFTER_MS) {
       level = 'HEAVY'
     }
     // §12 硬规则：无手表时 RED 用手机声音 + 屏幕选择，绝不假装震动
@@ -994,13 +1000,14 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
   }
 
   /** 长期画像更新：统一走 Metrics（§3 指标唯一事实源） */
-  updateProfile(profile: FocusProfile, sessions: FocusSession[]): FocusProfile {
+  updateProfile(profile: FocusProfile, sessions: FocusSession[], tasks: Task[]): FocusProfile {
     const finished = sessions.filter((s) => Metrics.totalStudySec(s) > 0)
     profile.sampleCount = finished.length
     profile.recentConcentrations = finished.map((s) => Metrics.focusRatePercent(s))
     profile.recentDistractionRates = finished.map((s) => Metrics.distractionRate(s))
     if (Metrics.canShowProfile(profile.sampleCount)) {
-      const d = Metrics.fiveDim(finished)
+      // tasks 必须传：执行力的完成情况以任务表当前状态为准，否则会话结束后补勾的不计入
+      const d = Metrics.fiveDim(finished, tasks)
       profile.efficiency = d.efficiency
       profile.concentration = d.concentration
       profile.stability = d.stability

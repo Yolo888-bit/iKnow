@@ -117,16 +117,8 @@ export class FocusController {
   private onIntervention: ((d: CompanionDecision, e: InterventionEvent) => void) | null = null
   private lastDecision: CompanionDecision | null = null
   private permSubscribed: boolean = false
-
-  /**
-   * 语音提醒的**待定线索**（'' / 'PHONE' / 'AWAY'）。
-   *
-   * 由 `onObservation()` 在看到明确的观察状态时写入，由 `onDetection()` 在
-   * **真正转入「分心」**的那一次判定里消费掉，用完即清 —— 因此它天然受去抖、
-   * 置信度地板、形态冷却与干预预算的约束，不会在"没真的分心"时响。
-   * 会话边界必须清空，否则会跨会话残留。
-   */
-  private pendingVoiceCue: string = ''
+  /** 上一次在分心态下重新评估干预的时刻（0 = 本段还没评估过） */
+  private lastReevalAt: number = 0
 
   static getInstance(): FocusController {
     if (FocusController.inst === null) {
@@ -366,8 +358,14 @@ export class FocusController {
     this.onIntervention = cb
   }
 
-  /** 开始一个专注会话 */
-  start(tasks: Task[]): void {
+  /**
+   * 开始一个专注会话。
+   *
+   * @param timerOnly 用户显式选了「仅计时」：本次会话**不抓拍、不上传**
+   *                  （这是隐私政策第六节写的"撤回采集授权"出口，必须是真能生效的，
+   *                    否则那句话就是假的）。默认 false = 有硬件就开启感知。
+   */
+  start(tasks: Task[], timerOnly: boolean = false): void {
     this.tasks = tasks
     this.sortTasks()
     this.session = new FocusSession()
@@ -383,7 +381,9 @@ export class FocusController {
     // 摄像头永远开不起来（首页预先要过权限才侥幸没暴露这个 bug）。
     const ctx0 = StorageService.getInstance().appContext()
     const hwCam = ctx0 !== null && CameraService.getInstance().probe(ctx0) > 0
-    this.session.perceptionMode = hwCam ? 'PERCEPTION_FULL' : 'PERCEPTION_TIMER_ONLY'
+    // 有硬件 ≠ 本次要感知：用户选过「仅计时」就尊重这个选择（不抓拍、不上传）
+    const canPerceive = hwCam && !timerOnly
+    this.session.perceptionMode = canPerceive ? 'PERCEPTION_FULL' : 'PERCEPTION_TIMER_ONLY'
     this.perceptionMode = this.session.perceptionMode
     // 同步写回 StorageProp：确保 Focus 页进入瞬间读到的就是本次正确模式，
     // 否则会读到上一段会话落库的旧值（有硬件却显示「未开启感知」）
@@ -526,8 +526,7 @@ export class FocusController {
     this.lastConfidence = 0
     this.manualInject = false
     this.simInjectPending = false
-    // 待定的语音线索必须跨会话清空，否则上一段留下的"看手机"会打到下一段
-    this.pendingVoiceCue = ''
+    this.lastReevalAt = 0
     this.clearSimTimer()
     this.resetBackgroundProbe()
   }
@@ -594,6 +593,8 @@ export class FocusController {
       this.sampleAccumMs = 0
       this.sampleTimeline()
     }
+    // 分心持续得够久要能升级为重度（重度才播语音）—— 升级判定只能靠定期重评
+    this.reevalInterventionIfNeeded(now)
     this.pushLive()
   }
 
@@ -602,11 +603,6 @@ export class FocusController {
     // 演示注入标记是**一次性**的：无论本次是否真的切换，都在这里消费掉
     const manual = this.manualInject
     this.manualInject = false
-    // 语音提醒线索同理：**只对触发它的这一次判定有效**。
-    // 先取走再判断，这样"被去抖拦下 / 没真的转到分心"时线索自动作废，
-    // 不会挂到很久之后的某一次状态切换上突然响一声。
-    const cue = this.pendingVoiceCue
-    this.pendingVoiceCue = ''
     if (!this.running || this.qaMode || this.resting || this.paused) {
       return
     }
@@ -627,16 +623,10 @@ export class FocusController {
     const coolOk = manual || this.cooldownElapsed(target)
     if (dwellOk && coolOk) {
       this.transitionTo(target, r.confidence, r.source, r.detail)
-      // 触达（震动 / 语音）只在**真正转入「分心」**这一刻发生：
-      //   · 去抖与冷却已在上面的 dwellOk / coolOk 里判过，同一段专注不会反复响；
-      //   · 「趴桌」这类轻度（黄）不震不响，避免变成骚扰；
-      //   · 语音还要求这次判定带着明确的场景线索（看手机 / 画面无人）。
+      // 只对**确认分心（红灯）**震一下；「趴桌」这类轻度（黄）不震，避免变成骚扰。
+      // 语音不在这里响 —— 语音按"分心持续够久"升级为重度后才播（见 evaluateIntervention）。
       if (target === FocusState.DISTRACTED) {
         FeedbackService.getInstance().vibrateOnce()
-        if (cue.length > 0) {
-          // 提醒语由 FeedbackService 按场景 + 考伴人格生成，这里只报"哪种场景"
-          FeedbackService.getInstance().speak(cue === 'PHONE' ? 'PHONE' : 'AWAY')
-        }
       }
     } else {
       this.recordEvent(target, r.source, r.confidence, 'debounced')
@@ -718,8 +708,9 @@ export class FocusController {
     const permitted: boolean = PermissionService.getInstance().snapshot().camera
     const cam = CameraService.getInstance()
     const hasCam: boolean = cam.probe(ctx) > 0
-    // 真实抓拍 = 模拟模式 + 授权 + 有硬件；否则（预览 / 未授权）走"无帧"演示识别
-    const canCapture: boolean = isSim && permitted && hasCam
+    // 真实抓拍 = 模拟模式 + 授权 + 有硬件 + 本次真的开了感知；
+    // 否则（仅计时 / 未授权 / 无硬件）走"无帧"演示识别
+    const canCapture: boolean = isSim && permitted && hasCam && this.perceptionMode === 'PERCEPTION_FULL'
     if (!isSim && !permitted) {
       // 真机且未授权摄像头：原语义，不抓拍、不送识别
       return
@@ -785,13 +776,12 @@ export class FocusController {
     hilog.info(0x0000, 'iKnow.Focus', '[onObservation] activity=%{public}s, confidence=%{public}d, injected=%{public}s',
       o.activity, conf, String(injected))
     if (o.activity === '看手机' || o.handheld) {
-      // 这里**只留线索、不直接触达**：触达交给状态机在"真正转入分心"那一刻做。
+      // 这里**只下一个结论，不做任何触达**：震动在状态机确认切换时给，
+      // 语音按"分心持续够久"升级为重度后由 evaluateIntervention 播。
       // 原先直接在这里调 vibrateOnce / speak，绕过了去抖、置信度地板、冷却与干预预算，
-      // 结果就是"低头看一眼手机"也会反复响 —— 这正是接上真实音频前必须先改掉的地方。
-      this.pendingVoiceCue = 'PHONE'
+      // 结果就是"低头看一眼手机"也会反复响。
       svc.submit(FocusState.DISTRACTED, `云端识别：${o.activity}`, conf, FocusSource.CAMERA)
     } else if (o.activity === '离开') {
-      this.pendingVoiceCue = 'AWAY'
       svc.submit(FocusState.DISTRACTED, '云端识别：画面中没有人', conf, FocusSource.CAMERA)
     } else if (o.activity === '趴桌') {
       // 趴桌更像疲劳，不等于分心，因此只给轻提示
@@ -905,8 +895,34 @@ export class FocusController {
       if (this.onIntervention !== null) {
         this.onIntervention(res.decision, res.event as InterventionEvent)
       }
+      // 语音提醒**不在这里播**：它由 `syncVoiceLoop()` 按"红灯持续够久"驱动，
+      // 不受这里的事件预算约束（理由见该方法注释）。
     }
   }
+
+  /**
+   * 分心态下**定期重新评估**干预。
+   *
+   * 为什么必须有这一步：干预级别按"这一次分心持续了多久"算（红灯持续够久才升级为重度），
+   * 而评估原先只在状态切换那一刻跑一次 —— 那一刻时长恒为 0，永远停在轻度，
+   * 重度文案与语音包就永远不会触发。这里在心跳里按最小间隔重跑，让"持续走神"能真正升级。
+   *
+   * 只在分心态下跑：专注/答疑/休息/暂停都不评估（不打扰）。
+   */
+  private reevalInterventionIfNeeded(now: number): void {
+    if (!this.running || this.qaMode || this.resting || this.paused) {
+      return
+    }
+    if (this.state !== FocusState.SLIGHTLY_DISTRACTED && this.state !== FocusState.DISTRACTED) {
+      return
+    }
+    if (this.lastReevalAt > 0 && now - this.lastReevalAt < FocusTuning.INTERVENTION_REEVAL_MS) {
+      return
+    }
+    this.lastReevalAt = now
+    this.evaluateIntervention()
+  }
+
 
   /** 进入 AI 答疑：停止摄像头监测，计时不中断（计入总时长，不计净专注） */
   startQA(): void {
@@ -1126,7 +1142,7 @@ export class FocusController {
       '[模拟注入] 摄像头探测：ctx=%{public}s，cameras=%{public}d，previewRunning=%{public}s，permCamera=%{public}s',
       ctx !== null ? 'ok' : 'null', camCount, cam.isRunning() ? 'Y' : 'N',
       PermissionService.getInstance().snapshot().camera ? 'Y' : 'N')
-    if (ctx !== null && camCount > 0) {
+    if (ctx !== null && camCount > 0 && this.perceptionMode === 'PERCEPTION_FULL') {
       hilog.info(0x0000, 'iKnow.Focus',
         '[模拟注入] 探测到摄像头，尝试真实抓拍：activity=%{public}s', activity)
       this.captureThenDeliver(activity, confidence, ctx).catch((err: Error) => {
@@ -1136,9 +1152,16 @@ export class FocusController {
           `抓拍流程异常（${err.message}），已降级为演示占位图（非真实照片）。`)
       })
     } else {
-      const why = ctx === null
-        ? '拿不到应用上下文，无法访问摄像头，使用演示占位图（非真实照片）。'
-        : `未探测到可用摄像头（getSupportedCameras 返回 ${camCount}）${cam.getLastError().length > 0 ? '：' + cam.getLastError() : ''}，使用演示占位图（非真实照片）。`
+      let why = ''
+      if (this.perceptionMode !== 'PERCEPTION_FULL') {
+        // 用户选了「仅计时」：本次会话按约定不抓拍、不上传
+        why = '本次为「仅计时」模式，不抓拍、不上传；画面为演示占位图（非真实照片）。'
+      } else if (ctx === null) {
+        why = '拿不到应用上下文，无法访问摄像头，使用演示占位图（非真实照片）。'
+      } else {
+        why = `未探测到可用摄像头（getSupportedCameras 返回 ${camCount}）` +
+          `${cam.getLastError().length > 0 ? '：' + cam.getLastError() : ''}，使用演示占位图（非真实照片）。`
+      }
       this.lastCaptureDiag = `未进入真实抓拍：${why}`
       hilog.info(0x0000, 'iKnow.Focus',
         '[模拟注入] 未进入真实抓拍，使用占位画面：activity=%{public}s reason=%{public}s', activity, why)
@@ -1237,21 +1260,27 @@ export class FocusController {
 
   /**
    * 注入记录的证据文案。
+   *
+   * 三条必须交代清楚的事实（用户和评审都要能核对）：
+   *  ① 结论是**演示值**，不是云端看照片得出的；
+   *  ② 画面**没有上传云端**（这条路径不经过识别器），只是在本机留了一张；
+   *  ③ 到底有没有画面、以及为什么没有。
+   *
    * @param hasImage 是否真的落盘了画面（真实抓拍 或 占位图字节都算"有图"）
    * @param note     为什么是占位图 / 为什么没图（由调用方如实填入，复盘里直接可见，便于定位）
    */
   private injectedEvidence(hasImage: boolean, note?: string): string {
     // 版本标记：复盘里能看到，用于确认"设备上跑的是不是最新代码"。
     // 之前几轮反复分不清"代码没重新构建"与"构建了但仍失败"，这里让它可自证。
-    const base = '[v9] 模拟注入：可观察状态由「模拟状态」面板指定；结论为演示值，非真实识别。'
+    const base = '[v9] 演示结论（来自「模拟状态」面板，未经云端识别）；画面保存在本机、未上传。'
     const why = note !== undefined && note.length > 0 ? note : ''
     if (hasImage) {
       if (why.length > 0) {
-        return base + ' 画面说明：' + why
+        return base + ' ' + why
       }
-      return base + ' 画面为触发时刻的真实抓拍（演示注入路径）。'
+      return base + ' 画面为触发时刻的真实抓拍。'
     }
-    return base + ' 未生成任何画面：' + (why.length > 0 ? why : '原因未知')
+    return base + ' 未生成画面：' + (why.length > 0 ? why : '原因未知')
   }
 
   /**
@@ -1335,6 +1364,8 @@ export class FocusController {
 
   /** 结束会话：落盘前的收尾 */
   finalize(): FocusSession {
+    // 会话结束必须先停掉循环提醒：万一还停在红灯态，循环会一直响下去
+    FeedbackService.getInstance().stopReminder()
     if (this.tickId >= 0) {
       clearInterval(this.tickId)
       this.tickId = -1
@@ -1425,6 +1456,8 @@ export class FocusController {
    * 与 finalize() 的区别：不落盘、不计入统计，直接把计时与状态清空。
    */
   abort(): void {
+    // 放弃会话同样要停声，否则循环会跟着"已经不在专注"的状态继续响
+    FeedbackService.getInstance().stopReminder()
     if (this.tickId >= 0) {
       clearInterval(this.tickId)
       this.tickId = -1
@@ -1594,7 +1627,35 @@ export class FocusController {
     }
   }
 
+  /**
+   * 语音提醒循环的**唯一同步点**：分心够久就开播并一直循环，离开分心态就停。
+   *
+   * 为什么挂在这里而不是各个模式方法里：`pushLive()` 在每次状态切换与心跳（1 s）都会跑，
+   * 所以"开始 / 回到专注 / 休息 / 暂停 / 答疑 / 结束"全都自动跟上，
+   * 不必在六七个地方各写一遍（漏一处就会一直响下去）。两个调用都是幂等的。
+   *
+   * 为什么**不用**干预事件的预算来触发：预算是给"卡片式干预"用的（10 分钟内重度 ≤1 次），
+   * 而产品要求是"检测到长时间分心就一直循环播放"—— 触发条件是**持续时长**，不是次数。
+   * 挂在预算上的话，用户回到专注后再走神，10 分钟内都不会重新响，与需求不符。
+   */
+  private syncVoiceLoop(): void {
+    const fb = FeedbackService.getInstance()
+    const distracted = this.running && this.state === FocusState.DISTRACTED
+      && !this.paused && !this.resting && !this.qaMode
+    if (!distracted) {
+      fb.stopReminder()
+      return
+    }
+    // 红灯持续够久 → 起一次循环；已在循环就不打断（`remind` 内部也会再判一次）
+    if (!fb.isReminding()
+      && Date.now() - this.stateEnteredAt >= FocusTuning.INTERVENTION_HEAVY_AFTER_MS) {
+      fb.remind('HEAVY')
+    }
+  }
+
   private pushLive(): void {
+    // 语音循环跟状态走：不在分心态就停、够久就开
+    this.syncVoiceLoop()
     // 运行标志：根页/首页以 @StorageProp 读取，才能响应式地显示“专注进行中”
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_RUNNING, this.running ? 1 : 0)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_ELAPSED, Math.floor(this.totalSec))

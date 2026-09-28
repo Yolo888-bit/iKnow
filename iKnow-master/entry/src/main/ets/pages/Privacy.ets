@@ -31,7 +31,7 @@ export struct Privacy {
       AppStorage.setOrCreate<number>(StorageKey.VIBRATE_ON, this.vibrateOn ? 1 : 0)
     }).catch(() => {})
     StorageService.getInstance().loadKv(StorageKey.VOICE_ON).then((v: string) => {
-      // 缺省为开：语音提醒改成本机音频文件后不再依赖系统语音能力，默认开着才有意义
+      // 缺省为开：关着只会让人以为功能没接上
       this.voiceOn = v !== '0'
       AppStorage.setOrCreate<number>(StorageKey.VOICE_ON, this.voiceOn ? 1 : 0)
     }).catch(() => {})
@@ -78,16 +78,26 @@ export struct Privacy {
               AppStorage.setOrCreate<number>(StorageKey.VOICE_ON, v ? 1 : 0)
               StorageService.getInstance().saveKv(StorageKey.VOICE_ON, v ? '1' : '0').catch(() => {})
             })
-            Text(`语音提醒由系统语音合成朗读（按离线模式请求），合成不可用时改用 App 内置的提醒音频\n`
-              + `✓ 只在确认分心时响：识别到「看手机」或画面里没有人\n`
-              + `✓ 「趴在桌上」这类轻度状态只出提示卡片，不出声\n`
-              + `✓ 切到其他应用期间不响（回到 App 时才记一条卡片）\n`
-              + `✓ 同一段专注内受冷却与提醒次数上限约束，不会反复响`)
+            Text(`语音提醒播的是 App 内置的语音包，内容随考伴人格变化\n`
+              + `✓ 分心持续到重度后开始响，并一直循环到你回到专注为止\n`
+              + `✓ 回到专注 / 休息 / 暂停 / 答疑 / 结束本次，都会立刻停声\n`
+              + `✓ 轻度分心只出提示卡片，不响\n`
+              + `✓ 极简安静型不出声：界面只显示「⚠️轻度分心 / 🔴重度分心」徽标\n`
+              + `✓ 切到其他应用期间不响（回到 App 时才记一条）`)
               .fontSize(11)
               .fontColor(Colors.TEXT_TERTIARY)
               .lineHeight(16)
               .width('100%')
               .margin({ top: 8 })
+
+            // 试听按人格分（语音包就是按人格录的），所以放在「我的 → 考伴」那边，
+            // 这一页只留开关，不把同一个功能拆成两处入口。
+            Text('想听当前人格的提醒语音，去「我的 → 考伴」点「试听当前人格的提醒语音」。')
+              .fontSize(11)
+              .fontColor(Colors.TEXT_TERTIARY)
+              .lineHeight(16)
+              .width('100%')
+              .margin({ top: 6 })
           }
           .privacyCard()
 

@@ -310,8 +310,8 @@ export class AIService {
   }
 
   /** 长期画像更新（委托 MockAIService，统一走 Metrics §3/§6） */
-  updateProfile(profile: FocusProfile, sessions: FocusSession[]): FocusProfile {
-    return this.mock.updateProfile(profile, sessions)
+  updateProfile(profile: FocusProfile, sessions: FocusSession[], tasks: Task[]): FocusProfile {
+    return this.mock.updateProfile(profile, sessions, tasks)
   }
 
   /** 首页主动建议文案 */

@@ -42,6 +42,20 @@ export class FocusTuning {
   /** 窗口内重干预上限 */
   static readonly MAX_HEAVY_PER_WINDOW = 1
 
+  /**
+   * **重度干预的时长门槛**：红灯持续这么久才算「重度分心」，才有语音提醒。
+   *
+   * 级别按"这一次分心持续了多久"算（用户口径：黄灯=轻度、红灯=重度）：
+   *  - 黄灯（趴桌等）永远是轻度，不会升级；
+   *  - 红灯刚发生 < 此值时是轻度（只出轻文案），≥ 此值才升级为重度（重文案 + 语音）。
+   * 所以状态评估必须**定期重跑**（见 `FocusController.onTick`），
+   * 否则切换那一刻时长恒为 0，这个门槛永远到不了、重度文案与语音包永远不会触发。
+   */
+  static readonly INTERVENTION_HEAVY_AFTER_MS = 60_000
+
+  /** 分心态下重新评估干预的最小间隔（够细到不会错过门槛，又不至于每 tick 都算） */
+  static readonly INTERVENTION_REEVAL_MS = 5_000
+
   // ---------- 休息（§8）----------
   /** 一次休息时长 5 min */
   static readonly BREAK_TOTAL_SEC = 300

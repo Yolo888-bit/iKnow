@@ -67,8 +67,6 @@ export struct StudyReport {
   @State expandedQ: string = ''
   /** 图片文件读不出来的观察记录 id：用于在那一行如实说明，而不是留空白 */
   @State failedImages: string[] = []
-  /** 本次真实抓拍到画面的记录（不论云端判成什么）—— 供「本次画面片段」区块展示 */
-  @State shots: ObservationRecord[] = []
 
   aboutToAppear(): void {
     // 从「学习记录」进来时带 sessionId：改为从库里加载那一次的复盘
@@ -229,20 +227,11 @@ export struct StudyReport {
    */
   private async loadObservations(sessionId: string): Promise<void> {
     const bad: ObservationRecord[] = []
-    const shots: ObservationRecord[] = []
     let learning = 0
     let undetermined = 0
     try {
       const all = await StorageService.getInstance().loadObservations(sessionId)
       for (const o of all) {
-        // 有画面片段的都收进「本次画面片段」——**不管云端判成什么**：
-        // 判成"看书/做题"时不进干扰事件列表，但照片确实拍了、也该看得见。
-        // 模拟注入的记录：无摄像头时 imagePaths 为空，但 UI 层会显示 media 占位图，
-        // 同样要出现在「本次画面片段」里，保证控制台演示的完整感。
-        const isSimInject = o.evidence.includes('模拟注入')
-        if (o.imagePaths.length > 0 || isSimInject) {
-          shots.push(o)
-        }
         if (isInterference(o)) {
           bad.push(o)
         } else if (SimActivity.LEARNING.includes(o.activity)) {
@@ -255,7 +244,6 @@ export struct StudyReport {
       // 读不到就是空态，不编造
     }
     this.interference = bad
-    this.shots = shots
     this.learningConfirmCount = learning
     this.undeterminedCount = undetermined
     this.obsLoaded = true
@@ -616,66 +604,6 @@ export struct StudyReport {
             }
             .reportCard()
           }
-
-          // ⑥ 本次画面片段：**所有**带画面的记录（不限于干扰事件）
-          // 为什么单独列一块：照片原先只挂在"干扰事件"下面，云端判成"看书/做题"就一张都看不到 ——
-          // 而"触发了、也带回了画面"这件事本身就该看得见。
-          if (this.obsLoaded && this.shots.length > 0) {
-            Column({ space: Spacing.SM }) {
-              this.sectionTitle(`本次画面片段（${this.shots.length} 张）`)
-              Text('这些是触发时抓拍的画面；未接摄像头时为「演示占位图」（图片已标注，非真实照片）。' +
-                '每次只保留前几张，可在「我的 → 隐私与数据」里一键清除。')
-                .fontSize(11)
-                .fontColor(Colors.TEXT_TERTIARY)
-                .lineHeight(16)
-                .width('100%')
-
-              Flex({ wrap: FlexWrap.Wrap }) {
-                ForEach(this.shots, (o: ObservationRecord) => {
-                  Column() {
-                    if (o.imagePaths.length > 0) {
-                      Image(this.fileUri(o.imagePaths[0]))
-                        .width(96)
-                        .height(72)
-                        .borderRadius(Radius.MD)
-                        .onError(() => {
-                          if (this.failedImages.indexOf(o.id) < 0) {
-                            this.failedImages = this.failedImages.concat(o.id)
-                          }
-                        })
-                    } else {
-                      Image($r('app.media.sim_placeholder'))
-                        .width(96)
-                        .height(72)
-                        .objectFit(ImageFit.Cover)
-                        .borderRadius(Radius.MD)
-                    }
-                    if (this.failedImages.indexOf(o.id) >= 0) {
-                      Text('文件已清除')
-                        .fontSize(10)
-                        .fontColor(Colors.CAMERA_RED)
-                        .margin({ top: 2 })
-                    } else {
-                      Text(`${o.activity}`)
-                        .fontSize(11)
-                        .fontColor(Colors.TEXT_SECONDARY)
-                        .margin({ top: 4 })
-                    }
-                    Text(this.relMin(o.tMs))
-                      .fontSize(10)
-                      .fontColor(Colors.TEXT_TERTIARY)
-                  }
-                  .width(96)
-                  .alignItems(HorizontalAlign.Start)
-                  .margin({ right: 12, bottom: 12 })
-                }, (o: ObservationRecord) => o.id)
-              }
-              .width('100%')
-              .margin({ top: 4 })
-            }
-            .reportCard()
-          }
-
 
           Blank().height(24)
         }

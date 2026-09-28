@@ -1,10 +1,12 @@
 import { router, promptAction } from '@kit.ArkUI'
+import { common } from '@kit.AbilityKit'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { Colors, Radius } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
 import { AIService } from '../services/AIService'
 import { FocusController } from '../services/FocusController'
+import { PermissionService } from '../services/PermissionService'
 import { PlanningInput, PlanningDialogInput } from '../services/ai/PlanningService'
 import { PlanTask } from '../models/StudyPlan'
 import { AIMessage } from '../models/AIMessage'
@@ -742,6 +744,26 @@ export struct TaskPlanning {
     return sum
   }
 
+  /**
+   * 进入专注前**统一确保相机授权**（`ohos.permission.CAMERA` 是 user_grant）。
+   *
+   * 为什么必须在这里补：`FocusController.start()` 是用「本地授权标记」反推感知模式的
+   * （标记为 false → 会话降级成"仅计时" → 专注页连 XComponent 都不挂 → 摄像头永远不被调用）。
+   * 而 `PermissionService.ensureCamera()` 是**唯一**会写这个标记的地方，此前只有首页的
+   * 「开启感知」调用过它 —— 于是从规划页进来永远是"仅计时"，表现就是"摄像头用不了"。
+   * 已授权时它立即返回、不会弹窗，所以可以无条件调用（`PermissionService` 的注释也写明
+   * "所有进入专注页的路径都应先调它"）。
+   */
+  private async ensurePerception(): Promise<void> {
+    const ctx = getContext(this) as common.UIAbilityContext
+    try {
+      await PermissionService.getInstance().ensureCamera(ctx)
+    } catch (e) {
+      // 申请失败不拦路：会话照常开始，只是降级为"仅计时"（专注页会如实显示未开启感知）
+      hilog.warn(0x0000, 'iKnow.Planning', '相机授权申请失败，本次降级为仅计时：%{public}s', e.message)
+    }
+  }
+
   private async confirmStart(): Promise<void> {
     const selected = this.selectedTasks()
     // 一条都没选（清单里全都取消勾选）= 用户想直接开始，**不该被拦住**。
@@ -770,6 +792,7 @@ export struct TaskPlanning {
       hilog.error(0x0000, 'iKnow.Planning', '任务落库失败，仍继续开始专注：%{public}s', e.message)
     }
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
+    await this.ensurePerception()
     router.pushUrl({ url: 'pages/Focus' })
   }
 
@@ -791,6 +814,7 @@ export struct TaskPlanning {
     }
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_FREE_REQUEST, 1)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
+    await this.ensurePerception()
     router.pushUrl({ url: 'pages/Focus' })
   }
 
@@ -802,7 +826,7 @@ export struct TaskPlanning {
    * "跳过规划直接专注的时候，专注页不应该有今日任务模块"。
    * 注意：**只影响这一次会话**，今日计划本身不动，首页照旧显示。
    */
-  private skipPlanning(): void {
+  private async skipPlanning(): Promise<void> {
     if (this.thinking) {
       return
     }
@@ -813,6 +837,7 @@ export struct TaskPlanning {
     }
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_FREE_REQUEST, 1)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_START_REQUEST, 1)
+    await this.ensurePerception()
     router.pushUrl({ url: 'pages/Focus' })
   }
 

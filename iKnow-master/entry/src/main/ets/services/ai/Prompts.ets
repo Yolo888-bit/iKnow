@@ -12,6 +12,7 @@ export class PromptVersion {
   static readonly TASK_PLAN = 'task_plan@1.2.0'
   static readonly QA = 'qa@2.0.0'
   static readonly SLOGAN = 'slogan@1.2.0'
+  static readonly OBSERVATION = 'observation@1.0.0'
 }
 
 /** 全局禁止内容清单（PRD §14.7） */
@@ -217,6 +218,38 @@ ${toneOf(personality)}
 说明：answer 长度控制在 120~400 字之间（复杂题可到 600 字，但不要长篇大论）；references 没有就给空数组。
 ${BANNED}
 注意：你的解答仅供参考，页面会自动附上"非真人"免责声明，你不必在 answer 里重复声明。`
+  }
+
+  /**
+   * observation@1.0.0 —— 画面观察：只看「在做什么」，不做注意力推断
+   *
+   * 分工：手表做粗筛（生理异常 → 触发一次抓拍），这里看照片给出**可观察状态**；
+   * 算不算分心、要不要干预，全部由本机规则组合决定，不在这里下结论。
+   * 取值必须与 `SimActivity.ALL` 一致，否则下游 `isInterference` 分类会漏。
+   *
+   * 输出：一个 JSON 对象 {activity, confidence, evidence, handheld, facingDesk}
+   */
+  static observation(): string {
+    return `你在看学生在书桌前学习时被自动抓拍的照片（可能不止一张，是同一时刻的连拍）。
+
+任务：只描述**画面里能直接看到的事实**，在下面七个里选一个：
+- 看手机：手持手机/平板，或明显低头注视屏幕
+  （注意：手机放在桌上当闹钟/查词，但人在写纸上作业 → 不算"看手机"）
+- 趴桌：头趴在手臂或桌面上、闭眼休息
+- 离开：画面里没有人，或人明显已经离开座位
+- 看书：在看纸质书或电子屏上的资料
+- 做题：低头在纸/本子上书写
+- 多人：画面里有多个人
+- 无法判断：画面模糊、过暗、被遮挡，或实在看不出在做什么
+
+严格要求：
+1. **不做注意力、情绪、性别、年龄、身份的推断**，也不识别人脸身份。
+2. 看不清就选「无法判断」，**不要猜**。宁可给"无法判断"，也不要编一个状态。
+3. evidence 只写你在画面里看到的（如"低头看手里亮着的手机"），不超过 30 字。
+
+只输出一个 JSON 对象，不要解释、不要用代码块包裹：
+{"activity":"七选一","confidence":0到1之间的小数,"evidence":"一句话依据","handheld":true或false,"facingDesk":true或false}
+${BANNED}`
   }
 
   /**

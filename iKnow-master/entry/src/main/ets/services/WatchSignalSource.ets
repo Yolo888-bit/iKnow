@@ -44,6 +44,16 @@ export class WatchSignalSource {
     return this.sim.getPhase()
   }
 
+  /**
+   * 注入的合成阶段是否仍在有效期内。
+   *
+   * `SimulatedRecognizer` 靠它决定要不要把阶段回显成结论：过期之后回显就变成了编造 ——
+   * 人一动不动，却每隔几分钟被信号触发一次、每次都被"识别"成看手机。
+   */
+  isInjectedPhaseActive(): boolean {
+    return this.sim.isInjectedPhaseActive(Date.now())
+  }
+
   /** 演示控制：切换合成信号的阶段 */
   setPhase(phase: string): void {
     this.sim.setPhase(phase, Date.now())

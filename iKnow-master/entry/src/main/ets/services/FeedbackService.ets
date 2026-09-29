@@ -48,6 +48,14 @@ export class FeedbackService {
   private strongTimerId: number = -1
   /** 强提醒震动已经震了多久（用于封顶） */
   private strongElapsedMs: number = 0
+  /**
+   * 当前这次播放是否要循环。
+   * 用它而不是 `AVPlayer.loop` 属性：那个属性在这台设备上设了不生效
+   *（实测"分心 5 分钟后语音只播一遍"就是不循环的表现），
+   * 改成播完自己再 `play()` 一次 —— `play()` 文档明确允许在 prepared/paused/**completed**
+   * 状态下调用，所以这是有依据的做法。
+   */
+  private looping: boolean = false
 
   static getInstance(): FeedbackService {
     if (FeedbackService.inst === null) {
@@ -270,8 +278,9 @@ export class FeedbackService {
    *   prepare() 完成  → prepared      ← 在这里 play()
    *   play()          → playing
    *
-   * `loop = true` 时用播放器自带的循环（播完停在 playing，不会到 completed），
-   * 要停只能由 `stopReminder()` 显式来停。
+   * 循环**不依赖 `AVPlayer.loop` 属性**：实测设了它还是只播一遍。
+   * 改成播完在 `completed` 里再 `play()` 一次 —— 文档允许在 completed 状态下调用 play()，
+   * 状态机会回到 playing 并从头播。要停只能由 `stopReminder()` 显式来停。
    */
   private playFile(file: string, text: string, loop: boolean): Promise<boolean> {
     return new Promise<boolean>((resolve: (ok: boolean) => void) => {
@@ -317,10 +326,9 @@ export class FeedbackService {
       }
 
       this.playingRawName = file
+      this.looping = loop
       media.createAVPlayer().then((player: media.AVPlayer): void => {
         this.player = player
-        // 循环播放由播放器自己做（播完自动重头），比在 completed 里手动重播可靠
-        player.loop = loop
         // 超时兜底**必须先挂上**：状态回调可能在 fdSrc 赋值后立刻到达，
         // 那时若还没挂 timer，成功路径就漏掉了清理（定时器会白跑 3 秒）
         timer = setTimeout(() => {
@@ -337,8 +345,18 @@ export class FeedbackService {
           } else if (state === 'playing') {
             finish(true, loop ? `正在循环播放 ${file}：「${text}」` : `正在播放 ${file}：「${text}」`)
           } else if (state === 'completed') {
-            // 只在"播一遍"的模式下会到这里；循环模式下播放器自己重头，不会完成。
-            this.releasePlayer()
+            // 循环模式：播完再从头播一遍（`play()` 允许在 completed 状态调用）。
+            // 不循环（试听 / 红灯播一遍）：释放，否则下一次请求会被"正在播"挡住。
+            if (this.looping) {
+              try {
+                player.play()
+              } catch (e) {
+                hilog.info(DOMAIN, TAG, '循环重播失败（可忽略）')
+                this.releasePlayer()
+              }
+            } else {
+              this.releasePlayer()
+            }
           } else if (state === 'error') {
             finish(false, '播放状态变为 error')
           }
@@ -355,6 +373,8 @@ export class FeedbackService {
 
   /** 释放播放器并归还 fd（系统要求配套 closeRawFdSync，否则播放次数多了会泄漏） */
   private releasePlayer(): void {
+    // 循环标志必须一起清掉，否则下一次"播一遍"会被当成循环
+    this.looping = false
     const p = this.player
     if (p !== null) {
       this.player = null

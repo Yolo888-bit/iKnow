@@ -55,26 +55,6 @@ export struct SimWorkbench {
     this.rev += 1
   }
 
-  /**
-   * 异常生理值 → 注入一条"对应观察"，让按钮反馈可见且复盘可查。
-   *
-   * 产品本意：生理异常只是"为什么要拍一张照"的线索，最终结论由照片 / 云端判定；
-   * 但无摄像头时根本没有照片，识别器只会回显"当前阶段"（默认专注），按钮就会"毫无反应"。
-   * 所以这里**直接注入一条对应的可观察状态**（趴桌=轻提示·黄 / 离开=分心·红），
-   * 等价于真机"异常生理变化触发抓拍、云端识别出可观察状态"的演示版——
-   * 页面变色与复盘记录都真实发生（证据标注为模拟），按钮作用一眼可见。
-   */
-  private fireVital(reason: string, demoActivity: string): void {
-    const c = FocusController.getInstance()
-    if (!c.isRunning()) {
-      promptAction.showToast({ message: '模拟流程只在专注中生效（请先开始专注）' })
-      return
-    }
-    c.simulateObservation(demoActivity, FocusTuning.SIM_INJECT_CONFIDENCE)
-    promptAction.showToast({ message: `已演示：判为「${demoActivity}」（可在学习记录查看）` })
-    this.rev += 1
-  }
-
   /** 信号级注入：切换合成信号阶段并强制结算一次 */
   private pickSignalPhase(activity: string): void {
     if (!FocusController.getInstance().simulateWatchPhase(activity)) {
@@ -87,41 +67,36 @@ export struct SimWorkbench {
   private pickHeartRate(bpm: number, lowHrv: boolean): void {
     WatchSignalSource.getInstance().setHeartRate(bpm)
     WatchSignalSource.getInstance().setLowHrv(lowHrv)
-    // 异常档（紧张 / HRV 偏低）→ 注入「趴桌」(轻提示·黄)，证明"生理异常→拍照事件"可见
-    if (bpm >= 90 || lowHrv) {
-      this.fireVital(`心率 ${bpm} bpm${lowHrv ? ' + HRV偏低' : ''}`, '趴桌')
-    } else {
-      this.rev += 1
-    }
+    this.signalOnlyHint('心率信号')
   }
 
   private pickHrv(low: boolean): void {
     WatchSignalSource.getInstance().setLowHrv(low)
-    if (low) {
-      this.fireVital('HRV偏低', '趴桌')
-    } else {
-      this.rev += 1
-    }
+    this.signalOnlyHint('HRV 信号')
   }
 
   private pickSpo2(v: number): void {
     WatchSignalSource.getInstance().setSpo2(v)
-    // 低血氧（≤93%）→ 注入「趴桌」(轻提示·黄)
-    if (v <= 93) {
-      this.fireVital(`血氧 ${v}%`, '趴桌')
-    } else {
-      this.rev += 1
-    }
+    this.signalOnlyHint('血氧信号')
   }
 
   private pickMotion(mode: string): void {
     WatchSignalSource.getInstance().setMotion(mode)
-    // 大幅移动 → 注入「离开」(分心·红)；静止 / 写字不触发，仅改信号
-    if (mode === 'MOVE') {
-      this.fireVital('大幅移动', '离开')
-    } else {
-      this.rev += 1
-    }
+    this.signalOnlyHint('动作信号')
+  }
+
+  /**
+   * 心率 / HRV / 血氧 / 动作这几排按钮的反馈：**只改输入信号，不注入任何状态结论**。
+   *
+   * 为什么不做结论注入（此前会注入「趴桌」或「离开」让按钮"有反应"）：
+   *  1. 本项目对生理/动作异常的口径就是"**只作为待确认的线索，绝不作为分心结论**"
+   *     （见 `FocusTuning` 里关于 RMSSD 的说明），从信号直接跳到结论是自相矛盾的；
+   *  2. 用户完全无从预期 —— 想调一下"动作"信号，结果被判了分心（真实反馈）。
+   * 真正的状态只由上面「演示状态」那一排按钮决定。
+   */
+  private signalOnlyHint(what: string): void {
+    promptAction.showToast({ message: `已调整${what}（只改信号，不判定分心；状态请用上面「演示状态」那一排）` })
+    this.rev += 1
   }
 
   private stateLine(): string {

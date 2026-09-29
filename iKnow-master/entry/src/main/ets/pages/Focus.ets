@@ -581,7 +581,8 @@ export struct Focus {
                   .width('100%')
 
                 if (!SensorService.getInstance().isWristPresent()) {
-                  Text('（手机提醒，未连接手表，不会震动）')
+                  // 如实说明：没有手表，提醒走手机（震动 + 语音），不假装是手表震动
+                  Text('（未连接手表，用手机震动与语音提醒）')
                     .fontSize(11)
                     .fontColor(Colors.TEXT_TERTIARY)
                     .margin({ top: 6 })

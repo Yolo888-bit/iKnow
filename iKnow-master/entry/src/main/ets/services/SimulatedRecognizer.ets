@@ -37,7 +37,23 @@ export class SimulatedRecognizer implements FrameRecognizer {
   }
 
   recognize(frames: ArrayBuffer[]): Promise<ObservationRecord | null> {
-    const phase = WatchSignalSource.getInstance().getPhase()
+    const src = WatchSignalSource.getInstance()
+    const phase = src.getPhase()
+    // 注入的阶段已经过期 → **不回显**，如实报"无法判断"。
+    //
+    // 为什么必须有这一步：阶段一旦被设成「看手机 / 离开」就会一直留在那里，
+    // 而该阶段的合成信号带大幅动作，会周期性撞到触发点（节流后约每 3 分钟一次）——
+    // 于是人一动不动，也会每 3 分钟被"识别"成看手机、判一次分心。
+    // 本机没有摄像头，信号触发时**根本无法知道在做什么**，按"看不出来就不猜"不产生结论。
+    if (!src.isInjectedPhaseActive()) {
+      const o = new ObservationRecord()
+      o.activity = '无法判断'
+      o.confidence = 0
+      o.evidence = `模拟识别：距上次注入「${SimActivity.activityOf(phase)}」已超过有效期，`
+        + '本次由信号触发但本机无摄像头，无法判断在做什么（如实不猜，不产生结论）'
+      hilog.info(DOMAIN, TAG, '[模拟识别] 阶段 %{public}s 已过期 → 无法判断（不产生结论）', phase)
+      return Promise.resolve(o)
+    }
     const activity = SimActivity.activityOf(phase)
     const o = new ObservationRecord()
     o.activity = activity

@@ -1,5 +1,6 @@
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { AccelSample, RrSample } from '../models/WatchSignal'
+import { FocusTuning } from '../common/FocusTuning'
 
 const DOMAIN = 0x0000
 const TAG = 'iKnow.SimWatch'
@@ -106,6 +107,10 @@ export class SimActivity {
 export class WatchSignalSimulator {
   /** 演示阶段：把"用户状态"脚本化，便于跑通管线与演示 */
   private phase: string = 'PREPARE'
+  /** 最近一次注入阶段的**真实**时刻（0 = 还没注入过）；用于判断注入是否已过期 */
+  private phaseSetAtMs: number = 0
+  /** 本次 step 时注入是否仍在有效期内（由 step 每帧刷新，各 profile 直接读它） */
+  private phaseActive: boolean = false
   private startMs: number = 0
   private lastStepMs: number = 0
   /** 距下一次心跳的累计时间（ms） */
@@ -133,13 +138,36 @@ export class WatchSignalSimulator {
     this.drift = 0
     this.limbPhase = 0
     this.phase = 'PREPARE'
+    this.phaseSetAtMs = 0
+    this.phaseActive = false
   }
 
   /** 演示控制：切换阶段（取值见 SimActivity.phaseOf：STUDY/READ/PHONE/REST/ABSENT/CROWD/UNKNOWN） */
   setPhase(phase: string, nowMs: number): void {
     this.phase = phase
-    hilog.info(DOMAIN, TAG, '[合成信号] 切换到阶段 %{public}s（对应可观察状态：%{public}s）',
-      phase, SimActivity.activityOf(phase))
+    this.phaseSetAtMs = nowMs
+    this.phaseActive = true
+    hilog.info(DOMAIN, TAG, '[合成信号] 切换到阶段 %{public}s（对应可观察状态：%{public}s），有效期 %{public}d ms',
+      phase, SimActivity.activityOf(phase), FocusTuning.SIM_PHASE_WINDOW_MS)
+  }
+
+  /**
+   * 注入的阶段是否仍在有效期内。
+   *
+   * 基线阶段（PREPARE / STUDY）不算"注入"，始终有效 —— 它们是脚本化的默认状态。
+   * 其余阶段（看手机/离开/趴桌/看书/多人/无法判断）是**限时输入**：
+   * 过期后信号回到学习态基线，识别也不再回显它们（见 `SimulatedRecognizer`）。
+   */
+  isInjectedPhaseActive(realNowMs: number): boolean {
+    if (this.phase === 'PREPARE' || this.phase === 'STUDY') {
+      return true
+    }
+    return this.phaseSetAtMs > 0 && realNowMs - this.phaseSetAtMs <= FocusTuning.SIM_PHASE_WINDOW_MS
+  }
+
+  /** 各 profile 用的**有效**阶段：注入过期后一律按"学习中"处理 */
+  private effectivePhase(): string {
+    return this.phaseActive ? this.phase : 'STUDY'
   }
 
   // ============ 逐项控制（专注页「信号控制台」用）============
@@ -219,6 +247,14 @@ export class WatchSignalSimulator {
       hilog.info(DOMAIN, TAG, '[合成信号] 基线段结束，自动进入 STUDY')
     }
 
+    // 注入的阶段过期 → 信号回到学习态基线（只记一次日志，避免每 40ms 刷屏）
+    const active = this.isInjectedPhaseActive(realNowMs)
+    if (this.phaseActive && !active) {
+      hilog.info(DOMAIN, TAG, '[合成信号] 阶段 %{public}s 已过期，信号回到学习态基线（不再伪造该阶段的动作/心率）',
+        this.phase)
+    }
+    this.phaseActive = active
+
     // —— 加速度（25Hz 一帧）——
     const a = new AccelSample()
     a.tMs = nowMs
@@ -254,14 +290,14 @@ export class WatchSignalSimulator {
     if (this.motionOverride === 'MOVE') {
       return { amp: 0.08, periodic: 0.12 }
     }
-    if (this.phase === 'ABSENT') {
+    if (this.effectivePhase() === 'ABSENT') {
       return { amp: 0.08, periodic: 0.12 }
     }
-    if (this.phase === 'CROWD') {
+    if (this.effectivePhase() === 'CROWD') {
       // 多人：旁边有人活动，设备本身小幅晃动
       return { amp: 0.02, periodic: 0.03 }
     }
-    if (this.phase === 'PHONE') {
+    if (this.effectivePhase() === 'PHONE') {
       // 拿起手机**本身就是大幅腕部动作**，这里必须让方差越过 `MOTION_HIGH_VAR(0.002)`：
       // 原来的 0.012 档算出来约 3.1e-4，正好卡在"静止 2e-4"与"大幅移动 2e-3"之间 ——
       // 于是"看手机"在信号层**永远撞不到触发点**，整条"手表粗筛 → 抓拍 → 云端细判"
@@ -269,14 +305,14 @@ export class WatchSignalSimulator {
       // 注意：触发只说明"有大幅动作"，究竟是看手机还是离开，由云端看照片判定 —— 这正是本架构的分工。
       return { amp: 0.05, periodic: 0.08 }
     }
-    if (this.phase === 'REST') {
+    if (this.effectivePhase() === 'REST') {
       return { amp: 0.003, periodic: 0.0 }
     }
-    if (this.phase === 'READ') {
+    if (this.effectivePhase() === 'READ') {
       // 看书：翻页是间歇动作，平均方差低于写字
       return { amp: 0.004, periodic: 0.004 }
     }
-    if (this.phase === 'STUDY') {
+    if (this.effectivePhase() === 'STUDY') {
       // 写字：小幅周期性
       return { amp: 0.006, periodic: 0.01 }
     }
@@ -316,22 +352,22 @@ export class WatchSignalSimulator {
     if (this.hrOverride > 0) {
       return this.hrOverride
     }
-    if (this.phase === 'ABSENT') {
+    if (this.effectivePhase() === 'ABSENT') {
       return 92
     }
-    if (this.phase === 'CROWD') {
+    if (this.effectivePhase() === 'CROWD') {
       return 78
     }
-    if (this.phase === 'PHONE') {
+    if (this.effectivePhase() === 'PHONE') {
       return 82
     }
-    if (this.phase === 'STUDY') {
+    if (this.effectivePhase() === 'STUDY') {
       return 74
     }
-    if (this.phase === 'READ') {
+    if (this.effectivePhase() === 'READ') {
       return 72
     }
-    if (this.phase === 'REST') {
+    if (this.effectivePhase() === 'REST') {
       return 62
     }
     return 68
@@ -342,22 +378,22 @@ export class WatchSignalSimulator {
       // 压低 RSA 幅度 → RMSSD 下降（模拟负荷升高）
       return 6
     }
-    if (this.phase === 'ABSENT') {
+    if (this.effectivePhase() === 'ABSENT') {
       return 6
     }
-    if (this.phase === 'CROWD') {
+    if (this.effectivePhase() === 'CROWD') {
       return 12
     }
-    if (this.phase === 'PHONE') {
+    if (this.effectivePhase() === 'PHONE') {
       return 8
     }
-    if (this.phase === 'STUDY') {
+    if (this.effectivePhase() === 'STUDY') {
       return 14
     }
-    if (this.phase === 'READ') {
+    if (this.effectivePhase() === 'READ') {
       return 16
     }
-    if (this.phase === 'REST') {
+    if (this.effectivePhase() === 'REST') {
       return 28
     }
     return 24

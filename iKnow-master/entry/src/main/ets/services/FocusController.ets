@@ -616,14 +616,13 @@ export class FocusController {
   }
 
   /**
-   * 感知结论回调 —— **检测到就当场变色**，同时开启"本次分心"的计时。
+   * 感知结论回调 —— **检测到分心就当场点亮黄灯**，与检测到的是哪种行为无关。
    *
-   * 颜色由检测结果立即决定（看手机/离开 → 红；趴桌 → 黄），不等时长；
-   * 之后的时长只负责**往上加码**（≥20s 至少黄、≥1min 至少红、≥5min 强提醒），
-   * 见 `syncReminderTier()` 的"只升不降"兜底。
+   * 「看手机」和「趴桌」的起始颜色都是黄，区别只在后面的持续时长：
+   * 黄 → 60s 升红 → 5min 强提醒，全部由 `syncReminderTier()` 按时长推进。
+   * 这里只负责"起/止分心段"以及**立即变黄**（用户口径：检测到那一刻黄）。
    *
-   * 演示注入（模拟控制台）跳过驻留/冷却，点一下当场生效；真实信号仍走原有的
-   * 驻留与冷却，避免单帧误判让颜色抖动 —— 这是既有的去抖设计，不改。
+   * 回绿仍走原有的驻留与冷却：单帧"做题"不该立刻判回专注，这是既有的去抖设计。
    */
   private onDetection(r: FocusDetectionResult): void {
     // 演示注入标记是**一次性**的：无论本次是否真的切换，都在这里消费掉
@@ -640,31 +639,48 @@ export class FocusController {
       this.recordEvent(this.mapState(r.state), r.source, r.confidence, 'below-confidence')
       return
     }
-    const target = this.mapState(r.state)
-    // 确认分心（含趴桌）→ 开启分心段，**计时从这一刻开始**
-    if (target !== FocusState.FOCUSED && this.distractionStartedAt === 0) {
-      this.distractionStartedAt = Date.now()
-      hilog.info(0x0000, 'iKnow.Focus', '分心段开始，计时用于分级（20s 黄提示 / 1min 语音 / 5min 强提醒）')
-    }
-    if (target === this.state) {
-      // 已经绿了还收到"专注"结论 → 这一帧确认专注，立刻结束分心段。
-      // 否则"看一眼手机又回来看书"仍会继续攒时长，20 秒后平白变黄。
-      if (target === FocusState.FOCUSED && this.distractionStartedAt > 0) {
-        this.endDistractionBout()
-        this.recordEvent(target, r.source, r.confidence, 'bout-cancelled')
+    const focused = this.mapState(r.state) === FocusState.FOCUSED
+    // ---- 确认专注：结束分心段 ----
+    if (focused) {
+      if (this.state === FocusState.FOCUSED) {
+        // 已经绿了：这一帧确认专注，立刻结束分心段。
+        // 否则"看一眼手机又回来看书"仍会继续攒时长，1 分钟后平白变红。
+        if (this.distractionStartedAt > 0) {
+          this.endDistractionBout()
+          this.recordEvent(FocusState.FOCUSED, r.source, r.confidence, 'bout-cancelled')
+          return
+        }
+        this.recordEvent(FocusState.FOCUSED, r.source, r.confidence, 'no-transit')
         return
       }
-      this.recordEvent(target, r.source, r.confidence, 'no-transit')
+      const now = Date.now()
+      const dwellOk = manual || now - this.stateEnteredAt >= this.dwellFor(FocusState.FOCUSED)
+      const coolOk = manual || this.cooldownElapsed(FocusState.FOCUSED)
+      if (dwellOk && coolOk) {
+        // `transitionTo(FOCUSED)` 会清掉分心段并停掉提醒
+        this.transitionTo(FocusState.FOCUSED, r.confidence, r.source, r.detail)
+      } else {
+        this.recordEvent(FocusState.FOCUSED, r.source, r.confidence, 'debounced')
+      }
       return
     }
-    const now = Date.now()
-    const dwellOk = manual || now - this.stateEnteredAt >= this.dwellFor(target)
-    const coolOk = manual || this.cooldownElapsed(target)
-    if (dwellOk && coolOk) {
-      // 回绿时 `transitionTo` 会清掉分心段并停掉提醒
-      this.transitionTo(target, r.confidence, r.source, r.detail)
-    } else {
-      this.recordEvent(target, r.source, r.confidence, 'debounced')
+    // ---- 确认分心：起分心段 + 立即黄 ----
+    if (this.distractionStartedAt > 0) {
+      // 已在计时中：不再重复变色（红或黄都保持现状，升级交给时长）
+      this.recordEvent(this.state, r.source, r.confidence, 'no-transit')
+      return
+    }
+    this.distractionStartedAt = Date.now()
+    // 新的一段分心 → **重置干预预算**。
+    // 不重置的话：上一段分心用掉的额度（10 分钟内轻 2 / 重 1）会把这一段的卡片静默压掉，
+    // 而颜色与语音走的是时长分级、不受预算约束 —— 结果就是
+    // "颜色变了、语音响了，却没有任何卡片、也没有「继续专注」可点"（真实反馈）。
+    // 两条通道必须同进同退：都要按"每段分心"触发一次。
+    InterventionEngine.getInstance().reset()
+    hilog.info(0x0000, 'iKnow.Focus', '分心段开始：黄灯点亮，按持续时长升级（1min 红 / 5min 强提醒）')
+    if (this.state === FocusState.FOCUSED) {
+      // 当场变黄，不等时长也不等驻留 —— 这是"检测到那一刻黄"的唯一实现点
+      this.transitionTo(FocusState.SLIGHTLY_DISTRACTED, r.confidence, r.source, r.detail)
     }
   }
 
@@ -681,13 +697,11 @@ export class FocusController {
   /**
    * 按分心时长分级，并只在**跨档那一刻**触发对应动作。
    *
-   * 颜色不靠这里决定（检测到就当场变色，见 `onDetection`）；这里做两件时间相关的活：
-   *  1. **只升不降的兜底**：分心够久就必须至少是黄（20s）/红（1min）——
-   *     所以「趴桌」开场是黄，但持续到 1 分钟也会升红；红开场则不会被降级回去；
-   *  2. 跨档动作各触发一次：20s 短震、1min 语音播一遍 + 连续震、5min 语音循环 + 一直震。
+   * 颜色只看时长：检测到分心那一刻就是黄（`onDetection` 里点亮，这里兜底保证），
+   * ≥1min 升红，≥5min 仍是红但行为加强。检测到的是「看手机」还是「趴桌」不影响颜色。
    *
    * 挂在每秒心跳上（`recomputeTick`）：时间一直在走，跨档只能靠定期检查 ——
-   * 状态切换那一刻时长恒为 0，20s/1min/5min 都到不了。
+   * 状态切换那一刻时长恒为 0，1min / 5min 都到不了。
    */
   private syncReminderTier(): void {
     const fb = FeedbackService.getInstance()
@@ -700,13 +714,12 @@ export class FocusController {
       return
     }
     const ms = this.distractionElapsedMs()
-    let tier = 0
+    // 黄档没有时长门槛：分心段一建立就是 1
+    let tier = 1
     if (ms >= FocusTuning.DISTRACT_STRONG_AFTER_MS) {
       tier = 3
     } else if (ms >= FocusTuning.DISTRACT_RED_AFTER_MS) {
       tier = 2
-    } else if (ms >= FocusTuning.DISTRACT_YELLOW_AFTER_MS) {
-      tier = 1
     }
     if (tier === this.reminderTier) {
       return
@@ -717,17 +730,16 @@ export class FocusController {
     const sec = Math.round(ms / 1000)
     hilog.info(0x0000, 'iKnow.Focus', '分心等级 → %{public}d（已持续 %{public}d 秒）', tier, sec)
     if (tier === 1) {
-      // ≥20s：至少黄灯（趴桌开场就是黄的，这里是空操作；红开场也不降级）+ 短震一下
+      // 黄灯：颜色已在 onDetection 点亮（这里兜底，正常是空操作）+ 短震一下
       if (this.state === FocusState.FOCUSED) {
         this.transitionTo(FocusState.SLIGHTLY_DISTRACTED, this.lastConfidence,
-          this.lastDetectionSource, `持续分心 ${sec} 秒`)
+          this.lastDetectionSource, `检测到分心 ${sec} 秒`)
       }
       fb.vibrateShort()
       return
     }
     if (tier === 2) {
-      // ≥1min：至少红灯 —— 检测结果是"趴桌"（黄）但持续够久时，也要升到红；
-      // 已经是红的（看手机/离开开场就是红）则不变色。然后语音播一遍 + 连续震动。
+      // ≥1min：升红灯 + 语音播报一遍 + 连续震动
       if (this.state !== FocusState.DISTRACTED) {
         this.transitionTo(FocusState.DISTRACTED, this.lastConfidence,
           this.lastDetectionSource, `持续分心 ${sec} 秒`)

@@ -34,12 +34,39 @@ export interface PracticeDetailItem {
   times: number
 }
 
+/** 「学习习惯洞察」里的一个时段桶（近 30 天，按会话**开始时刻**的整点小时归并） */
+export interface HabitSlot {
+  /** 时钟区间，如 '20:00 - 21:00' */
+  window: string
+  /** 该时段内的会话次数 */
+  sessions: number
+  /** 该时段累计学习时长（分钟） */
+  studyMinutes: number
+  /** 该时段的净专注率（%，0~100） */
+  rate: number
+  /** 是否已达到"能参与高峰/低谷评比"的门槛（次数 + 时长都过） */
+  qualified: boolean
+}
+
 export interface HabitInsight {
   bestWindow: string
   bestRate: number
   lowWindow: string
   lowNote: string
   advice: string
+  /**
+   * 近 30 天**各时段的学习分布**（只含真正学过的时段，按时间升序）。
+   *
+   * 为什么要它：评比门槛（同时段至少 2 次 + 累计 20 分钟）不低，达不到时
+   * `advice` 会是空串 —— 只靠 advice 判断"有没有内容"的话，界面就变成一片空白，
+   * 用户只会觉得"这功能坏了"。分布本身是**如实的数据**，任何时候都能展示。
+   */
+  slots: HabitSlot[]
+  /**
+   * `advice` 为空时用它：挑最接近门槛的时段，说清还差几次 / 几分钟。
+   * 比干巴巴一句"数据不足"可操作。没有任何学习记录时为空串。
+   */
+  gateNote: string
 }
 
 /** 单日学习总结（复盘页日历切换到「某天」时使用） */
@@ -1245,6 +1272,22 @@ export class Metrics {
       bucketsNet[idx] += Metrics.netFocusSec(s)
       bucketsCount[idx] += 1
     }
+    // 时段分布：**学过的时段一律列出**，不受评比门槛限制 ——
+    // 门槛达不到时也能让用户看到"数据确实在"，而不是一片空白
+    const slots: HabitSlot[] = []
+    for (let i = 0; i < 24; i++) {
+      if (bucketsCount[i] === 0 || bucketsStudy[i] <= 0) {
+        continue
+      }
+      slots.push({
+        window: Metrics.hourWindow(i),
+        sessions: bucketsCount[i],
+        studyMinutes: Math.round(bucketsStudy[i] / 60),
+        rate: Metrics.bucketRate(bucketsStudy[i], bucketsNet[i]),
+        qualified: bucketsCount[i] >= Metrics.HABIT_MIN_SESSIONS
+          && bucketsStudy[i] >= Metrics.HABIT_MIN_STUDY_SEC
+      })
+    }
     // 资格桶：会话数与时长的门槛都过，才有资格参与评比
     const qualified: number[] = []
     for (let i = 0; i < 24; i++) {
@@ -1253,7 +1296,15 @@ export class Metrics {
       }
     }
     if (qualified.length === 0) {
-      return { bestWindow: '', bestRate: 0, lowWindow: '', lowNote: '', advice: '' }
+      return {
+        bestWindow: '',
+        bestRate: 0,
+        lowWindow: '',
+        lowNote: '',
+        advice: '',
+        slots: slots,
+        gateNote: Metrics.habitGateNote(bucketsCount, bucketsStudy)
+      }
     }
     let peak = qualified[0]
     let low = qualified[0]
@@ -1276,7 +1327,9 @@ export class Metrics {
         lowWindow: '',
         lowNote: '',
         advice: `近 30 天里只有 ${bestWindow} 这一个时段达到统计门槛（专注率 ${bestRate}%，累计 ${bestStudyMin} 分钟）。` +
-          '再多几个时段、每段至少 2 次专注，我才能比较出低谷。'
+          '再多几个时段、每段至少 2 次专注，我才能比较出低谷。',
+        slots: slots,
+        gateNote: ''
       }
     }
     const lowWindow = Metrics.hourWindow(low)
@@ -1289,7 +1342,9 @@ export class Metrics {
         lowWindow: '',
         lowNote: '',
         advice: `近 30 天各时段的专注率差别不大（最高 ${bestRate}% 与最低 ${lowRate}% 只差 ${gap} 个百分点，` +
-          `不到 ${Metrics.HABIT_RATE_GAP} 个百分点），所以不区分高峰与低谷。`
+          `不到 ${Metrics.HABIT_RATE_GAP} 个百分点），所以不区分高峰与低谷。`,
+        slots: slots,
+        gateNote: ''
       }
     }
     return {
@@ -1299,13 +1354,52 @@ export class Metrics {
       lowNote: lowRate + 10 < bestRate ? '容易分心' : '投入偏少',
       advice: `近 30 天的高效时段是 ${bestWindow}（专注率 ${bestRate}%，累计 ${bestStudyMin} 分钟）；` +
         `${lowWindow} 偏低（专注率 ${lowRate}%）。建议把需要深度思考的任务放在 ${bestWindow}，` +
-        `${lowWindow} 留给复习与轻量整理。`
+        `${lowWindow} 留给复习与轻量整理。`,
+      slots: slots,
+      gateNote: ''
     }
   }
 
   /** 第 i 个小时桶的时钟区间（23 点那一桶的右端点回到 00:00） */
   private static hourWindow(i: number): string {
     return `${Metrics.clock(i * 60)} - ${Metrics.clock(i * 60 + 60)}`
+  }
+
+  /**
+   * 还没到评比门槛时的说明：挑**最接近门槛**的时段，说清还差几次 / 几分钟。
+   *
+   * 不在这里给高峰低谷的结论 —— 样本不足就只报事实，这与其他模块的口径一致
+   *（例如专注画像样本不够时显示"还在了解你"，不硬给结论）。
+   */
+  private static habitGateNote(counts: number[], study: number[]): string {
+    let best = -1
+    let bestProgress = -1
+    for (let i = 0; i < 24; i++) {
+      if (counts[i] === 0 || study[i] <= 0) {
+        continue
+      }
+      // 两个条件各自的完成度相加，取最接近的那个时段
+      const p = Math.min(counts[i], Metrics.HABIT_MIN_SESSIONS) / Metrics.HABIT_MIN_SESSIONS
+        + Math.min(study[i], Metrics.HABIT_MIN_STUDY_SEC) / Metrics.HABIT_MIN_STUDY_SEC
+      if (p > bestProgress) {
+        bestProgress = p
+        best = i
+      }
+    }
+    if (best < 0) {
+      return ''
+    }
+    const window = Metrics.hourWindow(best)
+    const needSessions = Math.max(0, Metrics.HABIT_MIN_SESSIONS - counts[best])
+    const needMinutes = Math.max(0, Math.ceil((Metrics.HABIT_MIN_STUDY_SEC - study[best]) / 60))
+    if (needSessions > 0 && needMinutes > 0) {
+      return `最接近门槛的是 ${window}：再完成 ${needSessions} 次专注、并把该时段累计到 `
+        + `${Math.round(Metrics.HABIT_MIN_STUDY_SEC / 60)} 分钟，就能给出高峰与低谷。`
+    }
+    if (needSessions > 0) {
+      return `最接近门槛的是 ${window}：再完成 ${needSessions} 次专注就够了。`
+    }
+    return `最接近门槛的是 ${window}：该时段再累计 ${needMinutes} 分钟就够了。`
   }
 
   /**

@@ -47,6 +47,15 @@ export class Colors {
   static readonly RED = '#DE6B5E'
   static readonly RED_SOFT = '#FBEBE8'
 
+  // ---------- 专注页整页底色 ----------
+  //
+  // 比 *_SOFT 再亮一档：*_SOFT 是"卡片上的浅色块"，铺满整页会显得发闷、
+  // 长时间盯着也累。这三个只给整页底色用（`FocusStateUi.softColor`），
+  // 不动 *_SOFT，避免连带把卡片和按钮一起改浅。
+  static readonly FOCUS_BG_GREEN = '#EBFCF5'
+  static readonly FOCUS_BG_YELLOW = '#FFFAEA'
+  static readonly FOCUS_BG_RED = '#FFF2EE'
+
   // ---------- 合规 —— 摄像头红色指示灯 ----------
   static readonly CAMERA_RED = '#E4564B'
 

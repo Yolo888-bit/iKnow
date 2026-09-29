@@ -33,6 +33,14 @@
       "value": "在桌面查看今日专注时长、净专注率与当前建议"
     },
     {
+      "name": "widget_lt_display_name",
+      "value": "iKnow 长期坚持"
+    },
+    {
+      "name": "widget_lt_desc",
+      "value": "在桌面查看累计专注时长、连续学习天数与近 30 天的学习天数"
+    },
+    {
       "name": "EntryFormAbility_label",
       "value": "iKnow 服务卡片"
     },

@@ -815,15 +815,19 @@ export class AppStore {
     await this.rolloverDailyPlan()
     const now = Date.now()
     let weekFocus = 0
+    let totalFocus = 0
     // 「本周」= 自然周（周一 0 点起）。原来用的是"今天往前 6 天"的滚动窗口，
     // 却挂着「本周累计」的标签 —— 名实不符。近 7 天的图表另有 computeWeekTrend。
     const weekStart = TimeUtils.weekStart(now)
 
     for (const s of this.sessions) {
+      totalFocus += Metrics.netFocusSec(s)
       if (s.startTime >= weekStart) {
         weekFocus += Metrics.netFocusSec(s)
       }
     }
+    // 长期卡要的两项：连续天数、近 31 天有学习的天数（口径与复盘页同一套 Metrics.streaks）
+    const streaks = Metrics.streaks(this.sessions, now)
 
     // 今日数据：**现算**（口径见 todayStats()），不在这里各写一遍累加 ——
     // 首页「今日数据」调的是同一个方法，两边永远是同一个数。
@@ -838,6 +842,9 @@ export class AppStore {
     d.todayCompletedTasks = today.doneTasks
     d.todayTotalTasks = today.totalTasks
     d.subjectProgress = this.computeSubjectProgress()
+    d.totalFocusSeconds = totalFocus
+    d.streakDays = streaks.currentStreak
+    d.studiedDays30 = streaks.studiedDays
     this.dashboard = d
     // 目标进度：入参在这里组装，计算仍由 Metrics 负责（纯函数，不读存储）
     this.planProgress = Metrics.planProgress(this.tasks, this.plan)
@@ -976,6 +983,10 @@ export class AppStore {
     svc.saveKv(StorageKey.CARD_TODAY, TimeUtils.formatHMin(this.dashboard.todayFocusSeconds)).catch(() => {})
     svc.saveKv(StorageKey.CARD_RATE, `${this.dashboard.focusRate}%`).catch(() => {})
     svc.saveKv(StorageKey.CARD_ADVICE, this.cardAdvice()).catch(() => {})
+    // 「长期数据」卡片的三项（卡片进程读不到主进程内存，只能靠落库的快照）
+    svc.saveKv(StorageKey.CARD_LT_TOTAL, TimeUtils.formatHMin(this.dashboard.totalFocusSeconds)).catch(() => {})
+    svc.saveKv(StorageKey.CARD_LT_STREAK, `${this.dashboard.streakDays}`).catch(() => {})
+    svc.saveKv(StorageKey.CARD_LT_DAYS, `${this.dashboard.studiedDays30}`).catch(() => {})
   }
 
   /** 桌面上卡片给的一句建议：由真实数据推导，不写死 */

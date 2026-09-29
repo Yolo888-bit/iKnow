@@ -42,16 +42,43 @@ export class FocusTuning {
   /** 窗口内重干预上限 */
   static readonly MAX_HEAVY_PER_WINDOW = 1
 
+  // ===================== 分心分级（本次分心持续时长）=====================
+  //
+  // 页面颜色与提醒行为**都由"这一次分心持续了多久"决定**，与"检测到哪种行为"无关：
+  // 任何确认分心（含趴桌）都从那一刻开始计时，回到专注才清零（见
+  // `FocusController.distractionStartedAt`）。三档动作各不相同：
+  //
+  //   0 ~ 20s  仍显示专注（绿）—— 宽限期，避免低头看一眼就报警
+  //   ≥ 20s    黄灯：文字提示 + 短震一次
+  //   ≥ 60s    红灯：语音播报一遍 + 连续震动
+  //   ≥ 5min   仍为红灯，但行为加强：语音**一直循环** + 一直震动（震动封顶）
+  //
+  // 升级在每秒心跳里按真实时长判定（`FocusController.escalateByDuration`），
+  // 所以这些阈值改一个数就能整体调快调慢 —— 演示时可临时调小。
+
+  /** 分心持续到多久升黄灯（文字提示 + 短震） */
+  static readonly DISTRACT_YELLOW_AFTER_MS = 20_000
+  /** 分心持续到多久升红灯（语音播报一遍 + 连续震动） */
+  static readonly DISTRACT_RED_AFTER_MS = 60_000
+  /** 分心持续到多久进「强提醒」（语音一直循环 + 一直震动） */
+  static readonly DISTRACT_STRONG_AFTER_MS = 5 * 60_000
+
+  // ---------- 震动时长 ----------
+  /** 黄灯：短震一下 */
+  static readonly VIBRATE_SHORT_MS = 150
+  /** 红灯：连续震动约 2 秒 */
+  static readonly VIBRATE_RED_MS = 2_000
   /**
-   * **重度干预的时长门槛**：红灯持续这么久才算「重度分心」，才有语音提醒。
-   *
-   * 级别按"这一次分心持续了多久"算（用户口径：黄灯=轻度、红灯=重度）：
-   *  - 黄灯（趴桌等）永远是轻度，不会升级；
-   *  - 红灯刚发生 < 此值时是轻度（只出轻文案），≥ 此值才升级为重度（重文案 + 语音）。
-   * 所以状态评估必须**定期重跑**（见 `FocusController.onTick`），
-   * 否则切换那一刻时长恒为 0，这个门槛永远到不了、重度文案与语音包永远不会触发。
+   * 强提醒的连续震动**封顶**：最多震这么久就停（语音继续循环）。
+   * 不封顶会出现"手机在桌上震十分钟"，既难受也耗电。
    */
-  static readonly INTERVENTION_HEAVY_AFTER_MS = 60_000
+  static readonly VIBRATE_STRONG_MAX_MS = 30_000
+  /**
+   * 单次 `startVibration` 的时长。
+   * 不直接用 30s：部分设备对单次时长有限制，超了会被拒（401）从而完全不振。
+   * 改成按这个时长反复续，既安全又能凑到封顶值。
+   */
+  static readonly VIBRATE_CHUNK_MS = 3_000
 
   /** 分心态下重新评估干预的最小间隔（够细到不会错过门槛，又不至于每 tick 都算） */
   static readonly INTERVENTION_REEVAL_MS = 5_000

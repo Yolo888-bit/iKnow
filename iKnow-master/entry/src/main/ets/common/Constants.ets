@@ -47,6 +47,10 @@ export class StorageKey {
   static readonly CARD_TODAY = 'ik_card_today'
   static readonly CARD_RATE = 'ik_card_rate'
   static readonly CARD_ADVICE = 'ik_card_advice'
+  // 「长期数据」卡片的三项（累计 / 连续天数 / 近 30 天有学习的天数）
+  static readonly CARD_LT_TOTAL = 'ik_card_lt_total'
+  static readonly CARD_LT_STREAK = 'ik_card_lt_streak'
+  static readonly CARD_LT_DAYS = 'ik_card_lt_days'
 
   // 分项授权（PRD §17 全局唯一事实源，落库）
   static readonly AUTHORIZATION = 'ik_authorization_json'
@@ -102,7 +106,7 @@ export class StorageKey {
    */
   static readonly FOCUS_TIMER_ONLY_REQUEST = 'ik_focus_timer_only_request'
   /**
-   * 服务卡片 / 意图框架 / `hdc aa start` 等**外部入口**唤起时设置：
+   * 服务卡片 / `hdc aa start` 等**外部入口**唤起时设置：
    * 专注页要先弹一次感知确认（与首页「开始专注」同一条文案）再开会话。
    *
    * 为什么不能直接开始：摄像头采集的授权点只有一个 —— "开始专注时确认是否开启感知"。
@@ -112,12 +116,13 @@ export class StorageKey {
 
   // ===================== 外部唤起的 want 参数名 =====================
   //
-  // 服务卡片 / 意图框架 / `hdc aa start` 三个入口共用同一套参数名（取值见
-  // `insightintent/ExternalEntry.ets`）。参数名放在这里、而不是放在那个模块里，
+  // 服务卡片（今日卡 / 长期卡）与 `hdc aa start` 共用同一套参数名（取值见
+  // `entrypoints/ExternalEntry.ets`）。参数名放在这里、而不是放在那个模块里，
   // 是为了让**服务卡片能单独引用** —— 卡片跑在独立进程，不该为了两个字符串
   // 把 AppStore / StorageService 一起拉进来。
   static readonly IK_ACTION = 'ik_action'
   static readonly IK_MODE = 'ik_mode'
+  static readonly IK_PAGE = 'ik_page'
 
   /** 贴合目标的励志标语（AI 生成，进程内缓存；目标变更时置空重新生成） */
   static readonly GOAL_SLOGAN = 'ik_goal_slogan'

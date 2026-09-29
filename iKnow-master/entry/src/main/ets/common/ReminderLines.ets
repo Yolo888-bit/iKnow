@@ -68,16 +68,12 @@ function rowsOf(personality: string, level: ReminderLevel): ReminderLine[] {
   return level === 'HEAVY' ? GENTLE_HEAVY : GENTLE_LIGHT
 }
 
-/** 轮换游标：key = `人格|级别`，value = 下一条要用的下标（只在真正发声时推进） */
-const CURSOR: Map<string, number> = new Map<string, number>()
-
 export class ReminderLines {
   /**
    * 取**界面要显示**的那一条：同一人格同一级别固定用第一条。
    *
-   * 为什么不跟着轮换：卡片文字会被反复重绘（状态评估每次都可能拿到新文案），
-   * 若每次都推进游标，文字会几秒钟换一句、还会和实际播出的录音对不上。
-   * 轮换只发生在**真正播出声音**的时候（见 `nextForVoice()`）。
+   * 不做轮换：循环播放时反复听到的必须是同一句，文字与录音也才能严格对应
+   *（用户口径：循环只播一种语音）。
    */
   static textOf(personality: string, level: ReminderLevel): string {
     const rows = rowsOf(personality, level)
@@ -85,26 +81,17 @@ export class ReminderLines {
   }
 
   /**
-   * 取**本次要播**的那一条，并推进轮换游标。
-   * 只在确实要发声时调用一次 —— 同人格的多段录音轮流用，避免每次都是同一句。
+   * 取要播的那一条：同样固定第一条。
+   *
+   * 只返回**有录音**的条目 —— 轻度的文字没有配录音，返回 null 让调用方如实说明
+   * "这一档只出文字、不出声"，而不是播一个空文件。
    */
-  static nextForVoice(personality: string, level: ReminderLevel): ReminderLine | null {
+  static firstOf(personality: string, level: ReminderLevel): ReminderLine | null {
     const rows = rowsOf(personality, level)
-    if (rows.length === 0) {
+    if (rows.length === 0 || rows[0].file.length === 0) {
       return null
     }
-    const key = `${personality}|${level}`
-    const raw = CURSOR.get(key)
-    const start = raw === undefined ? 0 : raw
-    // 从当前下标起找第一条**有录音**的 —— 没录音的条目要跳过，否则会"播了但没声音"
-    for (let i = 0; i < rows.length; i++) {
-      const at = (start + i) % rows.length
-      if (rows[at].file.length > 0) {
-        CURSOR.set(key, (at + 1) % rows.length)
-        return rows[at]
-      }
-    }
-    return null
+    return rows[0]
   }
 
   /** 该人格该级别有没有录音（页面用它如实说明"这一档会不会出声"） */

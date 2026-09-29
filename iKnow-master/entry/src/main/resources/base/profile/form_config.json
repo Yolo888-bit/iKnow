@@ -1,18 +1,40 @@
 {
   "forms": [
     {
-      "name": "iknow_focus_card",
+      "name": "iknow_today_card",
       "displayName": "$string:widget_display_name",
       "description": "$string:widget_desc",
-      "src": "./ets/widget/pages/WidgetCard.ets",
+      "src": "./ets/widget/pages/TodayCard.ets",
       "uiSyntax": "arkts",
       "window": {
         "designWidth": 720,
         "autoDesignWidth": true
       },
       "colorMode": "auto",
-      "isDynamic": false,
+      "isDynamic": true,
       "isDefault": true,
+      "updateEnabled": true,
+      "scheduledUpdateTime": "08:00",
+      "updateDuration": 1,
+      "defaultDimension": "2*2",
+      "supportDimensions": [
+        "2*2",
+        "2*4"
+      ]
+    },
+    {
+      "name": "iknow_longterm_card",
+      "displayName": "$string:widget_lt_display_name",
+      "description": "$string:widget_lt_desc",
+      "src": "./ets/widget/pages/LongTermCard.ets",
+      "uiSyntax": "arkts",
+      "window": {
+        "designWidth": 720,
+        "autoDesignWidth": true
+      },
+      "colorMode": "auto",
+      "isDynamic": true,
+      "isDefault": false,
       "updateEnabled": true,
       "scheduledUpdateTime": "08:00",
       "updateDuration": 1,

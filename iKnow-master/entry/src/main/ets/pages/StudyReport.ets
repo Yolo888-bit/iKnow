@@ -524,7 +524,22 @@ export struct StudyReport {
                 Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
                   ForEach(this.interference, (o: ObservationRecord) => {
                     Column() {
-                      if (o.imagePaths.length > 0 && this.failedImages.indexOf(o.id) < 0) {
+                      if (!o.fromSimConsole()) {
+                        // 真实抓拍来源：画面不上传、也不在记录里展示（口径：
+                        // "记录中不需要有非模拟时的图片"）。此前这里会回落到打包占位图，
+                        // 看起来像"确实有一张照片"，属于误导，已去掉。
+                        Column() {
+                          Text('未记录画面')
+                            .fontSize(11)
+                            .fontColor(Colors.TEXT_TERTIARY)
+                        }
+                        .width('100%')
+                        .height(88)
+                        .justifyContent(FlexAlign.Center)
+                        .alignItems(HorizontalAlign.Center)
+                        .backgroundColor(Colors.CARD)
+                        .borderRadius(Radius.MD)
+                      } else if (o.imagePaths.length > 0 && this.failedImages.indexOf(o.id) < 0) {
                         Image(this.fileUri(o.imagePaths[0]))
                           .width('100%')
                           .height(88)

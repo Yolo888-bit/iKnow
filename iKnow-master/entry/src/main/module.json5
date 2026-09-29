@@ -77,6 +77,9 @@
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
+        // 卡片 router 事件会反复拉起本 Ability；显式声明单例，
+        // 避免"点一次卡片开出两个实例"（默认也是 singleton，写出来是为了别被改错）
+        "launchType": "singleton",
         "skills": [
           {
             "entities": [

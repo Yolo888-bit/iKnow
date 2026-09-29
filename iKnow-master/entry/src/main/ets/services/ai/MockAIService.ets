@@ -702,12 +702,11 @@ export class MockAIService implements AIService, QAService, CompanionService, Re
     if (!distracted) {
       return { shouldIntervene: false, level: 'NONE', channel: 'quiet', message: '', action: 'continue' }
     }
-    let level: 'LIGHT' | 'HEAVY' = 'LIGHT'
-    // 级别按**这一次分心持续了多久**算（黄灯恒为轻度，红灯持续够久才升级为重度）。
-    // 门槛是 FocusTuning 里的常量，不在这里写死数字。
-    if (ctx.state === 'DISTRACTED' && ctx.sinceMs >= FocusTuning.INTERVENTION_HEAVY_AFTER_MS) {
-      level = 'HEAVY'
-    }
+    // 级别**直接跟状态走**：黄灯=轻度、红灯=重度。
+    // 不再看 `sinceMs` —— 状态本身已经由"分心持续时长"决定（20s 黄 / 1min 红，
+    // 见 FocusTuning.DISTRACT_*），红灯就等于"已经分心够久了"，
+    // 再叠一层时长判断只会让红灯刚亮时拿到轻度文案、与界面和语音对不上。
+    const level: 'LIGHT' | 'HEAVY' = ctx.state === 'DISTRACTED' ? 'HEAVY' : 'LIGHT'
     // §12 硬规则：无手表时 RED 用手机声音 + 屏幕选择，绝不假装震动
     const channel = level === 'HEAVY' && ctx.hasWatch ? 'watch-vibrate' : level === 'HEAVY' ? 'phone-sound' : 'screen-select'
     const message = this.wording(ctx.personality, level)

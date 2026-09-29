@@ -32,6 +32,13 @@ export class Dashboard {
   weekFocusSeconds: number = 0
   weekTrend: number[] = []         // 近 7 天每日净专注分钟
   subjectProgress: SubjectProgress[] = []
+  // ---- 长期数据（给「长期数据」服务卡片用，也供别处复用）----
+  /** 累计净专注秒数（全部已结束会话之和） */
+  totalFocusSeconds: number = 0
+  /** 连续学习天数（含今天；今天还没学则从昨天起算） */
+  streakDays: number = 0
+  /** 近 31 天里有学习的天数 */
+  studiedDays30: number = 0
 }
 
 /**

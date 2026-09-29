@@ -84,6 +84,21 @@ export class ObservationRecord {
   confidence: number = 0
   /** 一句话可核对的依据 */
   evidence: string = ''
-  /** 采集到的画面文件路径（决策：上传并保存供复盘） */
+  /** 采集到的画面文件路径（保存在本机供复盘） */
   imagePaths: string[] = []
+
+  /**
+   * 是否来自「模拟状态」控制台（而不是感知信号触发）。
+   *
+   * 判据是 `eventId` 为空：只有**由手表/合成信号触发的采集**才会带上触发它的事件 id
+   *（`ObservationQueue.runTask` 里 `o.eventId = task.event.id`）；
+   * 模拟控制台是直接构造记录、不带事件 id（`FocusController.deliverInjected`）。
+   *
+   * 为什么要区分：真实抓拍的画面不再上传，也**只在模拟来源的记录里展示**
+   *（见 `pages/StudyReport.ets`）。这两个写入点都要保持"只有信号触发才写 eventId"，
+   * 否则判据会失效。
+   */
+  fromSimConsole(): boolean {
+    return this.eventId.length === 0
+  }
 }

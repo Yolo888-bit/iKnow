@@ -4,18 +4,21 @@ import { hilog } from '@kit.PerformanceAnalysisKit'
 import { AppStore } from '../store/AppStore'
 import { AuthService } from '../services/AuthService'
 import { FocusController } from '../services/FocusController'
-import { prepareExternalStartFocus, resetPendingExternalStart } from '../insightintent/ExternalEntry'
+import { StorageKey } from '../common/Constants'
+import { desiredTab, prepareExternalStartFocus, resetPendingExternalStart } from '../entrypoints/ExternalEntry'
 
 const DOMAIN = 0x0000
 const TAG = 'iKnow'
 
 export default class EntryAbility extends UIAbility {
   /**
-   * 这次冷启动是否由外部唤起触发（服务卡片按钮 / 意图框架 / `hdc aa start`）。
+   * 这次冷启动是否由卡片「开始专注」触发。
    * 判定放在 onCreate，跳转放到 loadContent 回调里 —— 内容没加载完就 `pushUrl` 会跳失败。
    */
   private externalStartFocus: boolean = false
-  /** 外部唤起的判定结果（onCreate 里发起，loadStartPage 里 await，避免竞态） */
+  /** 卡片「打开 App」要落到的 Tab（-1 = 不是这类唤起） */
+  private externalTab: number = -1
+  /** 「开始专注」的判定结果（onCreate 里发起，loadStartPage 里 await，避免竞态） */
   private externalCheck: Promise<boolean> = Promise.resolve(false)
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -24,7 +27,14 @@ export default class EntryAbility extends UIAbility {
     }).catch((err: Error) => {
       hilog.error(DOMAIN, TAG, 'AppStore init failed: ' + err.message)
     })
+    // 把收到的 want 参数键名打出来：卡片 router 的参数形状（平铺 / 包一层 params）
+    // 在不同版本上不一致，猜错就是"点了没反应"且不报错 —— 让日志来自证。
+    const wp = want.parameters
+    if (wp !== undefined) {
+      hilog.info(DOMAIN, TAG, 'onCreate want keys=%{public}s', Object.keys(wp).join(','))
+    }
     // 外部唤起：只判定与准备状态，不在这里跳页（窗口内容还没加载）
+    this.externalTab = desiredTab(want.parameters)
     this.externalCheck = prepareExternalStartFocus(this.context, want.parameters)
       .catch((err: Error) => {
         hilog.error(DOMAIN, TAG, '外部唤起判定失败：%{public}s', err.message)
@@ -33,10 +43,24 @@ export default class EntryAbility extends UIAbility {
   }
 
   /**
-   * 应用已在运行时又收到 want（用户切走后再点卡片 / 小艺再次唤起）。
+   * 应用已在运行时又收到 want（用户切走后再点卡片）。
    * 这时窗口内容已就绪，可以直接跳；但仍要过一遍门禁 —— 运行中不等于已登录。
    */
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    const tab = desiredTab(want.parameters)
+    if (tab >= 0) {
+      // 「打开 App」：应用已在前台/后台，切到目标 Tab 即可
+      this.canEnterApp().then((ok: boolean) => {
+        if (!ok) {
+          hilog.info(DOMAIN, TAG, '卡片「打开 App」被丢弃：未登录或未设目标')
+          return
+        }
+        AppStorage.setOrCreate<number>(StorageKey.INDEX_TAB_REQUEST, tab)
+      }).catch((err: Error) => {
+        hilog.error(DOMAIN, TAG, 'onNewWant 切 Tab 失败：%{public}s', err.message)
+      })
+      return
+    }
     prepareExternalStartFocus(this.context, want.parameters)
       .then(async (hit: boolean) => {
         if (!hit) {
@@ -129,8 +153,8 @@ export default class EntryAbility extends UIAbility {
    * 入口页门禁：
    *  未登录 → 登录页；已登录但还没设目标 → 目标设置页；都完成 → 主界面。
    *
-   * 外部唤起（卡片 / 意图 / hdc）只在**已登录且设过目标**时才直达专注页；
-   * 否则把这次请求丢掉并清标记 —— 不能把专注页压在登录页上面。
+   * 卡片唤起只在**已登录且设过目标**时才生效；否则把这次请求丢掉并清标记 ——
+   * 不能把专注页压在登录页上面，也不能对登录页发切 Tab 的请求（那里没有 Tab）。
    */
   private async loadStartPage(windowStage: window.WindowStage): Promise<void> {
     let page = 'pages/Login'
@@ -153,16 +177,21 @@ export default class EntryAbility extends UIAbility {
       hilog.info(DOMAIN, TAG, '外部唤起被丢弃：当前入口页是 %{public}s', page)
     }
     this.externalStartFocus = canJump
+    const tab = page === 'pages/Index' ? this.externalTab : -1
     windowStage.loadContent(page, (err) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, 'loadContent failed: %{public}d', err.code)
         return
       }
       hilog.info(DOMAIN, TAG, 'iKnow loaded: ' + page)
-      // 内容就绪后再跳，否则 router 可能拿不到页面栈
+      // 内容就绪后再动路由/切 Tab，否则 router 可能拿不到页面栈、Index 的 @Watch 也吃不到
       if (this.externalStartFocus) {
         this.externalStartFocus = false
         router.pushUrl({ url: 'pages/Focus' })
+        return
+      }
+      if (tab >= 0) {
+        AppStorage.setOrCreate<number>(StorageKey.INDEX_TAB_REQUEST, tab)
       }
     })
   }

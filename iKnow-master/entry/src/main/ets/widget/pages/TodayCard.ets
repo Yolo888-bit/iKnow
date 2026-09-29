@@ -1,32 +1,19 @@
+import { openAppAction, startFocusAction } from '../CardActions'
+
 /**
- * 服务卡片（2*2 / 2*4）—— 桌面 / 负一屏上的「今日专注」概览
+ * 服务卡片之一：**今日数据**（2*2 / 2*4）—— 桌面 / 负一屏上的「今日专注」概览
  *
  * 数据由 `EntryFormAbility` 通过 formBindingData 注入到 LocalStorage，
- * 卡片侧只读这 3 个键，不直接访问数据库。
+ * 卡片侧只读这 3 个键，不直接访问数据库（卡片跑在独立进程，读不到主进程内存）。
  *
- * 「开始专注」按钮走 `postCardAction({action:'call'})` → 拉起 EntryAbility，
- * 参数与意图框架、`hdc aa start` **完全同一套**（取名见 `common/Constants.ets` 的
- * `StorageKey.IK_ACTION`，取值见 `insightintent/ExternalEntry.ets`）。
- * 三个入口驱动同一段代码；卡片不 import 那两个模块 —— 它在独立进程里跑，
- * 不该把 AppStore / StorageService 一起拉进来，所以这里字段名只能写字面量。
+ * 两种交互都走 `postCardAction({action:'call'})` 拉起 EntryAbility（见 `CardActions.ets`）：
+ *   · 点整张卡 → 打开 App 并落到「首页」
+ *   · 点「开始专注」→ 直接起一段会话（是否开摄像头由专注页弹确认，卡片不替用户决定）
  */
-
-/** 拉起 Ability 时携带的参数（ArkTS 不允许未类型化的对象字面量，显式声明） */
-class CardCallParams {
-  /** = StorageKey.IK_ACTION */
-  ik_action: string = 'start_focus'
-}
-
-class CardCallAction {
-  action: string = 'call'
-  abilityName: string = 'EntryAbility'
-  moduleName: string = 'entry'
-  params: CardCallParams = new CardCallParams()
-}
 
 @Entry
 @Component
-struct WidgetCard {
+struct TodayCard {
   @LocalStorageProp('todayFocus') todayFocus: string = '0min'
   @LocalStorageProp('focusRate') focusRate: string = '0%'
   @LocalStorageProp('advice') advice: string = '开始一段专注吧'
@@ -72,7 +59,7 @@ struct WidgetCard {
         .borderRadius(15)
         .margin({ top: 8 })
         .onClick(() => {
-          postCardAction(this, new CardCallAction())
+          postCardAction(this, startFocusAction())
         })
     }
     .width('100%')
@@ -81,5 +68,9 @@ struct WidgetCard {
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Start)
     .backgroundColor('#FAF6F1')
+    // 点整张卡 = 打开 App 落到首页（按钮的点击不会冒泡到这里，各走各的）
+    .onClick(() => {
+      postCardAction(this, openAppAction('home'))
+    })
   }
 }

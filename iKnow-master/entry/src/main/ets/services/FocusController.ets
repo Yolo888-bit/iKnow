@@ -17,8 +17,6 @@ import { BleWatchService } from './BleWatchService'
 import { ObservationQueue, FrameRecognizer } from './ObservationQueue'
 import { CameraService } from './CameraService'
 import { SimulatedRecognizer } from './SimulatedRecognizer'
-import { GatewayRecognizer } from './GatewayRecognizer'
-import { AIService } from './AIService'
 import { FeedbackService } from './FeedbackService'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { power } from '@kit.BasicServicesKit'
@@ -119,6 +117,25 @@ export class FocusController {
   private permSubscribed: boolean = false
   /** 上一次在分心态下重新评估干预的时刻（0 = 本段还没评估过） */
   private lastReevalAt: number = 0
+
+  /**
+   * **本次分心的起点**（0 = 当前没有进行中的分心段）。
+   *
+   * 这是本产品的分级依据：颜色与提醒行为都由「这一次分心已经持续了多久」决定，
+   * 而不是由"检测到的是看手机还是趴桌"决定。任何确认分心（含趴桌）都会开启这一段，
+   * 只有**回到专注**（或切到答疑/休息/暂停、会话结束）才清零。
+   *
+   * 为什么不复用 `stateEnteredAt`：它每次状态切换都会重置（黄→红会清零），
+   * 而分级要的是跨黄/红连续的累计时长。
+   */
+  private distractionStartedAt: number = 0
+  /** 最近一次确认分心用的来源，升级时写进状态事件，便于复盘说明"依据是什么" */
+  private lastDetectionSource: FocusSource = FocusSource.CAMERA
+  /**
+   * 当前分心等级：0 未分心 / 1 黄（20s）/ 2 红（60s）/ 3 强提醒（5min）。
+   * 只由 `distractionStartedAt` 现算，用它来识别"刚刚跨过哪一档"从而只触发一次动作。
+   */
+  private reminderTier: number = 0
 
   static getInstance(): FocusController {
     if (FocusController.inst === null) {
@@ -447,20 +464,17 @@ export class FocusController {
     ObservationQueue.getInstance().setOnObservation((o: ObservationRecord) => {
       this.onObservation(o)
     })
-    // 识别器按"真实链路是否可用"自动选择：**网关已配置 且 本机有摄像头**才走真实识别；
-    // 否则用模拟识别源（结果与合成手表阶段对应，并在 evidence/日志里标注为模拟）。
-    // 同一份代码：真机上是真实识别，无摄像头的演示环境自动降级，业务逻辑一行不改。
-    let rec: FrameRecognizer = SimulatedRecognizer.getInstance()
-    const camCtx = StorageService.getInstance().appContext()
-    const hasCamera = camCtx !== null && CameraService.getInstance().probe(camCtx) > 0
-    if (AIService.getInstance().isGatewayReady() && hasCamera) {
-      rec = GatewayRecognizer.getInstance()
-    }
-    ObservationQueue.getInstance().setRecognizer(rec)
-    hilog.info(0x0000, 'iKnow.Focus', '识别器=%{public}s（网关=%{public}s 摄像头=%{public}s）',
-      AIService.getInstance().isGatewayReady() && hasCamera ? '真实多模态' : '模拟源',
-      AIService.getInstance().isGatewayReady() ? '已配置' : '未配置',
-      hasCamera ? '有' : '无')
+    // 识别器**固定用模拟源**：抓拍的画面不再上传云端。
+    //
+    // 为什么：当前阶段结论一律来自「模拟状态」控制台（用户口径："先不上传真实拍摄的，
+    // 仅仅使用模拟控制台"）。此前"网关已配置 且 有摄像头"时会注入 GatewayRecognizer，
+    // 把抓拍帧 base64 后 POST 给多模态模型（`GatewayAIService.callVision`）——
+    // 那条路径现在不再走，`GatewayRecognizer` 仍保留，等真实视觉链路可用时再换回来即可。
+    //
+    // 注意：抓拍本身**保留**（`triggerVisualCheck` 照旧采集并落本机，作为本地记录），
+    // 关掉的只是"上传"；记录页也不再展示非模拟来源的画面（见 pages/StudyReport.ets）。
+    ObservationQueue.getInstance().setRecognizer(SimulatedRecognizer.getInstance())
+    hilog.info(0x0000, 'iKnow.Focus', '识别器=模拟源（真实画面不上传云端；结论来自模拟状态控制台）')
     this.tickId = setInterval(() => {
       this.recomputeTick()
     }, FocusTuning.TICK_MS)
@@ -509,6 +523,9 @@ export class FocusController {
     this.qaSec = 0
     this.breakSec = 0
     this.pausedAccum = 0
+    // 跨会话必须清零：否则上一段留下的分心起点会让新会话一开始就判成"已长时间分心"
+    this.distractionStartedAt = 0
+    this.reminderTier = 0
     this.stateEnteredAt = Date.now()
     this.lastTickAt = Date.now()
     this.segStartAt = Date.now()
@@ -598,7 +615,16 @@ export class FocusController {
     this.pushLive()
   }
 
-  /** 摄像头检测回调 → 去抖状态机（硬规则 §9 采而不信） */
+  /**
+   * 感知结论回调 —— **检测到就当场变色**，同时开启"本次分心"的计时。
+   *
+   * 颜色由检测结果立即决定（看手机/离开 → 红；趴桌 → 黄），不等时长；
+   * 之后的时长只负责**往上加码**（≥20s 至少黄、≥1min 至少红、≥5min 强提醒），
+   * 见 `syncReminderTier()` 的"只升不降"兜底。
+   *
+   * 演示注入（模拟控制台）跳过驻留/冷却，点一下当场生效；真实信号仍走原有的
+   * 驻留与冷却，避免单帧误判让颜色抖动 —— 这是既有的去抖设计，不改。
+   */
   private onDetection(r: FocusDetectionResult): void {
     // 演示注入标记是**一次性**的：无论本次是否真的切换，都在这里消费掉
     const manual = this.manualInject
@@ -608,13 +634,26 @@ export class FocusController {
     }
     this.lastDetail = r.detail
     this.lastConfidence = Math.round(r.confidence)
+    this.lastDetectionSource = r.source
     if (r.confidence < FocusTuning.CONFIDENCE_FLOOR) {
-      // 采而不信：仅记账，不切换
+      // 采而不信：仅记账，不开启分心段（宁可不判，也不误判）
       this.recordEvent(this.mapState(r.state), r.source, r.confidence, 'below-confidence')
       return
     }
     const target = this.mapState(r.state)
+    // 确认分心（含趴桌）→ 开启分心段，**计时从这一刻开始**
+    if (target !== FocusState.FOCUSED && this.distractionStartedAt === 0) {
+      this.distractionStartedAt = Date.now()
+      hilog.info(0x0000, 'iKnow.Focus', '分心段开始，计时用于分级（20s 黄提示 / 1min 语音 / 5min 强提醒）')
+    }
     if (target === this.state) {
+      // 已经绿了还收到"专注"结论 → 这一帧确认专注，立刻结束分心段。
+      // 否则"看一眼手机又回来看书"仍会继续攒时长，20 秒后平白变黄。
+      if (target === FocusState.FOCUSED && this.distractionStartedAt > 0) {
+        this.endDistractionBout()
+        this.recordEvent(target, r.source, r.confidence, 'bout-cancelled')
+        return
+      }
       this.recordEvent(target, r.source, r.confidence, 'no-transit')
       return
     }
@@ -622,14 +661,85 @@ export class FocusController {
     const dwellOk = manual || now - this.stateEnteredAt >= this.dwellFor(target)
     const coolOk = manual || this.cooldownElapsed(target)
     if (dwellOk && coolOk) {
+      // 回绿时 `transitionTo` 会清掉分心段并停掉提醒
       this.transitionTo(target, r.confidence, r.source, r.detail)
-      // 只对**确认分心（红灯）**震一下；「趴桌」这类轻度（黄）不震，避免变成骚扰。
-      // 语音不在这里响 —— 语音按"分心持续够久"升级为重度后才播（见 evaluateIntervention）。
-      if (target === FocusState.DISTRACTED) {
-        FeedbackService.getInstance().vibrateOnce()
-      }
     } else {
       this.recordEvent(target, r.source, r.confidence, 'debounced')
+    }
+  }
+
+  /** 本次分心已持续多久（毫秒）；没有进行中的分心段时返回 0 */
+  private distractionElapsedMs(): number {
+    return this.distractionStartedAt > 0 ? Date.now() - this.distractionStartedAt : 0
+  }
+
+  /** 结束本次分心段（回到专注、切模式、会话结束都要调，否则复用的时间戳会立刻又升到高档） */
+  private endDistractionBout(): void {
+    this.distractionStartedAt = 0
+  }
+
+  /**
+   * 按分心时长分级，并只在**跨档那一刻**触发对应动作。
+   *
+   * 颜色不靠这里决定（检测到就当场变色，见 `onDetection`）；这里做两件时间相关的活：
+   *  1. **只升不降的兜底**：分心够久就必须至少是黄（20s）/红（1min）——
+   *     所以「趴桌」开场是黄，但持续到 1 分钟也会升红；红开场则不会被降级回去；
+   *  2. 跨档动作各触发一次：20s 短震、1min 语音播一遍 + 连续震、5min 语音循环 + 一直震。
+   *
+   * 挂在每秒心跳上（`recomputeTick`）：时间一直在走，跨档只能靠定期检查 ——
+   * 状态切换那一刻时长恒为 0，20s/1min/5min 都到不了。
+   */
+  private syncReminderTier(): void {
+    const fb = FeedbackService.getInstance()
+    // 不专注 / 分心段已结束 → 归零并停掉一切持续性的提醒
+    if (!this.running || this.paused || this.resting || this.qaMode || this.distractionStartedAt === 0) {
+      if (this.reminderTier !== 0) {
+        this.reminderTier = 0
+        fb.stopAll()
+      }
+      return
+    }
+    const ms = this.distractionElapsedMs()
+    let tier = 0
+    if (ms >= FocusTuning.DISTRACT_STRONG_AFTER_MS) {
+      tier = 3
+    } else if (ms >= FocusTuning.DISTRACT_RED_AFTER_MS) {
+      tier = 2
+    } else if (ms >= FocusTuning.DISTRACT_YELLOW_AFTER_MS) {
+      tier = 1
+    }
+    if (tier === this.reminderTier) {
+      return
+    }
+    // 先记档再执行动作：`transitionTo` 会回调 pushLive()，重入时靠这个值提前返回，
+    // 否则同一档的动作会被触发两次（语音/震动叠着来）。
+    this.reminderTier = tier
+    const sec = Math.round(ms / 1000)
+    hilog.info(0x0000, 'iKnow.Focus', '分心等级 → %{public}d（已持续 %{public}d 秒）', tier, sec)
+    if (tier === 1) {
+      // ≥20s：至少黄灯（趴桌开场就是黄的，这里是空操作；红开场也不降级）+ 短震一下
+      if (this.state === FocusState.FOCUSED) {
+        this.transitionTo(FocusState.SLIGHTLY_DISTRACTED, this.lastConfidence,
+          this.lastDetectionSource, `持续分心 ${sec} 秒`)
+      }
+      fb.vibrateShort()
+      return
+    }
+    if (tier === 2) {
+      // ≥1min：至少红灯 —— 检测结果是"趴桌"（黄）但持续够久时，也要升到红；
+      // 已经是红的（看手机/离开开场就是红）则不变色。然后语音播一遍 + 连续震动。
+      if (this.state !== FocusState.DISTRACTED) {
+        this.transitionTo(FocusState.DISTRACTED, this.lastConfidence,
+          this.lastDetectionSource, `持续分心 ${sec} 秒`)
+      }
+      fb.vibrateRed()
+      fb.speakOnce()
+      return
+    }
+    if (tier === 3) {
+      // ≥5min：仍是红灯（不变色），但行为加强 —— 语音一直循环 + 一直震动（震动封顶 30s）
+      fb.startVoiceLoop()
+      fb.holdStrongVibration()
     }
   }
 
@@ -776,10 +886,10 @@ export class FocusController {
     hilog.info(0x0000, 'iKnow.Focus', '[onObservation] activity=%{public}s, confidence=%{public}d, injected=%{public}s',
       o.activity, conf, String(injected))
     if (o.activity === '看手机' || o.handheld) {
-      // 这里**只下一个结论，不做任何触达**：震动在状态机确认切换时给，
-      // 语音按"分心持续够久"升级为重度后由 evaluateIntervention 播。
-      // 原先直接在这里调 vibrateOnce / speak，绕过了去抖、置信度地板、冷却与干预预算，
-      // 结果就是"低头看一眼手机"也会反复响。
+      // 这里**只下一个结论，不做任何触达**：结论会开启"分心段"，
+      // 之后按持续时长分级（20s 黄 / 1min 红 / 5min 强提醒），由 `syncReminderTier()` 统一触发
+      // 文字、震动与语音。原先在这里直接震/播，绕过了置信度地板与时长分级，
+      // 结果就是"低头看一眼手机"当场就响。
       svc.submit(FocusState.DISTRACTED, `云端识别：${o.activity}`, conf, FocusSource.CAMERA)
     } else if (o.activity === '离开') {
       svc.submit(FocusState.DISTRACTED, '云端识别：画面中没有人', conf, FocusSource.CAMERA)
@@ -821,6 +931,13 @@ export class FocusController {
     const now = Date.now()
     // 先结清上一段：段的边界必须落在真实切换时刻，不能被心跳的相位带偏
     this.settleSegment(now)
+    // 回到专注 = 本次分心结束：清零计时并停掉提醒。
+    // 放在这里而不是 onDetection 里，是为了让"分心段结束"与"状态真的回绿"严格同步 ——
+    // 单帧"做题"不该立刻清零（那会让 20s/1min 的门槛反复重来）。
+    if (target === FocusState.FOCUSED) {
+      this.endDistractionBout()
+      FeedbackService.getInstance().stopAll()
+    }
     this.state = target
     this.stateEnteredAt = now
     if (target === FocusState.SLIGHTLY_DISTRACTED) {
@@ -895,8 +1012,8 @@ export class FocusController {
       if (this.onIntervention !== null) {
         this.onIntervention(res.decision, res.event as InterventionEvent)
       }
-      // 语音提醒**不在这里播**：它由 `syncVoiceLoop()` 按"红灯持续够久"驱动，
-      // 不受这里的事件预算约束（理由见该方法注释）。
+      // 提醒（文字由界面状态文案负责、震动与语音由 FeedbackService 执行）**不在这里播**：
+      // 它们由 `syncReminderTier()` 按"分心持续了多久"驱动，不受这里的事件预算约束。
     }
   }
 
@@ -930,6 +1047,8 @@ export class FocusController {
     if (!this.running || this.qaMode || this.resting || this.paused) {
       return
     }
+    // 进答疑 = 本次分心到此结束（回来时从 0 重新计时，否则会立刻又跳到高档）
+    this.endDistractionBout()
     this.settleSegment(Date.now())
     this.stateBeforeQA = this.state
     this.qaMode = true
@@ -975,6 +1094,8 @@ export class FocusController {
     if (!this.running || this.paused || this.resting || this.qaMode) {
       return
     }
+    // 暂停 = 本次分心到此结束（恢复后重新计时）
+    this.endDistractionBout()
     this.settleSegment(Date.now())
     this.paused = true
     this.state = FocusState.PAUSED
@@ -1001,6 +1122,8 @@ export class FocusController {
     if (!this.running || this.resting || this.qaMode) {
       return
     }
+    // 去休息 = 本次分心到此结束
+    this.endDistractionBout()
     this.settleSegment(Date.now())
     this.paused = false
     this.resting = true
@@ -1364,8 +1487,9 @@ export class FocusController {
 
   /** 结束会话：落盘前的收尾 */
   finalize(): FocusSession {
-    // 会话结束必须先停掉循环提醒：万一还停在红灯态，循环会一直响下去
-    FeedbackService.getInstance().stopReminder()
+    // 会话结束必须先停掉一切提醒：万一还停在红灯/强提醒，语音与震动会一直持续下去
+    FeedbackService.getInstance().stopAll()
+    this.endDistractionBout()
     if (this.tickId >= 0) {
       clearInterval(this.tickId)
       this.tickId = -1
@@ -1456,8 +1580,9 @@ export class FocusController {
    * 与 finalize() 的区别：不落盘、不计入统计，直接把计时与状态清空。
    */
   abort(): void {
-    // 放弃会话同样要停声，否则循环会跟着"已经不在专注"的状态继续响
-    FeedbackService.getInstance().stopReminder()
+    // 放弃会话同样要停掉一切提醒（语音 + 震动），否则会跟着"已经不在专注"的状态继续响
+    FeedbackService.getInstance().stopAll()
+    this.endDistractionBout()
     if (this.tickId >= 0) {
       clearInterval(this.tickId)
       this.tickId = -1
@@ -1627,35 +1752,9 @@ export class FocusController {
     }
   }
 
-  /**
-   * 语音提醒循环的**唯一同步点**：分心够久就开播并一直循环，离开分心态就停。
-   *
-   * 为什么挂在这里而不是各个模式方法里：`pushLive()` 在每次状态切换与心跳（1 s）都会跑，
-   * 所以"开始 / 回到专注 / 休息 / 暂停 / 答疑 / 结束"全都自动跟上，
-   * 不必在六七个地方各写一遍（漏一处就会一直响下去）。两个调用都是幂等的。
-   *
-   * 为什么**不用**干预事件的预算来触发：预算是给"卡片式干预"用的（10 分钟内重度 ≤1 次），
-   * 而产品要求是"检测到长时间分心就一直循环播放"—— 触发条件是**持续时长**，不是次数。
-   * 挂在预算上的话，用户回到专注后再走神，10 分钟内都不会重新响，与需求不符。
-   */
-  private syncVoiceLoop(): void {
-    const fb = FeedbackService.getInstance()
-    const distracted = this.running && this.state === FocusState.DISTRACTED
-      && !this.paused && !this.resting && !this.qaMode
-    if (!distracted) {
-      fb.stopReminder()
-      return
-    }
-    // 红灯持续够久 → 起一次循环；已在循环就不打断（`remind` 内部也会再判一次）
-    if (!fb.isReminding()
-      && Date.now() - this.stateEnteredAt >= FocusTuning.INTERVENTION_HEAVY_AFTER_MS) {
-      fb.remind('HEAVY')
-    }
-  }
-
   private pushLive(): void {
-    // 语音循环跟状态走：不在分心态就停、够久就开
-    this.syncVoiceLoop()
+    // 分级提醒（颜色 / 震动 / 语音）跟分心时长走 —— 这是唯一的同步点
+    this.syncReminderTier()
     // 运行标志：根页/首页以 @StorageProp 读取，才能响应式地显示“专注进行中”
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_RUNNING, this.running ? 1 : 0)
     AppStorage.setOrCreate<number>(StorageKey.FOCUS_ELAPSED, Math.floor(this.totalSec))

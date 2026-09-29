@@ -20,13 +20,15 @@ export class FocusStateUi {
   }
 
   static softColor(state: string): string {
+    // 用专门提亮过的整页底色（比 *_SOFT 亮一档），而不是卡片用的 *_SOFT ——
+    // 后者铺满整页会发闷。这里同时是呼吸灯的光晕色（该组件当前未挂载）。
     if (state === 'SLIGHTLY_DISTRACTED') {
-      return Colors.YELLOW_SOFT
+      return Colors.FOCUS_BG_YELLOW
     }
     if (state === 'DISTRACTED') {
-      return Colors.RED_SOFT
+      return Colors.FOCUS_BG_RED
     }
-    return Colors.GREEN_SOFT
+    return Colors.FOCUS_BG_GREEN
   }
 
   static dot(state: string): string {

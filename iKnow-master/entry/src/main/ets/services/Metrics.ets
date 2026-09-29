@@ -34,20 +34,6 @@ export interface PracticeDetailItem {
   times: number
 }
 
-/** 「学习习惯洞察」里的一个时段桶（近 30 天，按会话**开始时刻**的整点小时归并） */
-export interface HabitSlot {
-  /** 时钟区间，如 '20:00 - 21:00' */
-  window: string
-  /** 该时段内的会话次数 */
-  sessions: number
-  /** 该时段累计学习时长（分钟） */
-  studyMinutes: number
-  /** 该时段的净专注率（%，0~100） */
-  rate: number
-  /** 是否已达到"能参与高峰/低谷评比"的门槛（次数 + 时长都过） */
-  qualified: boolean
-}
-
 export interface HabitInsight {
   bestWindow: string
   bestRate: number
@@ -55,13 +41,14 @@ export interface HabitInsight {
   lowNote: string
   advice: string
   /**
-   * 近 30 天**各时段的学习分布**（只含真正学过的时段，按时间升序）。
+   * 一行概览"最常学的时段"（按累计学习时长取前 2），如
+   * `20:00 - 21:00（3 次 · 45 分钟）、21:00 - 22:00（2 次 · 20 分钟）`。
    *
-   * 为什么要它：评比门槛（同时段至少 2 次 + 累计 20 分钟）不低，达不到时
-   * `advice` 会是空串 —— 只靠 advice 判断"有没有内容"的话，界面就变成一片空白，
-   * 用户只会觉得"这功能坏了"。分布本身是**如实的数据**，任何时候都能展示。
+   * 为什么不逐时段列一张表：这一块叫"洞察"，要的是结论，不是数据表。
+   * 逐时段铺开会把卡片撑得很长（最多 24 行），重点被数字淹没。
+   * 没有任何学习记录时为空串（界面据此走空态）。
    */
-  slots: HabitSlot[]
+  topSummary: string
   /**
    * `advice` 为空时用它：挑最接近门槛的时段，说清还差几次 / 几分钟。
    * 比干巴巴一句"数据不足"可操作。没有任何学习记录时为空串。
@@ -473,15 +460,25 @@ export class Metrics {
       execution = Math.round((doneCount / committed.length) * 100)
     }
 
-    // 抗干扰：只统计「感知开启（PERCEPTION_FULL）」的会话；没开摄像头时 distractionDuration 恒为 0，
-    // 混入会把"无数据"误算成"抗干扰满分"，故剔除
+    // 抗干扰：只统计**状态真的被判定过**的会话。
+    //
+    // 判据不能只看 `perceptionMode === PERCEPTION_FULL` —— 那个字段表示"开了**摄像头**感知"，
+    // 而无摄像头的环境里状态判定来自模拟状态控制台（同样会落状态事件），
+    // 一律排除会让抗干扰永远是"—"（用户反馈"抗干扰直接不见了"）。
+    // 反过来，纯计时的会话里 `distractionDuration` 恒为 0，混进来会把"无数据"误算成"满分"，
+    // 所以仍然要排除 —— 用"本次有没有产生过状态事件"来区分这两者。
     const perceptionSessions = finished.filter((s: FocusSession): boolean =>
-      s.perceptionMode === PerceptionMode.PERCEPTION_FULL)
+      s.perceptionMode === PerceptionMode.PERCEPTION_FULL || s.events.length > 0)
     const distrs: number[] = perceptionSessions.map((s: FocusSession): number => Metrics.distractionRate(s))
     const avgDistr = distrs.length > 0 ? Metrics.mean(distrs) : 0
 
     const concentration = Math.round(weightedRate)
-    const efficiency = Math.round(0.6 * weightedRate + 0.4 * execution)
+    // 效率 = 专注率 + 执行力 加权。**没有任务清单时不把执行力当成 0 扣分** ——
+    // 那会把"自由专注、没设任务"的人压到专注率的六成，与上面"自由专注不拉低执行力"的口径
+    // 自相矛盾（同一个缺数据，一处豁免、一处扣 40 分）。无执行力数据时权重归一到专注率。
+    const efficiency = taskSessions.length > 0
+      ? Math.round(0.6 * weightedRate + 0.4 * execution)
+      : Math.round(weightedRate)
     const stability = sigma > 0.3 ? 0 : Math.round(100 * (1 - Metrics.clamp(sigma / 0.4, 0, 1)))
     const antiDistraction = Math.round(100 * (1 - Metrics.clamp(avgDistr, 0, 1)))
     return { efficiency, concentration, stability, execution, antiDistraction,
@@ -1272,22 +1269,8 @@ export class Metrics {
       bucketsNet[idx] += Metrics.netFocusSec(s)
       bucketsCount[idx] += 1
     }
-    // 时段分布：**学过的时段一律列出**，不受评比门槛限制 ——
-    // 门槛达不到时也能让用户看到"数据确实在"，而不是一片空白
-    const slots: HabitSlot[] = []
-    for (let i = 0; i < 24; i++) {
-      if (bucketsCount[i] === 0 || bucketsStudy[i] <= 0) {
-        continue
-      }
-      slots.push({
-        window: Metrics.hourWindow(i),
-        sessions: bucketsCount[i],
-        studyMinutes: Math.round(bucketsStudy[i] / 60),
-        rate: Metrics.bucketRate(bucketsStudy[i], bucketsNet[i]),
-        qualified: bucketsCount[i] >= Metrics.HABIT_MIN_SESSIONS
-          && bucketsStudy[i] >= Metrics.HABIT_MIN_STUDY_SEC
-      })
-    }
+    // 一行概览：最常学的两个时段（不管有没有出结论都给，界面因此不会一片空白）
+    const topSummary = Metrics.topWindowSummary(bucketsCount, bucketsStudy)
     // 资格桶：会话数与时长的门槛都过，才有资格参与评比
     const qualified: number[] = []
     for (let i = 0; i < 24; i++) {
@@ -1302,7 +1285,7 @@ export class Metrics {
         lowWindow: '',
         lowNote: '',
         advice: '',
-        slots: slots,
+        topSummary: topSummary,
         gateNote: Metrics.habitGateNote(bucketsCount, bucketsStudy)
       }
     }
@@ -1328,7 +1311,7 @@ export class Metrics {
         lowNote: '',
         advice: `近 30 天里只有 ${bestWindow} 这一个时段达到统计门槛（专注率 ${bestRate}%，累计 ${bestStudyMin} 分钟）。` +
           '再多几个时段、每段至少 2 次专注，我才能比较出低谷。',
-        slots: slots,
+        topSummary: topSummary,
         gateNote: ''
       }
     }
@@ -1343,7 +1326,7 @@ export class Metrics {
         lowNote: '',
         advice: `近 30 天各时段的专注率差别不大（最高 ${bestRate}% 与最低 ${lowRate}% 只差 ${gap} 个百分点，` +
           `不到 ${Metrics.HABIT_RATE_GAP} 个百分点），所以不区分高峰与低谷。`,
-        slots: slots,
+        topSummary: topSummary,
         gateNote: ''
       }
     }
@@ -1355,7 +1338,7 @@ export class Metrics {
       advice: `近 30 天的高效时段是 ${bestWindow}（专注率 ${bestRate}%，累计 ${bestStudyMin} 分钟）；` +
         `${lowWindow} 偏低（专注率 ${lowRate}%）。建议把需要深度思考的任务放在 ${bestWindow}，` +
         `${lowWindow} 留给复习与轻量整理。`,
-      slots: slots,
+      topSummary: topSummary,
       gateNote: ''
     }
   }
@@ -1363,6 +1346,30 @@ export class Metrics {
   /** 第 i 个小时桶的时钟区间（23 点那一桶的右端点回到 00:00） */
   private static hourWindow(i: number): string {
     return `${Metrics.clock(i * 60)} - ${Metrics.clock(i * 60 + 60)}`
+  }
+
+  /**
+   * 一行概览"最常学的时段"：按累计学习时长排序取前 2 个，形如
+   * `20:00 - 21:00（3 次 · 45 分钟）、21:00 - 22:00（2 次 · 20 分钟）`。
+   *
+   * 只给概览、不铺表：这一块是"洞察"，重点在结论；逐时段铺开最多 24 行，
+   * 数字会把结论淹掉。没有学习记录时返回空串。
+   */
+  private static topWindowSummary(counts: number[], study: number[]): string {
+    const idxs: number[] = []
+    for (let i = 0; i < 24; i++) {
+      if (counts[i] > 0 && study[i] > 0) {
+        idxs.push(i)
+      }
+    }
+    idxs.sort((a: number, b: number): number => study[b] - study[a])
+    const parts: string[] = []
+    const n = Math.min(2, idxs.length)
+    for (let k = 0; k < n; k++) {
+      const i = idxs[k]
+      parts.push(`${Metrics.hourWindow(i)}（${counts[i]} 次 · ${Math.round(study[i] / 60)} 分钟）`)
+    }
+    return parts.join('、')
   }
 
   /**

@@ -2,7 +2,7 @@ import { router } from '@kit.ArkUI'
 import { Colors, Radius, Spacing } from '../common/Theme'
 import { StorageKey } from '../common/Constants'
 import { AppStore } from '../store/AppStore'
-import { Metrics, Last30DaysSummary, PracticeSummaryItem, HabitInsight, HabitSlot, DaySummary } from '../services/Metrics'
+import { Metrics, Last30DaysSummary, PracticeSummaryItem, HabitInsight, DaySummary } from '../services/Metrics'
 import { AIService } from '../services/AIService'
 import { FocusProfile } from '../models/FocusProfile'
 import { RadarChart } from '../components/RadarChart'
@@ -53,7 +53,7 @@ export struct Review {
   @State weekTrend: number[] = []
   @StorageProp(StorageKey.WEEK_FOCUS_SEC) weekFocus: number = 0
   @State habit: HabitInsight = {
-    bestWindow: '', bestRate: 0, lowWindow: '', lowNote: '', advice: '', slots: [], gateNote: ''
+    bestWindow: '', bestRate: 0, lowWindow: '', lowNote: '', advice: '', topSummary: '', gateNote: ''
   }
   @State aiAdvice: string = ''
   @State profile: FocusProfile = new FocusProfile()
@@ -261,16 +261,22 @@ export struct Review {
    * - 抗干扰只在「开启摄像头感知」的会话上计算；自由专注 / 未开感知时无可依据，暂不可评。
    * - 执行力只在「有任务清单」的会话上计算；以自由专注为主时无可依据，暂不可评。
    */
+  /**
+   * 维度缺数据时说明**原因与怎么才能有数据** —— 只写"暂不可评"用户不知道下一步做什么。
+   * 两种缺数据的成因不同（没产生过状态判定 / 没从计划开始专注），分别说清。
+   */
   private coverageNote(): string {
     const noPerception = this.profile.perceptionCount === 0
     const noTask = this.profile.taskCount === 0
     if (noPerception && noTask) {
-      return '未开启摄像头感知、且以自由专注为主，抗干扰与执行力暂不可评'
+      return '本轮既没有产生过状态判定、也没有带任务清单的专注：抗干扰与执行力暂不可评。'
+        + '开启感知（或用模拟状态控制台点一次）可累计抗干扰；从今日计划开始专注可累计执行力。'
     }
     if (noPerception) {
-      return '未开启摄像头感知，抗干扰暂不可评（仅按有感知的专注评分）'
+      return '本轮还没有产生过状态判定的专注：抗干扰暂不可评。'
+        + '开启感知，或用模拟状态控制台点一次状态即可累计。'
     }
-    return '以自由专注为主、未设任务清单，执行力暂不可评（仅按有任务的专注评分）'
+    return '本轮都是自由专注（未设任务清单）：执行力暂不可评。从今日计划开始专注即可累计。'
   }
 
   /**
@@ -1593,84 +1599,53 @@ export struct Review {
     .borderRadius(Radius.LG)
     .alignItems(HorizontalAlign.Start)
 
-    // 学习习惯洞察（全部来自真实数据；没有样本时只报分布、不下结论）
+    // 学习习惯洞察（全部来自真实数据；样本不够只报概览与差距，不下结论）
     Column({ space: Spacing.SM }) {
       this.sectionHeader('🕐', '学习习惯洞察')
 
-      if (this.habit.slots.length === 0) {
+      if (this.habit.topSummary.length === 0) {
         Text('近 30 天还没有学习记录。多在不同时段完成几次专注，这里会给出你的高峰与低谷。')
           .fontSize(13)
           .fontColor(Colors.TEXT_SECONDARY)
           .width('100%')
           .margin({ top: 8 })
       } else {
-        // 时段分布：**不管有没有得出结论都展示** —— 结论要够门槛才敢下，
-        // 但"你在哪些时段学过、各多久"本身就是如实的数据，不该因为样本少就一片空白
-        Column({ space: Spacing.XS }) {
-          Text('近 30 天各时段（每段至少 2 次专注、累计 20 分钟才参与评比）')
-            .fontSize(11)
-            .fontColor(Colors.TEXT_TERTIARY)
-            .width('100%')
+        // 一行概览：最常学的两个时段。不做逐时段表格 —— 洞察要的是结论，不是数据表
+        Text(`最常学的时段：${this.habit.topSummary}`)
+          .fontSize(13)
+          .fontColor(Colors.TEXT_SECONDARY)
+          .width('100%')
+          .margin({ top: 4 })
 
-          ForEach(this.habit.slots, (sl: HabitSlot) => {
+        Column({ space: Spacing.XS }) {
+          // bestWindow 为空 = 各时段差别不大（或只有一个资格桶）→ 不渲染这一行，避免出现"（专注率 0%）"
+          if (this.habit.bestWindow.length > 0) {
             Row() {
-              Text(sl.window)
-                .fontSize(13)
-                .fontColor(sl.qualified ? Colors.TEXT_PRIMARY : Colors.TEXT_SECONDARY)
-                .width(112)
-              Text(`${sl.sessions} 次 · ${sl.studyMinutes} 分钟`)
+              Text('最佳学习时段：')
                 .fontSize(13)
                 .fontColor(Colors.TEXT_SECONDARY)
-                .layoutWeight(1)
-              Text(`专注率 ${sl.rate}%`)
+              Text(`${this.habit.bestWindow}（专注率 ${this.habit.bestRate}%）`)
                 .fontSize(13)
-                .fontWeight(sl.qualified ? FontWeight.Medium : FontWeight.Normal)
-                .fontColor(sl.qualified ? Colors.GREEN : Colors.TEXT_TERTIARY)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.TEXT_PRIMARY)
             }
             .width('100%')
-            .padding({ top: 4, bottom: 4 })
-          }, (sl: HabitSlot) => sl.window)
-
-          if (this.habit.gateNote.length > 0) {
-            Text(this.habit.gateNote)
-              .fontSize(12)
-              .fontColor(Colors.TEXT_SECONDARY)
-              .lineHeight(18)
-              .width('100%')
-              .margin({ top: 4 })
           }
-        }
-        .margin({ top: 4 })
 
-        if (this.habit.advice.length > 0) {
-          Column({ space: Spacing.XS }) {
-            // bestWindow 为空 = 各时段差别不大（或只有一个资格桶）→ 不渲染这一行，避免出现"（专注率 0%）"
-            if (this.habit.bestWindow.length > 0) {
-              Row() {
-                Text('最佳学习时段：')
-                  .fontSize(13)
-                  .fontColor(Colors.TEXT_SECONDARY)
-                Text(`${this.habit.bestWindow}（专注率 ${this.habit.bestRate}%）`)
-                  .fontSize(13)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor(Colors.TEXT_PRIMARY)
-              }
-              .width('100%')
+          if (this.habit.lowWindow.length > 0) {
+            Row() {
+              Text('低谷时段：')
+                .fontSize(13)
+                .fontColor(Colors.TEXT_SECONDARY)
+              Text(`${this.habit.lowWindow}（${this.habit.lowNote}）`)
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(Colors.TEXT_PRIMARY)
             }
+            .width('100%')
+          }
 
-            if (this.habit.lowWindow.length > 0) {
-              Row() {
-                Text('低谷时段：')
-                  .fontSize(13)
-                  .fontColor(Colors.TEXT_SECONDARY)
-                Text(`${this.habit.lowWindow}（${this.habit.lowNote}）`)
-                  .fontSize(13)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor(Colors.TEXT_PRIMARY)
-              }
-              .width('100%')
-            }
-
+          if (this.habit.advice.length > 0) {
             Row() {
               Text('习惯建议：')
                 .fontSize(13)
@@ -1682,9 +1657,16 @@ export struct Review {
                 .layoutWeight(1)
             }
             .width('100%')
+          } else if (this.habit.gateNote.length > 0) {
+            // 还没到评比门槛：只说清"还差多少"，不硬下高峰/低谷的结论
+            Text(this.habit.gateNote)
+              .fontSize(13)
+              .fontColor(Colors.TEXT_SECONDARY)
+              .lineHeight(20)
+              .width('100%')
           }
-          .margin({ top: 4 })
         }
+        .margin({ top: 4 })
       }
     }
     .width('100%')

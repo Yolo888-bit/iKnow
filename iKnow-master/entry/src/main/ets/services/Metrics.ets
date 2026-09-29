@@ -1039,10 +1039,20 @@ export class Metrics {
     return Math.round((sorted[mid - 1] + sorted[mid]) / 2 * 10) / 10
   }
 
+  /** 科目名的统一口径：空 → 「未标注科目」。卡片与明细页必须同口径，否则两处分组对不上 */
+  private static subjectName(raw: string): string {
+    return raw.trim().length > 0 ? raw.trim() : '未标注科目'
+  }
+
   /**
-   * 练习明细：列出所有被完成过的任务（按学科分组、按最近完成时间倒序）。
-   * 与 `practiceSummary` 的区别：summary 只给每科"一个代表标题 + 次数"（用在窄卡片里），
-   * 这里给**完整列表**，供"点开看全部练习内容"。
+   * 练习明细：列出所有被完成过的任务（供「练习内容总结 → 查看全部」）。
+   *
+   * 口径**必须与 `practiceSummary` 一致**，否则会出现"卡片写「数学 3 次」、点进去只有 1 项"：
+   *  - ① 会话里完成过的任务（有会话时间）；
+   *  - ② 任务表里已打勾、但没进过任何会话的（在首页 / 复盘直接勾选的那种）。
+   *
+   * 排序：**完成次数降序**（用户要求）→ 同次数按最近完成时间降序。
+   * `lastDoneMs = 0` 表示只有勾选、没有会话时间，展示层据此只写次数、不写日期。
    */
   static practiceDetail(sessions: FocusSession[], tasks: Task[]): PracticeDetailItem[] {
     const taskMap = new Map<string, Task>()
@@ -1059,11 +1069,12 @@ export class Metrics {
         if (t === undefined) {
           continue
         }
-        const key = `${t.subject}|${id}`
+        const name = Metrics.subjectName(t.subject)
+        const key = `${name}|${id}`
         const exist = map.get(key)
         if (exist === undefined) {
           map.set(key, {
-            subject: t.subject,
+            subject: name,
             title: t.title,
             lastDoneMs: s.startTime,
             times: 1
@@ -1074,11 +1085,27 @@ export class Metrics {
         }
       }
     }
+    // ② 只打过勾、没进过会话的（口径对齐 practiceSummary，别让它们凭空消失）
+    for (const t of tasks) {
+      if (!(t.done || t.status === TaskStatus.DONE)) {
+        continue
+      }
+      const name = Metrics.subjectName(t.subject)
+      const key = `${name}|${t.id}`
+      if (map.get(key) === undefined) {
+        map.set(key, { subject: name, title: t.title, lastDoneMs: 0, times: 1 })
+      }
+    }
     const list: PracticeDetailItem[] = []
     map.forEach((v: PracticeDetailItem) => {
       list.push(v)
     })
-    list.sort((a: PracticeDetailItem, b: PracticeDetailItem): number => b.lastDoneMs - a.lastDoneMs)
+    list.sort((a: PracticeDetailItem, b: PracticeDetailItem): number => {
+      if (b.times !== a.times) {
+        return b.times - a.times
+      }
+      return b.lastDoneMs - a.lastDoneMs
+    })
     return list
   }
 
@@ -1169,7 +1196,7 @@ export class Metrics {
     // 按科目聚合计数（科目为空时归到「未标注科目」，不让它悄悄消失）
     const out: PracticeSummaryItem[] = []
     for (const raw of doneSubjects) {
-      const name = raw.trim().length > 0 ? raw : '未标注科目'
+      const name = Metrics.subjectName(raw)
       let hit = false
       for (const it of out) {
         if (it.subject === name) {

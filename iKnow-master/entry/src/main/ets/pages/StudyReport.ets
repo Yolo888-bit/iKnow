@@ -412,22 +412,7 @@ export struct StudyReport {
               // 会话里还没有心率留痕 → 传空数组，图内画占位虚线并写明"暂无数据"
               hrPoints: []
             })
-            Text(this.chartClockAxis
-              ? `横轴：本次真实时间 ${this.clockOf(this.chartStartMs)} – ${this.clockOf(this.chartEndMs)}；色带 = 该时刻的状态`
-                + `（绿 专注 / 红 分心 / 黄 休息 / 灰 暂停·答疑）`
-              : '横轴：本条记录较早，未保存时刻信息，按「已判定学习时长」推算；'
-                + '休息 / 暂停未单独标出（色带：绿 专注 / 红 分心）')
-              .fontSize(11)
-              .fontColor(Colors.TEXT_TERTIARY)
-              .lineHeight(17)
-              .width('100%')
-              .margin({ top: 6 })
-            Text('纵轴：心率曲线 —— 本版本未接入心率设备，图中为占位虚线，不代表任何测量值')
-              .fontSize(11)
-              .fontColor(Colors.TEXT_TERTIARY)
-              .lineHeight(17)
-              .width('100%')
-              .margin({ top: 4 })
+            // 横轴 / 纵轴的小字说明已按用户要求移除：图内自带图例与刻度，页面不再重复解释
           }
           .reportCard()
 
@@ -473,7 +458,7 @@ export struct StudyReport {
           // ⑤ 干扰事件时间线（手表触发 → 抓拍 → 云端可观察状态）
           if (this.obsLoaded) {
             Column() {
-              this.sectionTitle('本次干扰事件')
+              this.sectionTitle('本次干扰事件（模拟）')
 
               // 分类计数：让"为什么这里只列出了几条"一目了然
               Row({ space: 10 }) {
@@ -532,74 +517,70 @@ export struct StudyReport {
                   .margin({ top: 12 })
                   .width('100%')
               } else {
-                ForEach(this.interference, (o: ObservationRecord) => {
-                  Column() {
-                    Row() {
-                      Text(this.relMin(o.tMs))
-                        .fontSize(13)
-                        .fontColor(Colors.TEXT_SECONDARY)
-                      Blank()
+                // 一行排两张（用户要求）：每张卡 = 画面片段 + 下方「原因 / 时间」。
+                // **图片下方不再有任何小字**：判定依据与占位图说明都去掉了 ——
+                // 占位图自身画面上就写着"演示占位图 · 未接摄像头 · 非真实抓拍"，
+                // 不需要再用一行字重复（避免双重说明、卡片也更干净）。
+                Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
+                  ForEach(this.interference, (o: ObservationRecord) => {
+                    Column() {
+                      if (o.imagePaths.length > 0 && this.failedImages.indexOf(o.id) < 0) {
+                        Image(this.fileUri(o.imagePaths[0]))
+                          .width('100%')
+                          .height(88)
+                          .objectFit(ImageFit.Cover)
+                          .borderRadius(Radius.MD)
+                          // 文件被清除 / 路径失效时记下来，图片位换成中性占位，
+                          // 避免留一块空白看起来像"照片莫名没了"
+                          .onError(() => {
+                            if (this.failedImages.indexOf(o.id) < 0) {
+                              this.failedImages = this.failedImages.concat(o.id)
+                            }
+                          })
+                      } else if (o.imagePaths.length > 0) {
+                        Column() {
+                          Text('片段已清除')
+                            .fontSize(11)
+                            .fontColor(Colors.TEXT_TERTIARY)
+                        }
+                        .width('100%')
+                        .height(88)
+                        .justifyContent(FlexAlign.Center)
+                        .alignItems(HorizontalAlign.Center)
+                        .backgroundColor(Colors.CARD)
+                        .borderRadius(Radius.MD)
+                      } else {
+                        Image($r('app.media.sim_placeholder'))
+                          .width('100%')
+                          .height(88)
+                          .objectFit(ImageFit.Cover)
+                          .borderRadius(Radius.MD)
+                      }
+
+                      // 图片下方 ①：分心的**原因**（如「看手机」）
                       Text(o.activity)
                         .fontSize(13)
                         .fontWeight(FontWeight.Medium)
                         .fontColor(Colors.TEXT_PRIMARY)
-                    }
-                    .width('100%')
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .margin({ top: 6 })
 
-                    Text(o.evidence)
-                      .fontSize(12)
-                      .fontColor(Colors.TEXT_SECONDARY)
-                      .margin({ top: 4 })
-                      .width('100%')
-
-                    // 照片展示位：有真实片段就显示真实照片；没有（模拟注入/无摄像头）则显示
-                    // media 资源里的「演示占位图」，保证控制台演示时复盘也能看到画面片段，
-                    // 同时图片自身已标注"非真实抓拍"，不会误导。
-                    if (o.imagePaths.length > 0) {
-                      Image(this.fileUri(o.imagePaths[0]))
-                        .width(120)
-                        .height(90)
-                        .borderRadius(Radius.MD)
-                        .margin({ top: 8 })
-                        // 文件被清除、或换设备/升级后路径失效时如实说明 ——
-                        // 否则留一块空白，看起来就像"照片莫名没了"
-                        .onError(() => {
-                          if (this.failedImages.indexOf(o.id) < 0) {
-                            this.failedImages = this.failedImages.concat(o.id)
-                          }
-                        })
-                      if (this.failedImages.indexOf(o.id) >= 0) {
-                        Text('画面片段文件读不出来（可能已被清除，或换设备后路径失效）')
-                          .fontSize(11)
-                          .fontColor(Colors.CAMERA_RED)
-                          .width('100%')
-                          .margin({ top: 4 })
-                      }
-                    } else {
-                      Column() {
-                        Image($r('app.media.sim_placeholder'))
-                          .width(120)
-                          .height(90)
-                          .objectFit(ImageFit.Cover)
-                          .borderRadius(Radius.MD)
-                        Text('演示占位图 · 非真实抓拍')
-                          .fontSize(10)
-                          .fontColor(Colors.TEXT_TERTIARY)
-                          .margin({ top: 4 })
-                          .width('100%')
-                          .textAlign(TextAlign.Center)
-                      }
-                      .width(120)
-                      .margin({ top: 8 })
+                      // 图片下方 ②：分心的**时间**（如「第 12 分钟」）
+                      Text(this.relMin(o.tMs))
+                        .fontSize(11)
+                        .fontColor(Colors.TEXT_SECONDARY)
+                        .margin({ top: 2 })
                     }
-                  }
-                  .width('100%')
-                  .alignItems(HorizontalAlign.Start)
-                  .padding(12)
-                  .backgroundColor(Colors.BG)
-                  .borderRadius(Radius.MD)
-                  .margin({ top: 10 })
-                }, (o: ObservationRecord) => o.id)
+                    .width('48%')
+                    .alignItems(HorizontalAlign.Start)
+                    .padding(10)
+                    .backgroundColor(Colors.BG)
+                    .borderRadius(Radius.MD)
+                    .margin({ top: 10 })
+                  }, (o: ObservationRecord) => o.id)
+                }
+                .width('100%')
               }
             }
             .reportCard()

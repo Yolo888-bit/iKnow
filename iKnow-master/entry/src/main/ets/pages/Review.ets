@@ -227,30 +227,31 @@ export struct Review {
   }
 
   /**
-   * 长期视图的样本量说明。
-   * 既解决"长期看起来只有今天"的理解问题，也是**排查历史是否真的落库**的证据：
-   * 如果这里只显示 1 次，说明库里就只有 1 条（写入侧或数据被清），而不是显示逻辑的问题。
+   * 长期视图的样本量说明（「近 30 天学习表现」标题下方那行小字）。
+   *
+   * 用户要求：**不再保留「最早一次是几月几日」那截说明**，只留范围与样本量。
+   * 同时把统计口径**收敛到近 30 天** —— 原来统计的是全部历史会话，却挂着"近 30 天"的标签，
+   * 与本卡片其它数字的 30 天口径不一致。
    */
   private sampleLine(): string {
-    const list = AppStore.getInstance().getSessions()
+    const cutoff = Date.now() - 30 * 24 * 3600 * 1000
+    const list: FocusSession[] = []
+    for (const s of AppStore.getInstance().getSessions()) {
+      if (s.startTime >= cutoff) {
+        list.push(s)
+      }
+    }
     if (list.length === 0) {
-      return '范围：近 30 天 · 库里暂无专注记录'
+      return '范围：近 30 天 · 暂无专注记录'
     }
     const days: number[] = []
-    let earliest = list[0].startTime
-    let earliestDuration = list[0].totalDuration
     for (const s of list) {
       const d = TimeUtils.dayStart(s.startTime)
       if (days.indexOf(d) < 0) {
         days.push(d)
       }
-      if (s.startTime < earliest) {
-        earliest = s.startTime
-        earliestDuration = s.totalDuration
-      }
     }
-    const e = new Date(earliest)
-    return `范围：近 30 天 · 共 ${list.length} 次专注 · 覆盖 ${days.length} 天 · 最早一次 ${e.getMonth() + 1}月${e.getDate()}日（${Math.round(earliestDuration / 60)} 分钟）`
+    return `范围：近 30 天 · 共 ${list.length} 次专注 · 覆盖 ${days.length} 天`
   }
 
   /**
@@ -872,37 +873,6 @@ export struct Review {
   }
 
   /** 单日学习总结视图 */
-  /** 近 30 天趋势标题：由趋势数组前后半段均值对比得出，样本不足时如实说明 */
-  private trendHeadline(): string {
-    const t = this.summary.trend
-    if (t.length < 4 || this.summary.totalNetSeconds <= 0) {
-      // 用 xxh xxmin 精细口径：累计不足 1 小时时不会显示成 "0 小时"（看起来像没数据）
-      return `近 30 天累计学习 ${TimeUtils.formatHMin(this.summary.totalNetSeconds)}，数据还不足以判断趋势`
-    }
-    const half = Math.floor(t.length / 2)
-    let a = 0
-    let b = 0
-    for (let i = 0; i < half; i++) {
-      a += t[i]
-    }
-    for (let i = half; i < t.length; i++) {
-      b += t[i]
-    }
-    const avgA = a / half
-    const avgB = b / (t.length - half)
-    if (avgA <= 0 && avgB <= 0) {
-      return '近 30 天暂无每日专注记录'
-    }
-    const pct = avgA > 0 ? Math.round((avgB - avgA) / avgA * 100) : 0
-    if (pct >= 10) {
-      return `最近 15 天比前 15 天更专注（日均 +${pct}%）`
-    }
-    if (pct <= -10) {
-      return `最近 15 天比前 15 天专注度下降（日均 ${Math.abs(pct)}%）`
-    }
-    return `最近 15 天与前 15 天基本持平`
-  }
-
   @Builder
   dayView() {
     // 顶部状态卡
@@ -1164,23 +1134,24 @@ export struct Review {
         .fontWeight(FontWeight.Bold)
         .fontColor(Colors.TEXT_PRIMARY)
         .width('100%')
-      // 口径自解释：纵轴是「每日专注度」而不是时长，否则低矮的折线会被理解成"没学习"
-      Text('纵轴：每天的专注度（满分 100）；没学习的记 0')
-        .fontSize(11)
-        .fontColor(Colors.TEXT_TERTIARY)
-        .lineHeight(16)
-        .width('100%')
-        .margin({ top: 4 })
-      Text(this.sampleLine())
-        .fontSize(11)
-        .fontColor(Colors.TEXT_TERTIARY)
-        .lineHeight(16)
-        .width('100%')
-        .margin({ top: 4 })
-      Text(this.trendHeadline())
-        .fontSize(13)
-        .fontColor(Colors.TEXT_SECONDARY)
-        .width('100%')
+      // 读图提示两行（纵轴口径 + 近 30 天范围）合成一个**紧凑列**：
+      // 它们是一组信息，行距压到最小，不再像卡片内其它区块那样拉开。
+      // （趋势结论那行已按用户要求删掉，见 git 历史里被移除的 trendHeadline。）
+      Column({ space: 2 }) {
+        // 口径自解释：纵轴是「每日专注度」而不是时长，否则低矮的折线会被理解成"没学习"
+        Text('纵轴：每天的专注度（满分 100）；没学习的记 0')
+          .fontSize(11)
+          .fontColor(Colors.TEXT_TERTIARY)
+          .lineHeight(16)
+          .width('100%')
+        Text(this.sampleLine())
+          .fontSize(11)
+          .fontColor(Colors.TEXT_TERTIARY)
+          .lineHeight(16)
+          .width('100%')
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
 
       // 曲线默认无数据点；点按 / 左右拖拽时显示当前点的日期与数值
       Stack({ alignContent: Alignment.TopStart }) {

@@ -139,7 +139,8 @@ export struct FocusChart {
       return
     }
 
-    const padLeft = 40
+    // 左内边距只留够"bpm"纵轴标签；原来 40 让整幅图明显偏右、看着失衡（用户反馈）
+    const padLeft = 24
     const padRight = 12
     const usable = w - padLeft - padRight
     const range = this.msRange()
@@ -151,7 +152,8 @@ export struct FocusChart {
     const keys: string[] = ['FOCUSED', 'DISTRACTED', 'SLIGHTLY_DISTRACTED', 'RESTING', 'QA_MODE']
     c.font = this.fontOf(9)
     c.textAlign = 'left'
-    let lx = padLeft - 26
+    // 图例从画布最左侧起排：与卡片里的文字左对齐，整幅图更"正"
+    let lx = 0
     for (let i = 0; i < keys.length; i++) {
       c.fillStyle = this.colorOf(keys[i])
       c.fillRect(lx, 5, 10, 10)

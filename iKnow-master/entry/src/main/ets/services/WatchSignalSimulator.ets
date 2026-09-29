@@ -152,22 +152,32 @@ export class WatchSignalSimulator {
   }
 
   /**
-   * 注入的阶段是否仍在有效期内。
+   * 注入的阶段是否仍在有效期内 —— **只看"最近有没有人显式注入过阶段"**。
    *
-   * 基线阶段（PREPARE / STUDY）不算"注入"，始终有效 —— 它们是脚本化的默认状态。
-   * 其余阶段（看手机/离开/趴桌/看书/多人/无法判断）是**限时输入**：
-   * 过期后信号回到学习态基线，识别也不再回显它们（见 `SimulatedRecognizer`）。
+   * 基线阶段（PREPARE / STUDY）不算注入：会话开始由 `reset()` 设成 PREPARE，
+   * 如果没有这一步判断，脚本化基线会被当成"刚注入过"，识别器就会一直回显「做题」、
+   * 以 0.9 的置信度上报一个其实没人确认过的结论。所以 `phaseSetAtMs === 0` 时一律不算有效。
+   *
+   * 过期（或从未注入）之后：信号回到学习态基线，识别也如实报「无法判断」（见 `SimulatedRecognizer`）。
    */
   isInjectedPhaseActive(realNowMs: number): boolean {
-    if (this.phase === 'PREPARE' || this.phase === 'STUDY') {
-      return true
-    }
     return this.phaseSetAtMs > 0 && realNowMs - this.phaseSetAtMs <= FocusTuning.SIM_PHASE_WINDOW_MS
   }
 
-  /** 各 profile 用的**有效**阶段：注入过期后一律按"学习中"处理 */
+  /**
+   * 各信号 profile 用的**有效**阶段。
+   *
+   * 基线阶段（PREPARE / STUDY）本来就是脚本化的默认值，始终按原样使用；
+   * 只有**注入的**阶段（看手机/离开/趴桌/看书/多人/无法判断）过期后回落到 STUDY。
+   */
   private effectivePhase(): string {
-    return this.phaseActive ? this.phase : 'STUDY'
+    if (this.phaseActive) {
+      return this.phase
+    }
+    if (this.phase === 'PREPARE' || this.phase === 'STUDY') {
+      return this.phase
+    }
+    return 'STUDY'
   }
 
   // ============ 逐项控制（专注页「信号控制台」用）============

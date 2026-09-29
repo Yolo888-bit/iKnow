@@ -1264,8 +1264,16 @@ export class FocusController {
     if (!this.running || this.qaMode || this.resting || this.paused) {
       return false
     }
-    // 自动把合成信号阶段也对齐，避免"工作台显示看手机、信号控制台还写着 STUDY"的自相矛盾
-    WatchSignalSource.getInstance().setPhase(SimActivity.phaseOf(activity))
+    // ⚠️ 这里**故意不改合成信号阶段**。
+    //
+    // 曾经为了让"信号控制台"与注入的状态不矛盾而顺手 `setPhase`，后果有两条：
+    //  1. 合成信号开始持续伪造该阶段（例如「看手机」是大幅动作）→ 撞到触发点 →
+    //     模拟识别器把阶段回显成结论 → **同一次点击却落下两条干扰记录**：
+    //     一条来自本次注入（带画面），一条来自信号触发（无画面，记录页显示"未记录画面"）；
+    //  2. 阶段一旦是「看手机 / 离开」就一直留着 → 人不动也会被周期性判分心。
+    // 工作台显示的"当前演示状态"用的是 `getSimulatedActivity()`（另一个字段），
+    // 本来就不依赖信号阶段，所以去掉这个副作用不会造成界面自相矛盾。
+    // 需要演示"信号 → 触发 → 采集"这条链时用 `simulateWatchPhase()`，那一条路径才该改阶段。
     // 画面从哪来：**先探测硬件，有就真抓拍**；抓拍失败 / 无硬件 / 无权限时 fallback 到
     // **明确标注的占位画面**（rawfile 自带，图片与证据文字都写明"演示占位"），绝不伪造真实照片。
     // 注意：不依赖 PermissionService 的本地授权标记——它可能和系统实际授权状态不同步；
@@ -1282,25 +1290,25 @@ export class FocusController {
         '[模拟注入] 探测到摄像头，尝试真实抓拍：activity=%{public}s', activity)
       this.captureThenDeliver(activity, confidence, ctx).catch((err: Error) => {
         hilog.error(0x0000, 'iKnow.Focus',
-          '[模拟注入] 抓拍异常，改用占位画面交付：%{public}s', err.message)
-        this.deliverInjected(activity, confidence, this.placeholderFrames(ctx),
-          `抓拍流程异常（${err.message}），已降级为演示占位图（非真实照片）。`)
+          '[模拟注入] 抓拍异常，本次不记录画面：%{public}s', err.message)
+        this.deliverInjected(activity, confidence, [],
+          `抓拍流程异常（${err.message}），本次没有画面。`)
       })
     } else {
       let why = ''
       if (this.perceptionMode !== 'PERCEPTION_FULL') {
         // 用户选了「仅计时」：本次会话按约定不抓拍、不上传
-        why = '本次为「仅计时」模式，不抓拍、不上传；画面为演示占位图（非真实照片）。'
+        why = '本次为「仅计时」模式，不抓拍、不上传；本次没有画面。'
       } else if (ctx === null) {
-        why = '拿不到应用上下文，无法访问摄像头，使用演示占位图（非真实照片）。'
+        why = '拿不到应用上下文，无法访问摄像头；本次没有画面。'
       } else {
         why = `未探测到可用摄像头（getSupportedCameras 返回 ${camCount}）` +
-          `${cam.getLastError().length > 0 ? '：' + cam.getLastError() : ''}，使用演示占位图（非真实照片）。`
+          `${cam.getLastError().length > 0 ? '：' + cam.getLastError() : ''}；本次没有画面。`
       }
       this.lastCaptureDiag = `未进入真实抓拍：${why}`
       hilog.info(0x0000, 'iKnow.Focus',
-        '[模拟注入] 未进入真实抓拍，使用占位画面：activity=%{public}s reason=%{public}s', activity, why)
-      this.deliverInjected(activity, confidence, this.placeholderFrames(ctx), why)
+        '[模拟注入] 未进入真实抓拍，本次不记录画面：activity=%{public}s reason=%{public}s', activity, why)
+      this.deliverInjected(activity, confidence, [], why)
     }
     return true
   }
@@ -1315,11 +1323,11 @@ export class FocusController {
       frames = await cam.captureBurst()
       if (frames.length === 0) {
         const err0 = cam.getLastError()
-        why = `真实抓拍未取到帧（${err0.length > 0 ? err0 : '未知原因'}），已降级为演示占位图（非真实照片）。`
+        why = `真实抓拍未取到帧（${err0.length > 0 ? err0 : '未知原因'}），本次没有画面。`
         hilog.error(0x0000, 'iKnow.Focus', '[模拟注入] %{public}s', why)
       }
     } catch (err) {
-      why = `真实抓拍失败（${err.message}），已降级为演示占位图（非真实照片）。`
+      why = `真实抓拍失败（${err.message}），本次没有画面。`
       hilog.error(0x0000, 'iKnow.Focus', '[模拟注入] %{public}s', why)
     }
     if (frames.length > 0) {
@@ -1328,40 +1336,18 @@ export class FocusController {
       this.deliverInjected(activity, confidence, frames, `真实抓拍 ${frames.length} 张。`)
     } else {
       this.lastCaptureDiag = `真实抓拍失败：${why}`
-      this.deliverInjected(activity, confidence, this.placeholderFrames(ctx), why)
-    }
-  }
-
-  /**
-   * 无摄像头时的"占位画面"（rawfile/sim_placeholder.png）。
-   * 它**不是**真实抓拍：图片本身就写着"演示占位图 · 未接摄像头"，证据文字同样注明，避免误导。
-   */
-  private placeholderFrames(ctx: common.Context | null): ArrayBuffer[] {
-    if (ctx === null) {
-      hilog.warn(0x0000, 'iKnow.Focus', '[placeholder] appContext 为空，无法读取 rawfile 占位图')
-      return []
-    }
-    try {
-      const bytes: Uint8Array = ctx.resourceManager.getRawFileContentSync('sim_placeholder.png')
-      if (!bytes || bytes.length === 0) {
-        hilog.warn(0x0000, 'iKnow.Focus', '[placeholder] rawfile/sim_placeholder.png 读取为空，' +
-          '通常是 DevEco 增量构建未打包新增 rawfile，请 Build > Clean Project 后重试')
-        return []
-      }
-      const buf: ArrayBuffer = new ArrayBuffer(bytes.length)
-      new Uint8Array(buf).set(bytes)
-      hilog.info(0x0000, 'iKnow.Focus', '[placeholder] 已读取 rawfile 占位图，%{public}d 字节', bytes.length)
-      return [buf]
-    } catch (err) {
-      hilog.error(0x0000, 'iKnow.Focus', '[placeholder] rawfile 占位图读取失败：%{public}s，' +
-        '请在 DevEco 中 Build > Clean Project 后重试', err.message)
-      return []
+      this.deliverInjected(activity, confidence, [], why)
     }
   }
 
   /**
    * 交付一次"注入识别结果"：建记录 → 附画面 → 落库 → 走规则组合 / 状态机 / 干预。
    * 与真实链路（`ObservationQueue`）共用 `saveFrames` 落盘口径。
+   *
+   * `frames` 只允许是**真实抓拍**得到的帧：抓拍失败一律传 `[]`。
+   * 不要再用占位图顶替 —— 占位图落盘后的路径与真帧一模一样，
+   * 记录页就无法判断"这是占位图还是真照片"，只能一律当作有图展示（误导）。
+   * 没有画面时由 `injectedEvidence` 如实写"未生成画面：<原因>"。
    */
   private deliverInjected(activity: string, confidence: number, frames: ArrayBuffer[], note?: string): void {
     // 抓拍是异步的：会话可能已结束，这时不该再产生结论
@@ -1401,13 +1387,13 @@ export class FocusController {
    *  ② 画面**没有上传云端**（这条路径不经过识别器），只是在本机留了一张；
    *  ③ 到底有没有画面、以及为什么没有。
    *
-   * @param hasImage 是否真的落盘了画面（真实抓拍 或 占位图字节都算"有图"）
-   * @param note     为什么是占位图 / 为什么没图（由调用方如实填入，复盘里直接可见，便于定位）
+   * @param hasImage 是否真的抓到了帧（只有真实抓拍才算；抓拍失败一律 false）
+   * @param note     为什么没有画面（由调用方如实填入，复盘里直接可见，便于定位）
    */
   private injectedEvidence(hasImage: boolean, note?: string): string {
     // 版本标记：复盘里能看到，用于确认"设备上跑的是不是最新代码"。
     // 之前几轮反复分不清"代码没重新构建"与"构建了但仍失败"，这里让它可自证。
-    const base = '[v9] 演示结论（来自「模拟状态」面板，未经云端识别）；画面保存在本机、未上传。'
+    const base = '[v10] 演示结论（来自「模拟状态」面板，未经云端识别）；画面保存在本机、未上传。'
     const why = note !== undefined && note.length > 0 ? note : ''
     if (hasImage) {
       if (why.length > 0) {

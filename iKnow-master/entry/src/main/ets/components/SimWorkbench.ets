@@ -167,7 +167,7 @@ export struct SimWorkbench {
           .fontColor(Colors.TEXT_SECONDARY)
           .width('100%')
         this.note('点一下，小伴就按这个状态给一次反馈：变色、给出提醒，并记进学习记录。' +
-          '无摄像头时也会照常演示（画面为演示占位图）。')
+          '无摄像头或抓拍失败时不会记录画面（不伪造照片），那一条记录里只有时间与行为。')
 
         // ② 模拟数据：下面是可调的模拟信号，用来试不同的提醒强度
         Text(`模拟数据 · HR ${WatchSignalSource.getInstance().currentBpm()} bpm · SpO2 ${WatchSignalSource.getInstance().currentSpo2()}%`)

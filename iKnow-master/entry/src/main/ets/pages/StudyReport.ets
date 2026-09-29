@@ -517,35 +517,22 @@ export struct StudyReport {
                   .margin({ top: 12 })
                   .width('100%')
               } else {
-                // 一行排两张（用户要求）：每张卡 = 画面片段 + 下方「原因 / 时间」。
-                // **图片下方不再有任何小字**：判定依据与占位图说明都去掉了 ——
-                // 占位图自身画面上就写着"演示占位图 · 未接摄像头 · 非真实抓拍"，
-                // 不需要再用一行字重复（避免双重说明、卡片也更干净）。
+                // 一行排两张（用户要求）：每张卡 = 画面（如果有）+ 下方「原因 / 时间」。
+                //
+                // **没有真图就不渲染图片位**（口径）：抓拍失败时 `imagePaths` 为空，
+                // 那一条只留原因与时间，不再用演示占位图顶替 ——
+                // 占位图看着像"确实拍到一张照片"，是误导。所以 `imagePaths` 非空
+                // 现在等价于"确实抓到了真帧"（写入端保证，见 `FocusController.deliverInjected`）。
                 Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
                   ForEach(this.interference, (o: ObservationRecord) => {
                     Column() {
-                      if (!o.fromSimConsole()) {
-                        // 真实抓拍来源：画面不上传、也不在记录里展示（口径：
-                        // "记录中不需要有非模拟时的图片"）。此前这里会回落到打包占位图，
-                        // 看起来像"确实有一张照片"，属于误导，已去掉。
-                        Column() {
-                          Text('未记录画面')
-                            .fontSize(11)
-                            .fontColor(Colors.TEXT_TERTIARY)
-                        }
-                        .width('100%')
-                        .height(88)
-                        .justifyContent(FlexAlign.Center)
-                        .alignItems(HorizontalAlign.Center)
-                        .backgroundColor(Colors.CARD)
-                        .borderRadius(Radius.MD)
-                      } else if (o.imagePaths.length > 0 && this.failedImages.indexOf(o.id) < 0) {
+                      if (o.imagePaths.length > 0 && this.failedImages.indexOf(o.id) < 0) {
                         Image(this.fileUri(o.imagePaths[0]))
                           .width('100%')
                           .height(88)
                           .objectFit(ImageFit.Cover)
                           .borderRadius(Radius.MD)
-                          // 文件被清除 / 路径失效时记下来，图片位换成中性占位，
+                          // 文件被清除 / 路径失效时记下来，这一条下次重绘就不再渲染图片位，
                           // 避免留一块空白看起来像"照片莫名没了"
                           .onError(() => {
                             if (this.failedImages.indexOf(o.id) < 0) {
@@ -553,24 +540,13 @@ export struct StudyReport {
                             }
                           })
                       } else if (o.imagePaths.length > 0) {
-                        Column() {
-                          Text('片段已清除')
-                            .fontSize(11)
-                            .fontColor(Colors.TEXT_TERTIARY)
-                        }
-                        .width('100%')
-                        .height(88)
-                        .justifyContent(FlexAlign.Center)
-                        .alignItems(HorizontalAlign.Center)
-                        .backgroundColor(Colors.CARD)
-                        .borderRadius(Radius.MD)
-                      } else {
-                        Image($r('app.media.sim_placeholder'))
-                          .width('100%')
-                          .height(88)
-                          .objectFit(ImageFit.Cover)
-                          .borderRadius(Radius.MD)
+                        // 曾有画面但读不出来（例如已在「数据管理」里清掉）—— 如实说明，不用图顶替
+                        Text('片段已清除')
+                          .fontSize(11)
+                          .fontColor(Colors.TEXT_TERTIARY)
+                          .margin({ bottom: 2 })
                       }
+                      // 其余（本次就没有画面）：什么都不渲染，只留下面的原因与时间
 
                       // 图片下方 ①：分心的**原因**（如「看手机」）
                       Text(o.activity)
